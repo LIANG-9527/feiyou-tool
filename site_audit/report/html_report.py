@@ -1,5 +1,6 @@
 """HTML 报告生成"""
 import html as html_mod
+import re
 from site_audit.core.models import AuditReport, Status, Category
 from site_audit.core.scorer import grade_from_score
 
@@ -9,6 +10,153 @@ def e(text) -> str:
     if text is None:
         return ""
     return html_mod.escape(str(text), quote=True)
+
+
+# ── 客户版首屏：红字问题卡文案库 ──
+# 按检查项业务名配置大白话文案；weight_i=对生意影响(1-5)，weight_f=容易改程度(1-5)，
+# 选卡规则 = 影响大 × 容易改，取前 3。文案规范：禁止术语、禁止编码名称。
+CARD_COPY = {
+    "图片与多媒体优化": {
+        "weight_i": 5, "weight_f": 5,
+        "problem": "AI 看不懂您网站上的图片",
+        "biz": "客户用 AI 搜产品图片时永远搜不到您——产品图、案例图这些最能打动客户的内容，AI 一张都看不见。",
+        "before": "图片只有编号文件名，没有任何文字说明",
+        "after": "给每张重要图片配一句文字说明，如「和创企赢为某制造企业做全产品线培训现场」",
+    },
+    "搜索意图匹配": {
+        "weight_i": 5, "weight_f": 4,
+        "problem": "页面内容答非所问，AI 判定「不予引用」",
+        "biz": "客户搜「方案」想比方案，看到的却是公司内部新闻——AI 不推荐您，等于新店开在没人的街上。",
+        "before": "页面标题：「五场连训，蓄力前行 | 内部培训圆满收官」",
+        "after": "改成客户会搜的标题，如「制造企业全产品线培训方案怎么设计？实操复盘（附课程框架）」",
+    },
+    "E-E-A-T 内容可信度信号": {
+        "weight_i": 5, "weight_f": 4,
+        "problem": "文章匿名无署名，AI 不敢引用",
+        "biz": "同样的话，竞品有专家署名就被 AI 引用；您的内容写得再好，在 AI 眼里也是来路不明的野广告。",
+        "before": "文章正文直接开始，无作者、无资质、无数据来源",
+        "after": "文末加「作者：张 XX，高级培训顾问，10 年制造业经验，服务客户 120+；数据来自某客户项目复盘」",
+    },
+    "URL结构与可读性": {
+        "weight_i": 3, "weight_f": 2,
+        "problem": "网址全是一串数字，看不出页面讲什么",
+        "biz": "客户和 AI 都没法从网址判断页面主题，转发出去显得不专业，搜索引擎也会降低评分。（改网址涉及老后台，需先评估再动）",
+        "before": "网址像 /news/813、/about/1",
+        "after": "网址用拼音或英文写出主题，如 /news/kehu-anli",
+    },
+    "跨平台内容分发": {
+        "weight_i": 4, "weight_f": 2,
+        "problem": "内容只发在官网，知乎、公众号等平台看不到您",
+        "biz": "AI 的训练材料里几乎找不到您的品牌，被提及、被推荐的概率自然低。见效慢，需持续投入。",
+        "before": "内容只存在于官网",
+        "after": "官网文章同步发到知乎、公众号，并链回官网",
+    },
+}
+
+
+def _pick_problem_cards(report: AuditReport) -> list:
+    """从失败项里按「影响大 × 容易改」选最多 3 张客户版问题卡。
+    未配置文案的失败项用通用文案兜底（影响3×可改3），保证任何客户都能出卡。"""
+    fails = [r for r in report.results
+             if r.status == Status.FAIL and r.item_id not in ("tech-14", "tech-15")]
+
+    def _score(r):
+        copy = CARD_COPY.get(r.item_name, {})
+        return copy.get("weight_i", 3) * copy.get("weight_f", 3)
+
+    fails.sort(key=_score, reverse=True)
+    cards = []
+    for r in fails[:3]:
+        copy = CARD_COPY.get(r.item_name)
+        # 证据：检测结果原文 + 出自哪个页面（内容页项 detail 里记录了检查页面）
+        m = re.search(r"检查页面[:：]\s*([^。]+)", r.detail or "")
+        if m:
+            evidence_page = m.group(1).strip()
+        elif r.scope == "首页":
+            evidence_page = report.final_url
+        elif r.scope == "内容页":
+            evidence_page = "抽样内容页"
+        else:
+            evidence_page = "全站多个页面"
+        evidence = r.message
+        if r.detail:
+            snippet = re.sub(r"检查页面[:：][^。]+。", "", r.detail).strip()
+            if snippet:
+                evidence += "。" + snippet[:120]
+        if copy:
+            cards.append({
+                "problem": copy["problem"], "evidence": evidence,
+                "evidence_page": evidence_page, "biz": copy["biz"],
+                "before": copy["before"], "after": copy["after"],
+            })
+        else:
+            cards.append({
+                "problem": r.item_name, "evidence": evidence,
+                "evidence_page": evidence_page,
+                "biz": r.impact or "该项不达标会影响 AI 对您网站的评价。",
+                "before": "当前状态：" + (r.message or "未达标"),
+                "after": r.suggestion or "请联系顾问获取修改方案",
+            })
+    return cards
+
+
+def _first_screen_html(report: AuditReport) -> str:
+    """客户版首屏：一句话总评 → 一句话损失量化（留空位）→ 3 张问题卡"""
+    fail_n = sum(1 for r in report.results
+                 if r.status == Status.FAIL and r.item_id not in ("tech-14", "tech-15"))
+    headline = (f"您的网站能被百度搜到，但 AI 搜索（豆包/DeepSeek/元宝）几乎不会引用您——"
+                f"本次体检 {report.summary['total']} 项，{fail_n} 项亮红灯，其中最要命的 3 个在下面。")
+    cards = _pick_problem_cards(report)
+
+    cards_html = ""
+    for i, c in enumerate(cards, 1):
+        cards_html += f'''
+        <div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:16px;
+            box-shadow:0 1px 3px rgba(0,0,0,0.1);border-left:6px solid #ef4444;">
+            <div style="font-size:17px;font-weight:700;color:#111827;margin-bottom:14px;">
+                问题{'①②③'[i-1]}：{e(c["problem"])}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                <div style="background:#fef2f2;border-radius:8px;padding:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#991b1b;margin-bottom:6px;">证据（您网站上的真实情况）</div>
+                    <div style="font-size:13px;color:#7f1d1d;line-height:1.7;">{e(c["evidence"])}</div>
+                    <div style="font-size:11px;color:#b91c1c;margin-top:6px;word-break:break-all;">出自：{e(c["evidence_page"])}</div>
+                </div>
+                <div style="background:#fffbeb;border-radius:8px;padding:14px;">
+                    <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:6px;">对您生意的影响</div>
+                    <div style="font-size:13px;color:#78350f;line-height:1.7;">{e(c["biz"])}</div>
+                </div>
+            </div>
+            <div style="margin-top:14px;background:#f0fdf4;border-radius:8px;padding:14px;">
+                <div style="font-size:12px;font-weight:700;color:#166534;margin-bottom:6px;">修改示例（改前 → 改后）</div>
+                <div style="font-size:13px;color:#14532d;line-height:1.8;">
+                    <b>改前：</b>{e(c["before"])}<br><b>改后：</b>{e(c["after"])}
+                </div>
+            </div>
+        </div>'''
+
+    if not cards_html:
+        cards_html = '''<div style="background:#ecfdf5;border-radius:12px;padding:24px;color:#065f46;
+            font-size:15px;">本次体检未发现致命问题，详见下方技术明细。</div>'''
+
+    return f'''
+    <!-- 客户版首屏：30 秒看懂区 -->
+    <div style="background:#fff;border-radius:12px;padding:28px;margin-bottom:20px;
+        box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+        <div style="font-size:13px;font-weight:600;color:#2563eb;margin-bottom:10px;">30 秒看懂这份报告</div>
+        <div style="font-size:20px;font-weight:700;color:#111827;line-height:1.7;">{e(headline)}</div>
+    </div>
+    <div style="background:#ef4444;border-radius:12px;padding:22px 28px;margin-bottom:20px;color:#fff;">
+        <div style="font-size:17px;font-weight:700;line-height:1.7;">
+            按当前状态估算，您每月约少 <span style="border-bottom:2px dashed #fff;
+            padding:0 18px;">&nbsp;</span> 次有效客户咨询
+        </div>
+        <div style="font-size:12px;opacity:0.85;margin-top:6px;">
+            此处数字将按您所在行业的搜索量数据填入（口径：行业月搜索量 × AI 引用缺失比例 × 咨询转化率），填数前本报告不估算。
+        </div>
+    </div>
+    {cards_html}
+    '''
 
 
 STATUS_STYLES = {
@@ -398,8 +546,19 @@ def generate_html_report(report: AuditReport) -> str:
         padding:32px;color:#fff;margin-bottom:24px;">
         <div style="font-size:14px;opacity:0.8;margin-bottom:8px;">GEO 官网诊断报告</div>
         <div style="font-size:24px;font-weight:700;margin-bottom:4px;">{e(report.url)}</div>
-        <div style="font-size:13px;opacity:0.7;">检测时间: {e(report.timestamp)} · 检测页面: {e(report.final_url)}（首页级检查基于此页面，全站级检查基于整个站点）</div>
+        <div style="font-size:13px;opacity:0.7;">检测时间: {e(report.timestamp)} · 检测页面: {e(report.final_url)}</div>
     </div>
+
+    <!-- 客户版首屏：总评 → 损失量化 → 3 张问题卡 -->
+    {_first_screen_html(report)}
+
+    <!-- 技术明细：默认折叠，销售/技术人员展开查看 -->
+    <details style="margin-top:8px;">
+    <summary style="cursor:pointer;background:#fff;border-radius:12px;padding:18px 24px;
+        font-size:16px;font-weight:700;color:#374151;box-shadow:0 1px 3px rgba(0,0,0,0.1);">
+        技术明细（{summary["total"]} 项全量打分表与检测证据，点击展开）
+    </summary>
+    <div style="margin-top:16px;">
 
     <!-- 总分概览 -->
     <div style="display:grid;grid-template-columns:1fr 2fr;gap:24px;margin-bottom:24px;">
@@ -456,6 +615,9 @@ def generate_html_report(report: AuditReport) -> str:
         <p style="font-size:13px;color:#6b7280;margin-top:0;">每项包含：手动检查方法、作用说明、三级标准（优秀/普通/未完成）</p>
     </div>
     {detail_sections}
+
+    </div>
+    </details>
 
     <!-- 页脚 -->
     <div style="margin-top:32px;text-align:center;font-size:12px;color:#9ca3af;padding:16px;">
