@@ -506,6 +506,30 @@ async def get_audit_result(filename: str):
     return FileResponse(file_path)
 
 
+def _shorten_brand_name(full_name: str) -> str:
+    """从公司全称中提取品牌简称"""
+    import re
+    name = full_name.strip()
+    # 去掉括号及注释
+    name = re.sub(r"[（(].*?[)）]", "", name)
+    # 去掉地域前缀
+    for prefix in ("中国", "全国", "北京市", "上海市", "深圳市", "广州市", "杭州市", "东莞市", "苏州市", "南京市", "成都市", "武汉市", "西安市", "佛山市", "中山市", "珠海市", "惠州市", "汕头市", "深圳市", "广东省", "江苏省", "浙江省", "福建省", "山东省", "四川省", "湖南省", "湖北省", "安徽省", "河南省", "河北省", "辽宁省", "陕西省", "重庆", "天津"):
+        if name.startswith(prefix) and len(name) > len(prefix):
+            name = name[len(prefix):]
+            break
+    # 去掉公司后缀
+    for suffix in ("集团有限公司", "科技有限公司", "技术服务有限公司", "信息技术有限公司", "网络科技有限公司", "互联网服务有限公司", "企业管理有限公司", "营销技术有限公司", "企业管理咨询有限公司", "企服集团有限公司", "律师事务所", "有限公司", "有限责任公司", "股份有限公司", "合伙企业", "集团"):
+        if name.endswith(suffix) and len(name) > len(suffix):
+            name = name[:-len(suffix)]
+            break
+    name = name.strip()
+    # 如果剩余名称仍然很长（>8字符），尝试取核心词
+    if len(name) > 8:
+        # 尝试取前4个字作为简称
+        name = name[:4]
+    return name if name else full_name
+
+
 @app.get("/api/audit/reports")
 async def list_audit_reports():
     """列出所有历史诊断报告。"""
@@ -529,8 +553,43 @@ async def list_audit_reports():
                 info["fail"] = summary.get("fail", 0)
                 info["skip"] = summary.get("skip", 0)
                 info["total"] = summary.get("total", 0)
+                # 提取品牌名：优先 auth-05 message（品牌[XXX]），其次 tech-14
+                import re
+                brand_name = ""
+                for r in data.get("results", []):
+                    rid = r.get("id", "")
+                    if rid == "auth-05" and r.get("message"):
+                        m = re.search(r"品牌\[(.+?)\]", r["message"])
+                        if m:
+                            full_name = m.group(1).strip()
+                            brand_name = _shorten_brand_name(full_name)
+                            break
+                    if rid == "tech-14" and r.get("detail"):
+                        detail = r["detail"]
+                        if "识别为:" in detail:
+                            m = re.search(r"识别为:\s*([^(]+)", detail)
+                            if m:
+                                brand_name = m.group(1).strip()
+                                break
+                        elif "识别为SaaS" in detail:
+                            m = re.search(r"平台:\s*([^(]+)", detail)
+                            if m:
+                                brand_name = m.group(1).strip()
+                                break
+                info["brand_name"] = brand_name
             except Exception:
                 pass
+        # 如果报告数据没提取到品牌名，从域名提取简称
+        if not info.get("brand_name") and info.get("url"):
+            import re
+            domain = info["url"]
+            domain = re.sub(r"^https?://(www\.)?", "", domain).split("/")[0]
+            domain = domain.replace("www.", "")
+            parts = domain.split(".")
+            if len(parts) >= 2:
+                info["brand_name"] = parts[-2] if parts[-1] in ("com","cn","net","org","io","co") else parts[0]
+            elif parts:
+                info["brand_name"] = parts[0]
         if not info.get("url"):
             parts = stem.rsplit("_", 2)
             if len(parts) >= 3:
@@ -2623,6 +2682,7 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
 .report-item.active{border-color:#0071e3;background:#f0f7ff}
 .report-item .badge-new{background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;flex-shrink:0}
 .report-item .badge-grade{font-size:13px;font-weight:700;color:#fff;padding:2px 10px;border-radius:10px;flex-shrink:0;min-width:28px;text-align:center}
+.report-item .badge-brand{font-size:12px;font-weight:600;color:#5856d6;background:#eef0ff;padding:2px 8px;border-radius:6px;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .report-item .r-url{font-size:14px;color:#1d1d1f;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .report-item .r-score{font-size:20px;font-weight:700;flex-shrink:0;min-width:48px;text-align:right}
 .report-item .r-time{font-size:12px;color:#86868b;flex-shrink:0;min-width:100px;text-align:right}
@@ -2742,9 +2802,11 @@ async function loadReportList(activeFile){
       const isNew = i === 0 && !activeFile;
       const isActive = r.html_file === currentReportFile;
       const stats = r.total ? '<span class="r-stats">✓<span class="s-pass">'+r.pass+'</span> ⚠<span class="s-warn">'+r.warn+'</span> ✕<span class="s-fail">'+r.fail+'</span></span>' : '';
+      const brandTag = r.brand_name ? '<span class="badge-brand">'+r.brand_name+'</span>' : '';
       return '<div class="report-item'+(isActive?' active':'')+'" data-file="'+r.html_file+'">'+
         (isNew ? '<span class="badge-new">最新</span>' : '')+
         '<span class="badge-grade" style="background:'+gc+'">'+grade+'</span>'+
+        brandTag+
         '<span class="r-url">'+url+'</span>'+
         stats+
         '<span class="r-score" style="color:'+gc+'">'+score+'</span>'+
