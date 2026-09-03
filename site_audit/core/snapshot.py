@@ -46,6 +46,16 @@ def save_snapshot(output_dir, name: str, pages: list, ai_engine=None) -> str:
                            ensure_ascii=False, indent=2),
                 encoding="utf-8")
 
+        # 快照哈希：sha256(pages.json + llm_raw.json)，写入 snapshot_hash.txt，
+        # 供前后对比页凭证字段核验快照未被篡改
+        import hashlib
+        h = hashlib.sha256()
+        for fname in ("pages.json", "llm_raw.json"):
+            fp = snap_dir / fname
+            if fp.exists():
+                h.update(fp.read_bytes())
+        (snap_dir / "snapshot_hash.txt").write_text(h.hexdigest(), encoding="utf-8")
+
         return str(snap_dir)
     except Exception as e:
         logger.warning(f"快照落盘失败（不阻断诊断）: {e}")
