@@ -6,7 +6,9 @@
 
 用法：
     python3 scripts/export_check_scope_table.py [报告JSON路径]
-    默认取 output/audit/ 下最新的报告 JSON；输出 docs/检测项范围对照表-v1.md
+    默认取 output/audit/ 下最新的报告 JSON（提供检查项花名册/名称/优先级/状态）；
+    标称范围与适用页以代码里的 SCOPE_MAP / APPLICABLE_PAGES_MAP 为准（反映当前代码口径）。
+    输出 docs/检测项范围对照表-v1.md
 """
 import glob
 import json
@@ -15,6 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+from site_audit.audit.checker import SCOPE_MAP, APPLICABLE_PAGES_MAP  # noqa: E402
 
 # ── 实际代码行为清单（2026-09-03 阿栈逐项核对源码，随代码变更必须同步更新）──
 # id: (检测方式, 实际执行页, 代码依据)
@@ -114,7 +119,9 @@ def main():
         rid = r["id"]
         method, actual, code_ref = ACTUAL_BEHAVIOR.get(rid, ("?", "?", "未核对"))
         note = "（不计分）" if rid in CMS_ITEMS else ""
-        lines.append(f"| {rid}{note} | {r['name']} | {r['priority']} | {method} | {r['scope']} | {r['applicable_pages']} | {actual} |")
+        scope = SCOPE_MAP.get(rid, "首页")
+        applicable = APPLICABLE_PAGES_MAP.get(rid, "首页")
+        lines.append(f"| {rid}{note} | {r['name']} | {r['priority']} | {method} | {scope} | {applicable} | {actual} |")
     lines.append("")
     lines.append("## 代码依据")
     lines.append("")
@@ -125,7 +132,7 @@ def main():
     lines.append("")
     lines.append("## 修正记录")
     lines.append("")
-    lines.append("- 2026-09-03（阿栈）：修正 11 项范围字段与实际行为脱节（tech-12/13、ai-06/09/10/11、content-07/08、auth-07、b2b-05/06）；auth-05 百科查询从 3 单点扩为 5 通道+健康度追踪，通道全灭降级 SKIP；html_report 检测页面改取 detail 实际证据页。commit 8eccad7 / c30e30e。")
+    lines.append("- 2026-09-03（阿栈）：修正 15 项范围/适用页字段与实际行为脱节（tech-02~05/12/13、ai-06/09/10/11、content-07/08、auth-07、b2b-05/06）；auth-05 百科查询从 3 单点扩为 5 通道+健康度追踪，通道全灭降级 SKIP；html_report 检测页面改取 detail 实际证据页。commit 8eccad7 / c30e30e / 2f7a080。本表标称范围与适用页以代码 SCOPE_MAP/APPLICABLE_PAGES_MAP 为准。")
     lines.append("")
 
     out = REPO / "docs" / "检测项范围对照表-v1.md"
