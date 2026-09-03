@@ -80,12 +80,23 @@ def generate_html_report(report: AuditReport) -> str:
             purpose_impact_html = purpose_text + impact_text
         manual_html = f'<div style="font-size:11px;color:#4b5563;line-height:1.5;">{e(r.manual_check)}</div>' if r.manual_check else '<div style="font-size:11px;color:#9ca3af;">-</div>'
         standards_html = _standards_html(r) if (r.excellent or r.normal or r.failed) else '<div style="font-size:11px;color:#9ca3af;">-</div>'
-        scope_color = "#0ea5e9" if r.scope == "全站" else "#8b5cf6"
-        scope_bg = "#f0f9ff" if r.scope == "全站" else "#f5f3ff"
+        scope_color = "#0ea5e9" if r.scope == "全站" else ("#f59e0b" if r.scope == "内容页" else "#8b5cf6")
+        scope_bg = "#f0f9ff" if r.scope == "全站" else ("#fffbeb" if r.scope == "内容页" else "#f5f3ff")
         scope_label = f'{r.scope}级'
-        checked_page = report.final_url if r.scope == "首页" else "全站配置"
-        app_color = "#f59e0b" if r.applicable_pages == "内页" else "#10b981"
-        app_bg = "#fffbeb" if r.applicable_pages == "内页" else "#ecfdf5"
+        # 检测页面：优先取 detail 里记录的实际证据页（内容页项会写入检查页面），
+        # 其次按范围推断——首页项为首页URL，内容页项为抽样内容页，全站项为全站配置
+        import re as _re
+        _m = _re.search(r"检查页面[:：]\s*([^。]+)", r.detail or "")
+        if _m:
+            checked_page = _m.group(1).strip()
+        elif r.scope == "首页":
+            checked_page = report.final_url
+        elif r.scope == "内容页":
+            checked_page = "抽样内容页"
+        else:
+            checked_page = "全站配置"
+        app_color = "#f59e0b" if r.applicable_pages in ("内页", "内容页") else "#10b981"
+        app_bg = "#fffbeb" if r.applicable_pages in ("内页", "内容页") else "#ecfdf5"
         scope_html = f'''
         <div style="margin-top:6px;">
             <span style="display:inline-block;padding:1px 6px;border-radius:8px;
