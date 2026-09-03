@@ -20,6 +20,8 @@ def save_snapshot(output_dir, name: str, pages: list, ai_engine=None) -> str:
       及结构化抽取内容（_extract_content 产出，即各 AI 检查实际看到的输入）
     - llm_raw.json：本次诊断全部 LLM 调用的 system/user prompt 与原始响应
       （仅配置了 AI 引擎时生成）
+    - search_raw.json：外部数据通道原始查询响应（百科品牌实体词条页正文片段等），
+      供重放取证与人工复核（有外部通道查询时生成）
     """
     try:
         snap_dir = Path(output_dir) / "snapshots" / name
@@ -45,12 +47,19 @@ def save_snapshot(output_dir, name: str, pages: list, ai_engine=None) -> str:
                 json.dumps(getattr(ai_engine, "raw_log", []),
                            ensure_ascii=False, indent=2),
                 encoding="utf-8")
+            # search_raw.json：外部数据通道（百科品牌实体等）的原始查询响应留痕，
+            # 词条页正文片段+搜索原始结果，供重放取证与人工复核
+            search_raw = getattr(ai_engine, "search_raw", [])
+            if search_raw:
+                (snap_dir / "search_raw.json").write_text(
+                    json.dumps(search_raw, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
 
-        # 快照哈希：sha256(pages.json + llm_raw.json)，写入 snapshot_hash.txt，
+        # 快照哈希：sha256(pages.json + llm_raw.json + search_raw.json)，写入 snapshot_hash.txt，
         # 供前后对比页凭证字段核验快照未被篡改
         import hashlib
         h = hashlib.sha256()
-        for fname in ("pages.json", "llm_raw.json"):
+        for fname in ("pages.json", "llm_raw.json", "search_raw.json"):
             fp = snap_dir / fname
             if fp.exists():
                 h.update(fp.read_bytes())
