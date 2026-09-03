@@ -14,7 +14,29 @@ logger = logging.getLogger("site_audit.ai_engine")
 
 # Prompt 版本号（质量计划书v1·确定性标准）：任何 check_* 方法的 system/user prompt
 # 有改动必须递增版本号；版本号随报告 JSON 输出，前后对比报告以此确认口径一致。
-PROMPT_VERSION = "geo-v1.0"
+# geo-v1.1（2026-09-03 阿栈）：check_knowledge_graph 新增「LLM 提炼核心品牌词兜底重试」prompt，
+# 修复品牌变体漏核心名导致的百科误判（hcqycs 案例：变体只有全名/简称，漏「和创企赢」）。
+PROMPT_VERSION = "geo-v1.1"
+
+# 常见地域前缀（省级+主要城市），用于从公司名提炼核心品牌词；按长度降序匹配，长前缀优先
+REGION_PREFIXES = tuple(sorted([
+    "北京", "上海", "天津", "重庆", "广东", "广西", "河北", "河南", "山东", "山西",
+    "江苏", "浙江", "安徽", "福建", "江西", "湖南", "湖北", "四川", "贵州", "云南",
+    "陕西", "甘肃", "青海", "辽宁", "吉林", "黑龙江", "海南", "内蒙古", "新疆", "西藏",
+    "宁夏", "广州", "深圳", "杭州", "南京", "苏州", "成都", "武汉", "西安", "长沙",
+    "郑州", "青岛", "大连", "宁波", "厦门", "佛山", "东莞", "无锡", "合肥", "福州",
+    "济南", "沈阳", "珠海", "惠州", "中山", "温州", "泉州", "石家庄", "太原", "南昌",
+    "南宁", "贵阳", "昆明", "兰州", "海口", "长春", "哈尔滨", "呼和浩特", "乌鲁木齐",
+], key=len, reverse=True))
+
+
+def _strip_region_prefix(name: str) -> str:
+    """去掉公司名开头的地域前缀（省/市名，兼容带「市/省」后缀），剩余不足2字则不剥，避免误伤品牌主体"""
+    for prefix in REGION_PREFIXES:
+        for cand in (prefix + "市", prefix + "省", prefix):
+            if name.startswith(cand) and len(name) - len(cand) >= 2:
+                return name[len(cand):]
+    return name
 
 
 def _extract_content(page: PageData, max_chars: int = 6000) -> dict:
@@ -362,12 +384,16 @@ HTML中的作者标签: {author_signals or '未检测到'}
         if m:
             full_name = m.group(1).strip()
             candidates.append(full_name)
-            # 生成简称
+            # 生成简称：去公司类型后缀
             for suffix in ["集团有限公司", "科技股份有限公司", "技术有限公司", "有限公司"]:
                 if full_name.endswith(suffix):
                     short = full_name[:-len(suffix)]
                     if short and short not in candidates:
                         candidates.append(short)
+                    # 再去地域前缀，得到核心品牌词（如「广东和创企赢企服」→「和创企赢企服」）
+                    core = _strip_region_prefix(short)
+                    if core and core != short and core not in candidates:
+                        candidates.append(core)
                     break
 
         # 从title提取品牌名
@@ -401,6 +427,122 @@ HTML中的作者标签: {author_signals or '未检测到'}
 
     # ── auth-05: 知识图谱品牌实体 ──
 
+    def _extract_core_brand(self, names: list[str], page: PageData) -> str:
+        """LLM 从公司全名提炼核心品牌词：去地域前缀、行业通用后缀、公司类型后缀，
+        只保留最独特的品牌识别部分（如「广东和创企赢企服集团有限公司」→「和创企赢」）。
+        用于名称变体全部未命中百科时的兜底重试。"""
+        title = page.soup.title.get_text(strip=True) if page.soup.title else ""
+        system = ('你是品牌名称分析专家。从公司全名提炼核心品牌词：去掉地域前缀（省/市名）、'
+                  '行业通用后缀（如企服/科技/网络/实业/咨询/管理）和公司类型后缀（有限公司/集团/股份有限公司等），'
+                  '只保留最独特的品牌识别部分，通常2-4个字。输出JSON：{"core_brand":"核心品牌词"}')
+        user = (f"公司名称候选: {', '.join(names[:4])}\n网页标题: {title}\n"
+                f"网站: {page.final_url}\n\n只输出JSON。")
+        result = self._call_llm(system, user)
+        if result and result.get("core_brand"):
+            core = str(result["core_brand"]).strip()
+            if 2 <= len(core) <= 10:
+                return core
+        return ""
+
+    @staticmethod
+    def _query_encyclopedia(name: str) -> tuple:
+        """用单个名称查询百科平台，返回 (命中平台列表, 有效通道数)。
+        有效通道数=真正拿到可解析响应的查询通道数量（反爬/网络不通不计）。
+        调用方据此区分「查证无实体」与「通道全灭没查成」——后者绝不能判无实体。
+        通道清单（2026-09-03 阿栈实测本机网络）：百度百科搜索API/item页均遭反爬（安全验证页）、
+        维基API超时不可达、必应 site: 搜索可达、头条百科词条直连语义干净（404=无词条）。"""
+        import re
+        import urllib.parse
+        encoded = urllib.parse.quote(name)
+        platforms = []
+        channels_ok = 0
+        ua = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+
+        # 1. 百度百科：搜索API
+        try:
+            search_url = f"https://baike.baidu.com/api/search?word={encoded}&pn=0&rn=3"
+            with httpx.Client(timeout=10, follow_redirects=True,
+                              headers={**ua, "Accept": "application/json"}) as client:
+                resp = client.get(search_url)
+                if resp.status_code == 200 and resp.text.strip():
+                    try:
+                        data = resp.json()
+                        channels_ok += 1
+                        if data.get("data", {}).get("result", []):
+                            platforms.append("百度百科")
+                    except Exception:
+                        pass  # 返回非JSON（安全验证页）= 通道被反爬，不计有效
+        except Exception:
+            pass
+
+        # 1b. 百度百科直接item URL（搜索API失败时回退）；安全验证页/未创建词条不计有效通道
+        if "百度百科" not in platforms:
+            try:
+                baike_url = f"https://baike.baidu.com/item/{encoded}"
+                with httpx.Client(timeout=10, follow_redirects=True, headers=ua) as client:
+                    resp = client.get(baike_url)
+                    if resp.status_code == 200:
+                        text = resp.text
+                        blocked = ("安全验证" in text[:2000] or "尚未被创建" in text[:5000]
+                                   or "还未被创建" in text[:5000])
+                        if not blocked and "百度百科" in text and "消歧义" not in text[:200]:
+                            channels_ok += 1
+                            platforms.append("百度百科")
+            except Exception:
+                pass
+
+        # 2. 维基百科 (中文)
+        try:
+            wiki_api = f"https://zh.wikipedia.org/w/api.php?action=query&titles={encoded}&format=json&redirects=1"
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(wiki_api)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    channels_ok += 1
+                    pages = data.get("query", {}).get("pages", {})
+                    for page_id, page_info in pages.items():
+                        if page_id != "-1" and "missing" not in page_info:
+                            platforms.append("维基百科")
+                            break
+        except Exception:
+            pass
+
+        # 3. 头条百科：词条直连（404=无词条，语义干净；200 且标题含名称才算命中）
+        if not platforms:
+            try:
+                with httpx.Client(timeout=10, follow_redirects=True, headers=ua) as client:
+                    resp = client.get(f"https://www.baike.com/wiki/{encoded}")
+                    if resp.status_code == 200:
+                        channels_ok += 1
+                        m = re.search(r"<title>([^<]*)</title>", resp.text)
+                        if m and name in m.group(1):
+                            platforms.append("头条百科")
+                    elif resp.status_code == 404:
+                        channels_ok += 1  # 404 是有效响应：头条百科确认无此词条
+            except Exception:
+                pass
+
+        # 4. 必应 site: 搜索兜底（百度百科直连被反爬时的可达通道）；
+        # 仅当结果标题包含所查名称才算命中，防止「和（汉语文字）」类误命中
+        if "百度百科" not in platforms:
+            try:
+                q = urllib.parse.quote(f'"{name}" site:baike.baidu.com')
+                with httpx.Client(timeout=10, follow_redirects=True, headers=ua) as client:
+                    resp = client.get(f"https://cn.bing.com/search?q={q}")
+                    if resp.status_code == 200:
+                        channels_ok += 1
+                        hits = re.findall(
+                            r'<h2[^>]*><a[^>]*href="https?://(?:www\.)?baike\.baidu\.com/item/[^"]+"[^>]*>(.*?)</a>',
+                            resp.text)
+                        for h in hits:
+                            if name in re.sub(r"<[^>]+>", "", h):
+                                platforms.append("百度百科(via必应)")
+                                break
+            except Exception:
+                pass
+
+        return platforms, channels_ok
+
     def check_knowledge_graph(self, page: PageData) -> tuple[Status, str, str]:
         """检查品牌在百度百科/维基百科/知识面板中是否有实体条目"""
         names = self.extract_brand_names(page)
@@ -411,67 +553,28 @@ HTML中的作者标签: {author_signals or '未检测到'}
         found_platforms = []
         found_name = ""
         checked_names = []
+        channels_ok = 0
 
         for name in names[:4]:  # 最多尝试4个名称变体
             checked_names.append(name)
-            import urllib.parse
-            encoded = urllib.parse.quote(name)
+            platforms, ok = self._query_encyclopedia(name)
+            channels_ok += ok
+            if platforms:
+                found_platforms = platforms
+                found_name = name
+                break
 
-            # 1. 百度百科：用搜索API
-            try:
-                search_url = f"https://baike.baidu.com/api/search?word={encoded}&pn=0&rn=3"
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                    "Accept": "application/json",
-                }
-                with httpx.Client(timeout=10, follow_redirects=True, headers=headers) as client:
-                    resp = client.get(search_url)
-                    if resp.status_code == 200:
-                        try:
-                            data = resp.json()
-                            items = data.get("data", {}).get("result", [])
-                            if items:
-                                found_platforms.append("百度百科")
-                                found_name = name
-                                break
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
-            # 1b. 百度百科直接item URL（搜索API失败时回退）
-            try:
-                baike_url = f"https://baike.baidu.com/item/{encoded}"
-                with httpx.Client(timeout=10, follow_redirects=True, headers={
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-                }) as client:
-                    resp = client.get(baike_url)
-                    if resp.status_code == 200 and "百度百科" in resp.text and "消歧义" not in resp.text[:200]:
-                        found_platforms.append("百度百科")
-                        found_name = name
-                        break
-            except Exception:
-                pass
-
-            # 2. 维基百科 (中文)
-            try:
-                wiki_api = f"https://zh.wikipedia.org/w/api.php?action=query&titles={encoded}&format=json&redirects=1"
-                with httpx.Client(timeout=10) as client:
-                    resp = client.get(wiki_api)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        pages = data.get("query", {}).get("pages", {})
-                        for page_id, page_info in pages.items():
-                            if page_id != "-1" and "missing" not in page_info:
-                                if "维基百科" not in found_platforms:
-                                    found_platforms.append("维基百科")
-                                if not found_name:
-                                    found_name = name
-                                break
-                        if "维基百科" in found_platforms:
-                            break
-            except Exception:
-                pass
+        # 名称变体全部未命中时，LLM 提炼核心品牌词兜底重试一轮
+        # （修复 hcqycs 案例：变体只有全名+简称，漏了核心品牌「和创企赢」导致误判无实体）
+        if not found_platforms:
+            core_brand = self._extract_core_brand(names, page)
+            if core_brand and core_brand not in checked_names:
+                checked_names.append(core_brand)
+                platforms, ok = self._query_encyclopedia(core_brand)
+                channels_ok += ok
+                if platforms:
+                    found_platforms = platforms
+                    found_name = core_brand
 
         # 3. LLM判断品牌知名度
         system = '你是品牌知识图谱分析专家。判断品牌是否在AI知识图谱中有实体条目。输出JSON：{"known":true/false,"confidence":"high/medium/low","note":"说明"}'
@@ -502,11 +605,15 @@ HTML中的作者标签: {author_signals or '未检测到'}
             return (Status.PASS, f"品牌[{found_name}]在{platforms_str}有词条",
                     f"百科平台: {platforms_str}。{match_info}")
         else:
+            # 通道全灭（反爬/网络不通）时绝不判无实体：降级为「本次未检」，与业务口径一致不计分
+            if channels_ok == 0:
+                return (Status.SKIP, "百科查询通道不可用，本次未能核实品牌实体",
+                        f"尝试名称: {', '.join(checked_names)}。百度百科(反爬)/维基/必应/头条百科通道均无有效响应，建议人工搜索品牌名核实。LLM判断: {llm_note}")
             if llm_known:
                 return (Status.WARN, f"品牌[{brand_display}]无百科词条，但AI识别为已知品牌",
                         f"尝试名称: {', '.join(checked_names)}。LLM判断: {llm_note}")
             return (Status.FAIL, f"品牌[{brand_display}]在百科平台和AI知识图谱中均未检测到实体",
-                    f"百度百科和维基百科均未找到词条。尝试名称: {', '.join(checked_names)}。LLM判断: {llm_note}")
+                    f"百科平台均未找到词条（有效通道{channels_ok}个）。尝试名称: {', '.join(checked_names)}。LLM判断: {llm_note}")
 
     # ── auth-06: 跨平台内容分发 ──
 
