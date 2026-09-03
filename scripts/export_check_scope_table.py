@@ -66,7 +66,7 @@ ACTUAL_BEHAVIOR = {
     "auth-02": ("规则", "首页", "authority.py _check_customer_testimonials：首页评价/Logo"),
     "auth-03": ("规则", "首页", "authority.py _check_social_presence：首页社交链接"),
     "auth-04": ("规则", "首页", "authority.py _check_external_links：首页外链域名"),
-    "auth-05": ("AI+外部平台", "首页提取品牌名+外部百科平台", "authority.py:173 → check_knowledge_graph：品牌变体×5通道（百度百科API/item页+维基+头条百科+必应site:兜底），通道健康度追踪，全灭降级SKIP"),
+    "auth-05": ("AI+外部平台", "首页提取品牌名+外部百科平台", "authority.py:173 → check_knowledge_graph：品牌变体×6通道（百度百科wap词条页直连主通道+桌面API/item页备用+维基+头条百科+必应site:兜底），通道健康度追踪，全灭降级SKIP，否定结果标「需人工复核」，原始响应进快照search_raw"),
     "auth-06": ("AI+外部平台", "首页提取品牌名+外部社交平台", "authority.py:192 → check_cross_platform：首页社交链接+知乎搜索+LLM"),
     "auth-07": ("AI", "抽样内容页单页", "authority.py:214 _pick_content_page → check_eeat"),
     # B端增强（b2b.py）
