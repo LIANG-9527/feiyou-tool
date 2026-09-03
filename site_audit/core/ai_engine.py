@@ -72,6 +72,8 @@ class AIEngine:
         self.timeout = timeout
         self.max_retries = max_retries
         self._cache = {}
+        # 原始 LLM 调用留痕：[{system, user, response}]，供快照落盘取证
+        self.raw_log = []
 
     def _cache_key(self, system_prompt: str, user_prompt: str) -> str:
         import hashlib
@@ -114,11 +116,23 @@ class AIEngine:
                     resp.raise_for_status()
                     data = resp.json()
                     text = data["choices"][0]["message"]["content"]
-                    return json.loads(text)
+                    result = json.loads(text)
+                    self.raw_log.append({
+                        "system": system_prompt,
+                        "user": user_prompt,
+                        "response": result,
+                    })
+                    return result
             except Exception as e:
                 logger.warning(f"AI engine attempt {attempt}/{self.max_retries} failed: {e}")
                 if attempt < self.max_retries:
                     time.sleep(2 ** attempt)
+        self.raw_log.append({
+            "system": system_prompt,
+            "user": user_prompt,
+            "response": None,
+            "error": "LLM调用失败（重试耗尽）",
+        })
         return None
 
     @staticmethod

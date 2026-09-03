@@ -10,7 +10,8 @@ from pathlib import Path
 from site_audit.core.fetcher import Fetcher
 from site_audit.core.crawler import SiteCrawler
 from site_audit.core.scorer import build_report
-from site_audit.core.ai_engine import AIEngine
+from site_audit.core.ai_engine import AIEngine, PROMPT_VERSION
+from site_audit.core.snapshot import save_snapshot
 from site_audit.audit.technical import TechnicalChecker
 from site_audit.audit.ai_friendly import AIFriendlyChecker
 from site_audit.audit.content import ContentChecker
@@ -93,7 +94,9 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
             }
             for p in extra_pages
         ]
-        report = build_report(url, page.final_url, timestamp, all_results, sampled_pages=sampled)
+        report = build_report(url, page.final_url, timestamp, all_results,
+                              sampled_pages=sampled,
+                              prompt_version=PROMPT_VERSION if ai_engine else "")
 
         domain = urlparse(report.final_url).netloc.replace(":", "_")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -101,6 +104,12 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         json_name = f"{domain}_{ts}.json"
         save_html_report(report, str(output_dir / html_name))
         save_json_report(report, str(output_dir / json_name))
+
+        # 快照落盘：留存页面抽取内容+LLM原始响应，供复检重放与前后对比取证
+        snapshot_name = f"{domain}_{ts}"
+        snapshot_dir = save_snapshot(output_dir, snapshot_name,
+                                     pages=[page, *extra_pages],
+                                     ai_engine=ai_engine)
 
     return {
         "ok": True,
@@ -126,6 +135,7 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         ],
         "html_file": html_name,
         "json_file": json_name,
+        "snapshot_dir": f"snapshots/{snapshot_name}" if snapshot_dir else "",
         "response_time": round(page.response_time, 2),
         "page_kb": round(page.content_size / 1024, 0),
         "ai_enabled": ai_engine is not None,
