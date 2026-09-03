@@ -12,6 +12,10 @@ from site_audit.core.fetcher import PageData
 
 logger = logging.getLogger("site_audit.ai_engine")
 
+# Prompt 版本号（质量计划书v1·确定性标准）：任何 check_* 方法的 system/user prompt
+# 有改动必须递增版本号；版本号随报告 JSON 输出，前后对比报告以此确认口径一致。
+PROMPT_VERSION = "geo-v1.0"
+
 
 def _extract_content(page: PageData, max_chars: int = 6000) -> dict:
     """从页面提取供AI分析的结构化内容摘要（在副本上操作，不影响原始soup）"""

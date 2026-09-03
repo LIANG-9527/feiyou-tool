@@ -95,6 +95,8 @@ class AuditReport:
     results: List[CheckResult] = field(default_factory=list)
     # 多页面抽样信息：[{url, title, status, size_kb, depth}]
     sampled_pages: List[dict] = field(default_factory=list)
+    # AI 语义检查的 prompt 版本（未启用 AI 引擎时为空串）
+    prompt_version: str = ""
 
     @property
     def summary(self) -> dict:

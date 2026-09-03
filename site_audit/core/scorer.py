@@ -84,7 +84,8 @@ def calculate_total_score(category_scores: List[CategoryScore]) -> float:
 
 
 def build_report(url: str, final_url: str, timestamp: str,
-                 results: List[CheckResult], sampled_pages: list = None) -> AuditReport:
+                 results: List[CheckResult], sampled_pages: list = None,
+                 prompt_version: str = "") -> AuditReport:
     """构建完整报告"""
     category_scores = calculate_category_scores(results)
     total_score = calculate_total_score(category_scores)
@@ -99,4 +100,5 @@ def build_report(url: str, final_url: str, timestamp: str,
         categories=category_scores,
         results=results,
         sampled_pages=sampled_pages or [],
+        prompt_version=prompt_version,
     )

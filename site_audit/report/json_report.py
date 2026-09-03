@@ -9,6 +9,7 @@ def report_to_dict(report: AuditReport) -> dict:
         "url": report.url,
         "final_url": report.final_url,
         "timestamp": report.timestamp,
+        "prompt_version": report.prompt_version,
         "total_score": report.total_score,
         "grade": report.grade,
         "summary": report.summary,
