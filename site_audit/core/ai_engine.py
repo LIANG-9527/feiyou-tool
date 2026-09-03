@@ -96,6 +96,9 @@ class AIEngine:
         self._cache = {}
         # 原始 LLM 调用留痕：[{system, user, response}]，供快照落盘取证
         self.raw_log = []
+        # 外部数据通道原始响应留痕：[{check, channel, query, url, status_code, snippet, verdict}]，
+        # 随快照落盘为 search_raw.json（对齐老周凭证链要求：外部判定必须可重放取证）
+        self.search_raw = []
 
     def _cache_key(self, system_prompt: str, user_prompt: str) -> str:
         import hashlib
@@ -444,38 +447,83 @@ HTML中的作者标签: {author_signals or '未检测到'}
                 return core
         return ""
 
-    @staticmethod
-    def _query_encyclopedia(name: str) -> tuple:
+    def _record_search_raw(self, channel: str, name: str, url: str,
+                           status: int, snippet: str, verdict: str):
+        """记录外部数据通道原始响应（百科品牌实体检查），随快照落盘为 search_raw.json。"""
+        self.search_raw.append({
+            "check": "百科品牌实体",
+            "channel": channel,
+            "query": name,
+            "url": url,
+            "status_code": status,
+            "snippet": snippet[:2000],
+            "verdict": verdict,
+        })
+
+    def _query_encyclopedia(self, name: str) -> tuple:
         """用单个名称查询百科平台，返回 (命中平台列表, 有效通道数)。
         有效通道数=真正拿到可解析响应的查询通道数量（反爬/网络不通不计）。
         调用方据此区分「查证无实体」与「通道全灭没查成」——后者绝不能判无实体。
-        通道清单（2026-09-03 阿栈实测本机网络）：百度百科搜索API/item页均遭反爬（安全验证页）、
-        维基API超时不可达、必应 site: 搜索可达、头条百科词条直连语义干净（404=无词条）。"""
+        主通道：百度百科词条页 wap 端直连（2026-09-03 阿栈实测：桌面端 item 页/search API
+        均遭反爬 403 安全验证，wap 端 wapbaike.baidu.com 直连可达且语义干净——
+        200 且页面含所查名称=命中，404=确认无词条）。
+        每通道 10s 超时上限并计入整单时间预算；各通道原始响应记入 search_raw 留痕。"""
         import re
         import urllib.parse
         encoded = urllib.parse.quote(name)
         platforms = []
         channels_ok = 0
-        ua = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        ua = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
 
-        # 1. 百度百科：搜索API
+        def _strip(html: str) -> str:
+            return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))[:1500]
+
+        # 0. 百度百科词条页 wap 端直连（主通道，命中即通过）
         try:
-            search_url = f"https://baike.baidu.com/api/search?word={encoded}&pn=0&rn=3"
-            with httpx.Client(timeout=10, follow_redirects=True,
-                              headers={**ua, "Accept": "application/json"}) as client:
-                resp = client.get(search_url)
-                if resp.status_code == 200 and resp.text.strip():
-                    try:
-                        data = resp.json()
-                        channels_ok += 1
-                        if data.get("data", {}).get("result", []):
-                            platforms.append("百度百科")
-                    except Exception:
-                        pass  # 返回非JSON（安全验证页）= 通道被反爬，不计有效
-        except Exception:
-            pass
+            wap_url = f"https://wapbaike.baidu.com/item/{encoded}"
+            with httpx.Client(timeout=10, follow_redirects=True, headers=ua) as client:
+                resp = client.get(wap_url)
+                text = resp.text
+                if resp.status_code == 200 and "安全验证" not in text[:3000]:
+                    channels_ok += 1
+                    hit = name in text
+                    self._record_search_raw(
+                        "百度百科(wap词条页直连)", name, wap_url, resp.status_code,
+                        _strip(text), "命中" if hit else "未命中(200但页面不含名称)")
+                    if hit:
+                        platforms.append("百度百科")
+                elif resp.status_code == 404:
+                    channels_ok += 1  # 404 是有效响应：百度百科确认无此词条
+                    self._record_search_raw(
+                        "百度百科(wap词条页直连)", name, wap_url, 404, "", "确认无词条(404)")
+                else:
+                    self._record_search_raw(
+                        "百度百科(wap词条页直连)", name, wap_url, resp.status_code,
+                        text[:500], "通道无效(反爬/异常)")
+        except Exception as e:
+            self._record_search_raw(
+                "百度百科(wap词条页直连)", name, f"https://wapbaike.baidu.com/item/{encoded}",
+                0, "", f"通道异常: {e}")
 
-        # 1b. 百度百科直接item URL（搜索API失败时回退）；安全验证页/未创建词条不计有效通道
+        # 1. 百度百科：搜索API（备用，本机实测遭反爬）
+        if "百度百科" not in platforms:
+            try:
+                search_url = f"https://baike.baidu.com/api/search?word={encoded}&pn=0&rn=3"
+                with httpx.Client(timeout=10, follow_redirects=True,
+                                  headers={**ua, "Accept": "application/json"}) as client:
+                    resp = client.get(search_url)
+                    if resp.status_code == 200 and resp.text.strip():
+                        try:
+                            data = resp.json()
+                            channels_ok += 1
+                            if data.get("data", {}).get("result", []):
+                                platforms.append("百度百科")
+                        except Exception:
+                            pass  # 返回非JSON（安全验证页）= 通道被反爬，不计有效
+            except Exception:
+                pass
+
+        # 1b. 百度百科桌面 item URL（备用，本机实测遭反爬）；安全验证页/未创建词条不计有效通道
         if "百度百科" not in platforms:
             try:
                 baike_url = f"https://baike.baidu.com/item/{encoded}"
@@ -487,7 +535,8 @@ HTML中的作者标签: {author_signals or '未检测到'}
                                    or "还未被创建" in text[:5000])
                         if not blocked and "百度百科" in text and "消歧义" not in text[:200]:
                             channels_ok += 1
-                            platforms.append("百度百科")
+                            if name in text:
+                                platforms.append("百度百科")
             except Exception:
                 pass
 
@@ -610,10 +659,10 @@ HTML中的作者标签: {author_signals or '未检测到'}
                 return (Status.SKIP, "百科查询通道不可用，本次未能核实品牌实体",
                         f"尝试名称: {', '.join(checked_names)}。百度百科(反爬)/维基/必应/头条百科通道均无有效响应，建议人工搜索品牌名核实。LLM判断: {llm_note}")
             if llm_known:
-                return (Status.WARN, f"品牌[{brand_display}]无百科词条，但AI识别为已知品牌",
-                        f"尝试名称: {', '.join(checked_names)}。LLM判断: {llm_note}")
-            return (Status.FAIL, f"品牌[{brand_display}]在百科平台和AI知识图谱中均未检测到实体",
-                    f"百科平台均未找到词条（有效通道{channels_ok}个）。尝试名称: {', '.join(checked_names)}。LLM判断: {llm_note}")
+                return (Status.WARN, f"品牌[{brand_display}]无百科词条，但AI识别为已知品牌（需人工复核）",
+                        f"尝试名称: {', '.join(checked_names)}。该结果为机器查证否定，上报告前需人工搜索品牌名复核确认。LLM判断: {llm_note}")
+            return (Status.FAIL, f"品牌[{brand_display}]在百科平台和AI知识图谱中均未检测到实体（需人工复核）",
+                    f"百科平台均未找到词条（有效通道{channels_ok}个）。尝试名称: {', '.join(checked_names)}。该结果为机器查证否定，上红字前需人工搜索品牌名复核确认。LLM判断: {llm_note}")
 
     # ── auth-06: 跨平台内容分发 ──
 
