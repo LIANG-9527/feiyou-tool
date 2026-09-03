@@ -100,6 +100,10 @@ SCOPE_MAP = {
 # 每个检查项的适用页面类型：首页 / 内页 / 内容页 / 全站
 # 内页/内容页专属项在只检测首页时标记为"需内页检测"，不直接扣分
 APPLICABLE_PAGES_MAP = {
+    "tech-02": "全站",    # robots.txt 是站级配置文件，非首页内容
+    "tech-03": "全站",    # sitemap.xml 站级配置
+    "tech-04": "全站",    # llms.txt 站级配置
+    "tech-05": "全站",    # .well-known 站级配置
     "tech-12": "内页",    # URL检查对象是子页面路径，首页URL为域名无需检查
     "tech-13": "全站",    # 断链检测覆盖全部抽样页（cross_page.py 取 all_pages）
     "ai-06": "内容页",    # 面包屑在抽样内容页检查
