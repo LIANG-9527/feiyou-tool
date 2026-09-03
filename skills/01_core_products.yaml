@@ -1,0 +1,31 @@
+# Step 1 · 核心产品/服务清单
+id: step1
+name: 核心产品清单
+description: 调研品牌近半年核心产品/服务
+order: 1
+type: single
+inputs:
+  - brand
+  - product
+output: step1_products
+prompt: |
+  ## 任务
+  调研品牌「{{brand}}」近半年对外推广销售的核心产品/服务。
+
+  {{product_hint}}
+
+  ## 要求
+  1. 输出1~3个核心产品/服务
+  2. 每个附: 一句话定位、目标客群、近半年主推依据(基于公开信息)
+  3. 不确定的信息标注'待核验'
+  4. 如果用户指定了产品/服务,确保该产品在输出列表中,且排在第一位
+
+  ## 输出格式(JSON数组)
+  [
+    {
+      "product_name": "产品/服务名称",
+      "positioning": "一句话定位",
+      "target_audience": "目标客群简述",
+      "promotion_basis": "近半年主推依据"
+    }
+  ]

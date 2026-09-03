@@ -1,0 +1,43 @@
+# Step 5 · 阶段末汇流(只归组,不删句)
+id: step5
+name: 意图簇汇流
+description: 每个阶段的全部问句归入意图簇,零删除,标注客群信号
+order: 7
+type: iterate
+iterate_over: step3_journey
+iterate_as: stage
+context_builders:
+  - type: extract_queries
+    source: step4_topics
+    match_by: stage_index
+    output_as: all_queries
+inputs:
+  - stage
+  - all_queries
+  - step2_personas
+output: step5_clusters
+prompt: |
+  ## 任务
+  对以下阶段的全部问句进行汇流归组。
+
+  ## 数据
+  当前阶段: {{stage}}
+  全部问句: {{all_queries}}
+  客群画像: {{step2_personas}}
+
+  ## 要求(强制)
+  1. 收集该阶段全部问句
+  2. 按'背后核心需求是否相同'归入意图簇(一句只进一簇)
+  3. 禁止删除或合并任何问句,全部保留
+  4. 每簇命名(口语化标签)
+  5. 簇内每个问句标注'audience_signal': 通常谁在问/什么消费心理/对应什么销售策略方向
+
+  ## 输出格式(JSON数组)
+  [
+    {
+      "cluster_name": "意图簇名称(口语化)",
+      "queries": [
+        {"query": "问句", "entry_type": "产品名问句|问题型问句", "audience_signal": "客群信号"}
+      ]
+    }
+  ]

@@ -1,0 +1,19 @@
+llm:
+  # DeepSeek API (OpenAI-compatible)
+  base_url: "https://api.deepseek.com/v1"
+  api_key: "sk-4f2004eba0f2425eb1beeb6675b2bb97"
+  model: "deepseek-chat"
+  temperature: 0.7
+  max_tokens: 4096
+  timeout: 120
+  max_retries: 3
+  max_concurrency: 5  # 并行LLM调用上限(Step2/Step4多线并发时)
+
+server:
+  host: "0.0.0.0"
+  port: 8777
+
+output:
+  dir: "./output"
+  save_json: true
+  save_html: true

@@ -1,0 +1,78 @@
+# Step 2 · 目标客群: 5线发散 → 聚合
+id: step2
+name: 目标客群分析
+description: 5条推理线并行分析客群,然后聚合为3~5类画像
+order: 3
+type: parallel
+inputs:
+  - step1_products
+  - step1_5_variants
+output: step2_personas
+line_prompt: |
+  ## 任务
+  你是客群分析的推理线「{{line_name}}」。
+  {{line_instruction}}
+
+  请从这条线出发,分析品牌目标客群。
+
+  ## 品牌信息
+  产品: {{step1_products}}
+  变体: {{step1_5_variants}}
+
+  ## 要求
+  产出的洞察要具体、有客群信号(谁在问/什么心理)。
+
+  ## 输出格式(JSON对象)
+  {
+    "line": "推理线名称",
+    "insights": [
+      {"insight": "洞察描述", "evidence": "依据", "audience_hint": "客群信号"}
+    ]
+  }
+lines:
+  - id: A
+    name: 需求动机线
+    instruction: 用户需要它解决什么问题? 从痛点、需求、渴望出发分析
+  - id: B
+    name: 场景人群线
+    instruction: 在什么场景下、什么人群会用? 从使用场景、人群画像出发分析
+  - id: C
+    name: 决策心理线
+    instruction: 用户做决策时心理想什么? 从恐惧、期待、认知偏差出发分析
+  - id: D
+    name: 价值分层线
+    instruction: 不同预算/价值取向的人怎么选? 从价格敏感度、价值认知出发分析
+  - id: E
+    name: 组织属性线
+    instruction: B端还是C端? 决策角色是谁? 从组织属性、决策链条出发分析
+aggregate: true
+aggregate_prompt: |
+  ## 任务
+  以下是5条并行推理线对目标客群的分析结果。请聚合为3~5类客群画像。
+
+  ## 品牌信息
+  产品: {{step1_products}}
+  变体: {{step1_5_variants}}
+
+  ## 5条推理线结果
+  {{line_results}}
+
+  ## 要求
+  聚合为3~5类客群画像,每类固定5个字段:
+  1. 一句话定义
+  2. 核心特征(2~3条)
+  3. 典型动机
+  4. 决策习惯
+  5. 对应销售策略方向
+
+  ## 输出格式(JSON数组)
+  [
+    {
+      "name": "客群名称",
+      "definition": "一句话定义",
+      "core_traits": ["特征1", "特征2"],
+      "typical_motivation": "典型动机",
+      "decision_habit": "决策习惯",
+      "sales_strategy": "对应销售策略方向"
+    }
+  ]

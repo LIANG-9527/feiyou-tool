@@ -1,0 +1,114 @@
+# Step 4 · 每阶段话题拆解: 6线并行 + 补漏
+id: step4
+name: 话题拆解
+description: 对每个阶段6条推理线并行产出话题+问句,然后补漏检查
+order: 6
+type: iterate_parallel
+iterate_over: step3_journey
+iterate_as: stage
+context_builders:
+  - type: match_by_field
+    source: step3_5_dual_entry
+    match_by: stage_index
+    output_as: dual_entry
+inputs:
+  - step1_products
+  - step1_5_variants
+  - step2_personas
+  - stage
+  - dual_entry
+output: step4_topics
+line_prompt: |
+  ## 任务
+  你是阶段「{{stage_name}}」的推理线「{{line_name}}」。
+  {{line_instruction}}
+
+  ## 上下文
+  产品: {{step1_products}}
+  变体: {{step1_5_variants}}
+  客群: {{step2_personas}}
+  当前阶段: {{stage}}
+  双入口: {{dual_entry}}
+
+  ## 要求
+  1. 产出候选话题+搜索问句,每话题≥5句
+  2. 产品名问句(入口A)和问题型问句(入口B)都要有
+  3. 问句必须是真人会搜的口语表达,允许负面/情绪词
+  4. 每句标注'audience_signal'(谁在问/什么心理/对应策略)
+  5. 不臆造,不确定标注'待核验'
+
+  ## 输出格式(JSON对象)
+  {
+    "line": "线名",
+    "stage_index": 1,
+    "topics": [
+      {
+        "topic": "话题名",
+        "queries": [
+          {"query": "问句", "entry_type": "产品名问句|问题型问句", "audience_signal": "客群信号"}
+        ]
+      }
+    ]
+  }
+lines:
+  - id: A
+    name: 线A 5W2H
+    instruction: |
+      从5W2H拆解: 是什么/给谁/什么场景/怎么用/多少钱/在哪/何时。每个W/H方向产出一组问句。
+  - id: B
+    name: 线B 黄金圈(Why/What/How)
+    instruction: |
+      从黄金圈拆解: 为什么值得(Why)、解决什么问题(What)、怎么做(How)。每个方向产出一组问句。
+  - id: C
+    name: 线C 因果逻辑链
+    instruction: |
+      从因果逻辑链拆解: 用了会带来什么收益、代价、风险。从收益、代价、风险三个方向各产出问句。
+  - id: D
+    name: 线D JTBD
+    instruction: |
+      从JTBD拆解: 被什么场景或情绪触发、想完成什么任务。
+      问题型问句按信息要素组合表生成(必须含O+至少1个其他要素)。
+      覆盖最低(2要素)/中(3要素)/最佳(4要素)三级。
+      允许顺序/倒装/省略/碎片/情绪化变体。
+  - id: E
+    name: 线E 搜索意图四分
+    instruction: |
+      从搜索意图四分拆解: 想知道/想去做/想去买/想去哪。
+      '想去买'扩展覆盖品类品牌推荐。
+      '对比'类覆盖三层级:
+        第一层·方案形态对比(最上游,如成品vs定制vs木工)
+        第二层·品牌对比(中间层,如品牌A vs 品牌B)
+        第三层·套餐/型号对比(最下游,如系列A vs 系列B)
+      三层必须都有问句。
+  - id: F
+    name: 线F 情绪与风险
+    instruction: |
+      从情绪与风险拆解: 劝退、后悔、害怕、犹豫、求种草/求骂醒、突发状况。
+      每个方向产出问句,允许负面/情绪词。
+gap_check: true
+gap_check_prompt: |
+  ## 任务
+  对阶段「{{stage_name}}」的6条推理线结果做补漏检查。
+
+  ## 6条线结果
+  {{line_results}}
+
+  ## 补漏检查清单(逐条检查,缺则补)
+  ① 本阶段用户会被什么负面情绪/突发状况勾着去搜?
+  ② 本阶段用户会搜'劝退/后悔/吐槽'类词吗?
+  ③ 四类搜索意图(想知道/想去做/想去买/想去哪)都覆盖了吗? 缺哪类补哪类
+  ④ 有没有'问题描述型'搜索(只描述问题、不带产品名)? 缺则补
+  ⑤ 用户会不会搜'这个品类有哪些品牌/服务商、推荐理由可不可信、怎么验证'? 缺则补
+  ⑥ '对比'类问句是否覆盖三层级(方案形态→品牌→套餐/型号)? 缺哪层补哪层
+
+  ## 要求
+  只产出补充的问句(已有的不重复)。如果某项已覆盖则跳过。
+  每句标注entry_type和audience_signal。
+
+  ## 输出格式(JSON对象)
+  {
+    "stage_index": 1,
+    "gap_fills": [
+      {"check_item": "检查项编号", "query": "补充问句", "entry_type": "产品名问句|问题型问句", "audience_signal": "客群信号"}
+    ]
+  }

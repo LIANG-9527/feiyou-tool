@@ -1,0 +1,132 @@
+"""GEO 官网诊断封装：供 FastAPI 调用，静默运行并返回报告摘要与文件路径"""
+from __future__ import annotations
+import io
+import contextlib
+import logging
+from datetime import datetime
+from urllib.parse import urlparse
+from pathlib import Path
+
+from site_audit.core.fetcher import Fetcher
+from site_audit.core.crawler import SiteCrawler
+from site_audit.core.scorer import build_report
+from site_audit.core.ai_engine import AIEngine
+from site_audit.audit.technical import TechnicalChecker
+from site_audit.audit.ai_friendly import AIFriendlyChecker
+from site_audit.audit.content import ContentChecker
+from site_audit.audit.authority import AuthorityChecker
+from site_audit.audit.b2b import B2BChecker
+from site_audit.audit.cross_page import CrossPageChecker
+from site_audit.report.json_report import save_json_report
+from site_audit.report.html_report import save_html_report
+
+logger = logging.getLogger("site_audit.runner")
+
+# 单页面检查器（基于首页内容）
+PAGE_CHECKERS = [
+    TechnicalChecker,
+    AIFriendlyChecker,
+    ContentChecker,
+    AuthorityChecker,
+    B2BChecker,
+]
+
+
+def _create_ai_engine(llm_config: dict = None) -> AIEngine | None:
+    """从配置创建AI语义引擎，无配置则返回None。温度强制为0确保结果确定性。"""
+    if not llm_config:
+        return None
+    try:
+        return AIEngine(
+            base_url=llm_config["base_url"],
+            api_key=llm_config["api_key"],
+            model=llm_config.get("model", "deepseek-chat"),
+            temperature=0,
+            timeout=llm_config.get("timeout", 60),
+            max_retries=llm_config.get("max_retries", 2),
+        )
+    except Exception as e:
+        logger.warning(f"AI引擎初始化失败: {e}")
+        return None
+
+
+def run_site_audit(url: str, output_dir, max_pages: int = 12,
+                   llm_config: dict = None) -> dict:
+    """运行一次完整诊断（首页 + 多页面抽样 + 跨页面检查），生成 HTML+JSON 报告。"""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 初始化AI语义引擎
+    ai_engine = _create_ai_engine(llm_config)
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        fetcher = Fetcher(timeout=15)
+        page = fetcher.fetch(url)
+        if page is None:
+            return {"ok": False, "error": f"无法访问 {url}，请检查网址是否正确或网络是否正常"}
+
+        # 多页面抽样爬取
+        crawler = SiteCrawler(fetcher, max_pages=max_pages, max_workers=4)
+        try:
+            extra_pages = crawler.crawl(page)
+        except Exception:
+            extra_pages = []
+
+        # 单页面检查（首页），传入 extra_pages 和 ai_engine
+        all_results = []
+        for checker_cls in PAGE_CHECKERS:
+            checker = checker_cls(fetcher, page, extra_pages, ai_engine=ai_engine)
+            all_results.extend(checker.run())
+
+        # 跨页面检查（断链 / 重复元信息 / 关键词蚕食）
+        cross = CrossPageChecker(fetcher, page, extra_pages, ai_engine=ai_engine)
+        all_results.extend(cross.run())
+
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sampled = [
+            {
+                "url": p.final_url,
+                "title": (p.soup.title.get_text(strip=True) if p.soup.title else "")[:60],
+                "status": p.status_code,
+                "size_kb": round(p.content_size / 1024, 0),
+            }
+            for p in extra_pages
+        ]
+        report = build_report(url, page.final_url, timestamp, all_results, sampled_pages=sampled)
+
+        domain = urlparse(report.final_url).netloc.replace(":", "_")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        html_name = f"{domain}_{ts}.html"
+        json_name = f"{domain}_{ts}.json"
+        save_html_report(report, str(output_dir / html_name))
+        save_json_report(report, str(output_dir / json_name))
+
+    return {
+        "ok": True,
+        "url": url,
+        "final_url": report.final_url,
+        "domain": domain,
+        "score": report.total_score,
+        "grade": report.grade,
+        "summary": report.summary,
+        "sampled_count": len(sampled),
+        "categories": [
+            {
+                "category": c.category.value,
+                "score": c.score,
+                "total": c.total,
+                "pass": c.passed,
+                "warn": c.warned,
+                "fail": c.failed,
+                "skip": c.skipped,
+                "weight": c.weight,
+            }
+            for c in report.categories
+        ],
+        "html_file": html_name,
+        "json_file": json_name,
+        "response_time": round(page.response_time, 2),
+        "page_kb": round(page.content_size / 1024, 0),
+        "ai_enabled": ai_engine is not None,
+    }

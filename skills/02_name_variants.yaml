@@ -1,0 +1,38 @@
+# Step 1.5 · 名称变体采集
+id: step1_5
+name: 名称变体采集
+description: 6类名称变体(官方/简称/术语/口语/场景化/英文)
+order: 2
+type: single
+inputs:
+  - step1_products
+output: step1_5_variants
+prompt: |
+  ## 任务
+  对以下每个产品/服务输出「名称变体集合」。官方宣传名≠用户真实搜索名,名称是搜索问句命中的基础词库。
+
+  ## 产品清单
+  {{step1_products}}
+
+  ## 要求
+  每个产品必须覆盖6类变体:
+  1. 官方全称
+  2. 简称缩写
+  3. 行业术语
+  4. 口语俗称
+  5. 场景化说法
+  6. 英文名
+  每个变体标注'who_searches'(通常谁在搜,即客群信号)。
+  后续所有问句必须覆盖这些变体。
+
+  ## 输出格式(JSON对象)
+  {
+    "产品名1": [
+      {"type": "官方全称", "variant": "...", "who_searches": "..."},
+      {"type": "简称缩写", "variant": "...", "who_searches": "..."},
+      {"type": "行业术语", "variant": "...", "who_searches": "..."},
+      {"type": "口语俗称", "variant": "...", "who_searches": "..."},
+      {"type": "场景化说法", "variant": "...", "who_searches": "..."},
+      {"type": "英文名", "variant": "...", "who_searches": "..."}
+    ]
+  }

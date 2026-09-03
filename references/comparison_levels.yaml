@@ -1,0 +1,32 @@
+# 对比类问句三层级
+description: 生成"对比"类搜索问句时使用。用户对比意图分三个层级,按顺序走,三层都要产出。
+
+levels:
+  - level: 1
+    name: 方案形态对比(最上游)
+    description: 用户连"用哪种方式做"都没定,在几个"实现方式"之间犹豫
+    b2b_example: 自建vs外包; 传统展板vs数字多媒体; 新建vs改造
+    b2c_example: 成品vs定制vs木工现场打柜
+    key_insight: 第一层问句是"截流"入口,问第一层的人最多,谁在这一层给出靠谱建议,谁就能在用户还没决定做这个品类之前把他拉进自己阵营
+
+  - level: 2
+    name: 品牌对比(中间层)
+    description: 用户已决定"要做这个品类",在比哪家品牌/服务商
+    b2b_example: 丝路视觉vs风语筑
+    b2c_example: 好莱客vs索菲亚vs欧派vs尚品宅配
+
+  - level: 3
+    name: 套餐/型号/方案对比(最下游)
+    description: 用户已锁定品牌,在比具体买哪个套餐、系列、型号、交付模式
+    b2b_example: 丝路视觉"EPC总包"vs"分开做"
+    b2c_example: 好莱客海棠系列vs睿境系列; 基础套餐vs高端套餐
+
+bc_difference:
+  b2b:
+    level1: 自建/外包、传统/数字、新建/改造
+    level2: 供应商/服务商比选
+    level3: 合作模式、交付方式(EPC总包vs分包)
+  b2c:
+    level1: 成品/定制/木工、全定制/混搭
+    level2: 品牌比选
+    level3: 产品系列、价位套餐

@@ -1,0 +1,31 @@
+# Step 6 · 意图簇反演验证
+id: step6
+name: 反演验证
+description: 对每个意图簇做反演验证,检查覆盖度
+order: 8
+type: single
+inputs:
+  - step5_clusters
+output: step6_verification
+prompt: |
+  ## 任务
+  对每个意图簇做反演验证:
+  1. 仅凭每个意图簇的标签,反演生成代表性搜索问句
+  2. 核对反演问句能否覆盖该簇全部原始问句的核心需求
+  3. 明显偏离→调整标签或重新归簇
+  4. 输出每簇结论: 一致/需调整
+
+  ## 全部意图簇
+  {{step5_clusters}}
+
+  ## 输出格式(JSON数组)
+  [
+    {
+      "stage_index": 1,
+      "cluster_name": "意图簇名称",
+      "reverse_queries": ["反演生成的代表性问句"],
+      "coverage_check": "覆盖|部分覆盖|偏离",
+      "adjustment": "无需调整|需调整标签|需重新归簇",
+      "conclusion": "一致|需调整"
+    }
+  ]

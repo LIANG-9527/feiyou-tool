@@ -1,0 +1,38 @@
+# Step 3 · 决策旅程
+id: step3
+name: 决策旅程
+description: 多模型对齐→统一阶段框架
+order: 4
+type: single
+inputs:
+  - step1_products
+  - step1_5_variants
+  - step2_personas
+output: step3_journey
+prompt: |
+  ## 任务
+  并行参考以下决策模型,对齐映射为统一阶段框架(默认6阶段,B/C端可微调):
+  - AIDMA (注意→兴趣→欲望→记忆→行动)
+  - AISAS (注意→兴趣→搜索→行动→分享)
+  - 消费者决策5阶段 (认知需求→信息搜索→方案评估→购买决策→购后行为)
+  - Google微时刻 (I-want-to-know / go / do / buy)
+  - JTBD旅程 (任务触发→评估→选择→使用→反馈)
+  - B端模型 (需求识别→供应商评估→采购→交付→运营)
+
+  ## 品牌信息
+  产品: {{step1_products}}
+  变体: {{step1_5_variants}}
+  客群: {{step2_personas}}
+
+  ## 要求
+  输出统一阶段框架,每阶段标注: 用户此刻状态 + 核心关注问题。
+
+  ## 输出格式(JSON数组)
+  [
+    {
+      "stage_index": 1,
+      "stage_name": "阶段名称",
+      "user_state": "用户此刻状态",
+      "core_concern": "核心关注问题"
+    }
+  ]
