@@ -1,8 +1,59 @@
 """权威与信任信号检查（6项，其中2项待实现）"""
 import re
+import json
+import time
 from typing import List
+from urllib.parse import urlparse, urljoin
 from .checker import BaseChecker
 from site_audit.core.models import CheckResult, Status, Priority, Category
+from site_audit.core.crawler import SiteCrawler
+
+# 被视作"组织/公司实体"的隐形名片类型
+_ORG_TYPES = ("Organization", "Company", "Corporation", "LocalBusiness",
+              "ProfessionalService", "Enterprise")
+
+
+def _iter_ld_nodes(node):
+    """递归展开 JSON-LD：兼容 dict / list / @graph。"""
+    if isinstance(node, list):
+        for n in node:
+            yield from _iter_ld_nodes(n)
+    elif isinstance(node, dict):
+        if "@graph" in node:
+            yield from _iter_ld_nodes(node["@graph"])
+        yield node
+
+
+def _first_number(text):
+    m = re.search(r"\d+", str(text or ""))
+    return int(m.group()) if m else None
+
+
+def _norm_tel(t):
+    """电话归一：只留数字、去国家码 86。"""
+    d = re.sub(r"\D", "", str(t or ""))
+    if d.startswith("86") and len(d) > 11:
+        d = d[2:]
+    return d
+
+
+def _norm_host(u):
+    """官网写法归一：去 scheme/www，仅留 host，用于判断是不是同一个站。"""
+    try:
+        host = urlparse(str(u)).netloc.lower()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return ""
+
+
+def _readable_name(s) -> bool:
+    """名称可读性校验：正常公司名/品牌以中文、英文、数字和常见符号为主；
+    若混入大量西里尔字母等异常字符（多为页面编码错乱产生的乱码）则丢弃。"""
+    s = str(s or "").strip()
+    if not s:
+        return False
+    allowed = re.findall(r"[一-龥A-Za-z0-9（）()·\-&.,、\s]", s)
+    return len(allowed) >= 0.8 * len(s)
 
 
 class AuthorityChecker(BaseChecker):
@@ -17,6 +68,7 @@ class AuthorityChecker(BaseChecker):
         results.append(self._check_knowledge_graph())
         results.append(self._check_cross_platform())
         results.append(self._check_eeat())
+        results.append(self._check_entity_consistency())
         return results
 
     # 29. 可信与安全信号
@@ -24,7 +76,7 @@ class AuthorityChecker(BaseChecker):
         item = self._item(
             "auth-01", "可信与安全信号", Priority.P0,
             "是否有 ICP 备案、联系方式、隐私政策",
-            "检查页脚是否有备案号、联系方式、隐私政策链接",
+            "检查页脚是否有备案号、联系方式、隐私政策链接，并校验备案号位数是否为工信部规范的 8 位",
             "有ICP备案，真实联系方式，隐私政策页",
             manual_check="拉到页面底部，看是否有 ICP 备案号、公司地址、电话/邮箱、隐私政策链接、关于我们页面",
             purpose="AI 判断网站可信度时会看这些基础信号。没有备案和联系方式的站点会被 AI 视为低可信度，不会优先推荐",
@@ -32,13 +84,52 @@ class AuthorityChecker(BaseChecker):
             normal="有 ICP 备案和基本联系方式，但可能缺少隐私政策或公司信息不完整",
             failed="缺少 ICP 备案、联系方式、隐私政策中的2项以上，可信度严重不足",
         )
-        page_text = self.page.get_text()
-        footer = self.page.soup.find("footer") or self.page.soup.find(class_=re.compile(r"footer", re.I))
+        page_text = self.get_text()
+        soup = self.local_soup
+        footer = soup.find("footer") or soup.find(class_=re.compile(r"footer", re.I))
         footer_text = footer.get_text() if footer else page_text
+        raw_html = self.page.html
 
-        has_icp = bool(re.search(r"ICP备|ICP备案|京ICP|沪ICP|粤ICP|陕ICP", footer_text))
+        # ICP 备案号可能由 JS 动态渲染，直接在原始 HTML 中搜索
+        # 格式：[省份简称]ICP备XXXXXXXX号[-数字]，不限定省份，兜底所有变体
+        has_icp = bool(re.search(r"ICP备\d+号", raw_html))
+        # 工信部备案号为省简称+ICP备+8位数字+可选-序号；位数不符则工信部查不到，等于无效备案
+        icp_nums = re.findall(r"[京津沪渝冀晋辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云陕甘青蒙宁新藏]ICP备(\d+)号(?:-\d+)?", raw_html)
+        bad_icp = [n for n in icp_nums if len(n) != 8]
+
+        # 版权年份过期只作提示、不扣分：AI 评估企业活跃度时会往"可能停运"方向推一小步
+        current_year = time.localtime().tm_year
+        cp_years = [int(e or s) for s, e in
+                    re.findall(r"(?:©|&copy;|Copyright\s*©?)\s*(\d{4})(?:\s*[-–—~]\s*(\d{4}))?", page_text, re.I)]
+        stale_cp = max(cp_years) if cp_years else None
+        copyright_note = (f"页脚版权年份停留在 {stale_cp}（当前 {current_year}），"
+                          "AI 评估企业活跃度时可能视为停运信号，建议更新" if stale_cp and stale_cp < current_year else None)
         has_contact = bool(re.search(r"电话|手机|邮箱|联系我们|contact|400-?\d{3}-?\d{4}", footer_text, re.I))
-        has_privacy = bool(self.page.soup.find("a", href=re.compile(r"privacy|隐私", re.I)))
+
+        # 隐私政策/服务协议：必须是真实可达页面，'#'空锚点、javascript:、打不开(404)都不算
+        priv_links = soup.find_all("a", href=re.compile(
+            r"privacy|yinsi|隐私|agreement|xieyi|协议|terms|zhengce|政策", re.I))
+        priv_ok, priv_empty, priv_dead = False, 0, []
+        for a in priv_links[:5]:
+            href = (a.get("href") or "").strip()
+            if (not href or href == "#" or href.startswith("#")
+                    or href.lower().startswith("javascript:")):
+                priv_empty += 1
+                continue
+            full = urljoin(self.page.final_url, href)
+            if full.startswith("http") and self.fetcher is not None and self.fetcher.exists(full):
+                priv_ok = True
+                break
+            priv_dead.append(href)
+        has_privacy = priv_ok
+        if priv_links and not priv_ok:
+            privacy_note = ("隐私政策/服务协议是"
+                            + ("空链接（#或javascript:）" if priv_empty and not priv_dead else "空链接或页面打不开(疑似404)")
+                            + "，等于没有合规页面")
+        elif not priv_links:
+            privacy_note = "页脚/页面中未找到隐私政策或服务协议入口（合规与信任信号缺一项）"
+        else:
+            privacy_note = None
 
         signals = []
         if has_icp:
@@ -48,12 +139,23 @@ class AuthorityChecker(BaseChecker):
         if has_privacy:
             signals.append("隐私政策")
 
+        icp_note = ("检测到 ICP 备案号位数异常（" + "、".join(bad_icp)
+                    + "），工信部备案号为 8 位数字，位数不对会查不到、等于无效备案，请核对是否粘贴错误"
+                    if bad_icp else None)
+        notes = "；".join(n for n in (privacy_note, icp_note, copyright_note) if n)
+
         if len(signals) >= 2:
-            return self._result(item, Status.PASS, f"可信信号完善: {', '.join(signals)}")
+            if icp_note:
+                return self._result(item, Status.WARN,
+                                    f"可信信号完善但备案号无法验证: {', '.join(signals)}", detail=notes)
+            return self._result(item, Status.PASS, f"可信信号完善: {', '.join(signals)}",
+                                detail=notes)
         if signals:
             return self._result(item, Status.WARN,
-                                f"可信信号不足，仅有: {', '.join(signals)}")
-        return self._result(item, Status.FAIL, "缺少 ICP 备案、联系方式、隐私政策等可信信号")
+                                f"可信信号不足，仅有: {', '.join(signals)}",
+                                detail=notes)
+        return self._result(item, Status.FAIL, "缺少 ICP 备案、联系方式、隐私政策等可信信号",
+                            detail=notes)
 
     # 30. 客户评价与证言
     def _check_customer_testimonials(self) -> CheckResult:
@@ -68,10 +170,11 @@ class AuthorityChecker(BaseChecker):
             normal="有客户 Logo 展示，但缺少详细案例或评价；或有案例但客户知名度不高",
             failed="未检测到任何客户 Logo、评价或案例展示",
         )
+        soup = self.local_soup
         testimonial_classes = ["testimonial", "review", "评价", "证言", "客户说", "customer-say"]
-        has_testimonial = bool(self.page.soup.find(class_=re.compile(
+        has_testimonial = bool(soup.find(class_=re.compile(
             "|".join(testimonial_classes), re.I)))
-        customer_logos = self.page.soup.find_all(class_=re.compile(r"customer|client|partner|logo-wall", re.I))
+        customer_logos = soup.find_all(class_=re.compile(r"customer|client|partner|logo-wall", re.I))
 
         if has_testimonial and customer_logos:
             return self._result(item, Status.PASS, "有客户评价和客户 Logo 展示")
@@ -93,6 +196,7 @@ class AuthorityChecker(BaseChecker):
             excellent="有 ≥3 个主流社交平台的官方认证账号（微信公众号+微博+知乎/领英），账号活跃，内容与官网联动",
             normal="有 1-2 个社交平台链接，但可能账号不活跃或平台单一",
             failed="未检测到任何社交媒体链接或二维码",
+            tier="bonus",
         )
         social_platforms = {
             "微信": ["weixin", "wechat", "微信"],
@@ -104,7 +208,7 @@ class AuthorityChecker(BaseChecker):
             "GitHub": ["github"],
         }
         found = []
-        for a in self.page.soup.find_all("a", href=True):
+        for a in self.local_soup.find_all("a", href=True):
             href = a["href"].lower()
             text = a.text.strip().lower()
             for platform, keywords in social_platforms.items():
@@ -135,7 +239,7 @@ class AuthorityChecker(BaseChecker):
         base_domain = urlparse(self.page.final_url).netloc
         external_domains = set()
 
-        for a in self.page.soup.find_all("a", href=True):
+        for a in self.local_soup.find_all("a", href=True):
             href = a["href"]
             if href.startswith(("http://", "https://")):
                 domain = urlparse(href).netloc
@@ -170,7 +274,7 @@ class AuthorityChecker(BaseChecker):
         if not self.ai_engine:
             return self._result(item, Status.SKIP, "未检查（需配置AI语义引擎）",
                                 detail="未配置LLM，无法进行知识图谱检查")
-        status, summary, detail = self.ai_engine.check_knowledge_graph(self.page)
+        status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_knowledge_graph(self.page))
         return self._result(item, status, summary, detail=detail)
 
     # 31. 跨平台内容分发
@@ -185,11 +289,12 @@ class AuthorityChecker(BaseChecker):
             excellent="核心内容同步到≥3个平台（知乎+公众号+行业媒体），每篇都有外链回官网，平台账号与官网品牌一致",
             normal="有1-2个平台的内容分发，但部分内容无外链回官网，或更新不规律",
             failed="无任何跨平台内容分发，内容仅存在于官网",
+            tier="bonus",
         )
         if not self.ai_engine:
             return self._result(item, Status.SKIP, "未检查（需配置AI语义引擎）",
                                 detail="未配置LLM，无法进行跨平台检查")
-        status, summary, detail = self.ai_engine.check_cross_platform(self.page)
+        status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_cross_platform(self.page))
         return self._result(item, status, summary, detail=detail)
 
     # AUTH-07 E-E-A-T 内容可信度信号
@@ -216,7 +321,166 @@ class AuthorityChecker(BaseChecker):
             return self._result(item, Status.SKIP,
                                 "E-E-A-T为内容页检查项，首页不适用，且未抽样到内容页",
                                 detail="E-E-A-T评估对象是文章/案例/产品详情页等有主体内容的页面，首页是品牌导航页不适用")
-        status, summary, detail = self.ai_engine.check_eeat(content_page)
+        status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_eeat(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
         return self._result(item, status, summary,
-                            detail=f"检查页面: {page_label}。{detail}")
+                            detail=f"检查页面: {page_label}。{detail}",
+                            pages=self._pg(content_page))
+
+    # AUTH-08 公司信息三处一致性（2026-09-05 整改新增，纯规则，不依赖AI）
+    def _check_entity_consistency(self) -> CheckResult:
+        item = self._item(
+            "auth-08", "公司信息多处一致性", Priority.P0,
+            "隐形名片、页脚、正文/关于页里的主体名、成立年份、人数、电话、官网写法是否一致",
+            "抽取结构化名片字段与页面可见信息，逐字段交叉比对",
+            "同一事实在站内各处口径唯一、互不矛盾",
+            manual_check="分别打开首页、关于我们、页脚和源代码里的 Organization 名片，对照公司全称、成立时间、人数、电话、官网地址是否写的是同一个",
+            purpose="AI 和搜索引擎做实体对齐时，会把站内各处出现的公司信息拼成一个'你是谁'的档案。同一件事出现两个说法（成立年、规模、电话对不上），AI 无法判断哪个可信，会降低采信甚至弃用，这正是 GEO 的硬伤",
+            excellent="名片、页脚、正文/关于页的主体名称、成立年份、规模、电话、官网写法完全一致，可被 AI 稳定识别为同一实体",
+            normal="主要信息一致，个别写法不统一（如官网 www/http 混用）",
+            failed="成立年份、规模或电话等关键信息在名片与页面上自相矛盾",
+            scope="全站", applicable_pages="全站",
+            suggestion="先内部定一份唯一的官方事实表（主体全称、成立年、规模、对外电话、官网标准写法），再同步改正文、页脚与隐形名片",
+        )
+
+        # ── 来源一：全站隐形名片（JSON-LD 组织节点）──
+        ld_names, ld_legal, ld_years, ld_emp, ld_tels, ld_urls = set(), set(), set(), set(), set(), set()
+        for p in self.all_pages:
+            for sc in p.soup.find_all("script", attrs={"type": "application/ld+json"}):
+                if not sc.string:
+                    continue
+                try:
+                    data = json.loads(sc.string)
+                except Exception:
+                    continue
+                for n in _iter_ld_nodes(data):
+                    if not isinstance(n, dict):
+                        continue
+                    t = n.get("@type", "")
+                    types = t if isinstance(t, list) else [t]
+                    if not any(any(ot in str(x) for ot in _ORG_TYPES) for x in types):
+                        continue
+                    if n.get("name") and _readable_name(n["name"]):
+                        ld_names.add(str(n["name"]).strip())
+                    if n.get("legalName") and _readable_name(n["legalName"]):
+                        ld_legal.add(str(n["legalName"]).strip())
+                    fy = _first_number(n.get("foundingDate") or n.get("foundingYear"))
+                    if fy and 1900 < fy < 2100:
+                        ld_years.add(fy)
+                    emp = _first_number(n.get("numberOfEmployees"))
+                    if emp:
+                        ld_emp.add(emp)
+                    tel_keys = ["telephone", "phone"]
+                    cps = n.get("contactPoint") or []
+                    cp_list = cps if isinstance(cps, list) else [cps]
+                    tel_src = [n.get(k) for k in tel_keys if n.get(k)]
+                    for cp in cp_list:
+                        if isinstance(cp, dict) and cp.get("telephone"):
+                            tel_src.append(cp["telephone"])
+                    for tt in tel_src:
+                        nt = _norm_tel(tt)
+                        if nt:
+                            ld_tels.add(nt)
+                    u = n.get("url")
+                    for uu in (u if isinstance(u, list) else [u]):
+                        if uu:
+                            ld_urls.add(str(uu).strip())
+
+        # ── 来源二：可见文本（首页 + 关于页）──
+        about = [p for p in self.all_pages if SiteCrawler.classify(p.final_url, "") == "about"]
+        visible_pages = ([self.page] + about) if about else [self.page]
+        body_text, footer_text = "", ""
+        for p in visible_pages:
+            body_text += "\n" + p.soup.get_text(" ", strip=True)
+            f = p.soup.find("footer") or p.soup.find(class_=re.compile(r"footer", re.I))
+            footer_text += "\n" + (f.get_text(" ", strip=True) if f else "")
+        if not footer_text:
+            footer_text = body_text
+
+        body_years = {int(y) for y in re.findall(r"成立(?:于|时间)?[^\d]{0,8}((?:19|20)\d{2})", body_text)}
+        # 员工规模：数字后紧跟（可间隔少量字）人/员工/人才/团队等
+        body_emp = {int(x) for x in re.findall(
+            r"(\d{2,5})\s*\+?\s*(?:多名|余|多)?\s*(?:名|位)?\s*(?:员工|人才|技术人员|专业人才|技术人才|团队成员|人员|人技术团队|人团队|人专业团队)",
+            body_text)}
+        body_tels = {_norm_tel(x) for x in re.findall(r"400[-\s]?\d{3}[-\s]?\d{4}|1[3-9]\d{9}", footer_text + body_text)}
+        footer_companies = set(re.findall(
+            r"[一-龥（）()]{2,28}?(?:有限责任公司|股份有限公司|集团有限公司|有限公司)", footer_text))
+        ld_company_names = {x for x in (ld_names | ld_legal) if re.search(r"(?:公司|集团)", x)}
+
+        # ── 逐槽比对，hard=硬冲突，soft=写法不统一 ──
+        hard, soft, lines = [], [], []
+
+        # 1) 成立年份
+        years = ld_years | body_years
+        if years:
+            src = []
+            if ld_years:
+                src.append(f"隐形名片写{('/'.join(map(str, sorted(ld_years))))}")
+            if body_years:
+                src.append(f"页面正文写成立于{('/'.join(map(str, sorted(body_years))))}")
+            if len(years) >= 2:
+                hard.append(f"成立年份不一致：{'，'.join(src)}")
+            else:
+                lines.append(f"成立年份：{src[0]}")
+        # 2) 团队规模
+        if ld_emp or body_emp:
+            tag = []
+            if ld_emp:
+                tag.append(f"隐形名片写{'/'.join(map(str, sorted(ld_emp)))}人")
+            if body_emp:
+                tag.append(f"页面正文写{'/'.join(map(str, sorted(body_emp)))}人规模")
+            nums = sorted(ld_emp | body_emp)
+            if ld_emp and body_emp and (max(nums) > min(nums) * 2):
+                hard.append("团队规模对不上：" + "，".join(tag))
+            elif len(body_emp) >= 2 and max(body_emp) > min(body_emp) * 1.5:
+                soft.append("正文里团队规模有多种说法：" + "/".join(map(str, sorted(body_emp))))
+            else:
+                lines.append("团队规模：" + "，".join(tag))
+        # 3) 电话：名片留的号 vs 页面展示的号，完全不交集才算冲突（400与手机同时都列且两边一致不算）
+        if ld_tels or body_tels:
+            if ld_tels and body_tels and not (ld_tels & body_tels):
+                hard.append(f"联系电话对不上：隐形名片留 {sorted(ld_tels)}，页面展示 {sorted(body_tels)}")
+            else:
+                lines.append(f"联系电话：名片{sorted(ld_tels) or '未写'} / 页面{sorted(body_tels) or '未写'}")
+        # 4) 官网写法
+        if ld_urls:
+            hosts = {_norm_host(u) for u in ld_urls if _norm_host(u)}
+            if len(hosts) >= 2:
+                hard.append("隐形名片里官网指向多个不同域名：" + "、".join(sorted(ld_urls)))
+            elif len({u.strip().lower() for u in ld_urls}) >= 2:
+                soft.append("隐形名片里官网写法不统一（www/非www、http/https 混用）：" + "、".join(sorted(ld_urls)))
+            else:
+                lines.append("官网写法：" + list(ld_urls)[0])
+        # 5) 主体全称：名片里的每个公司主体，都要能在页脚找到对应（互相包含即可）；
+        #    页脚额外出现的母公司/关联公司名不要求名片都覆盖，品牌名也不参与比对
+        if ld_company_names or footer_companies:
+            no_match = []
+            for a in ld_company_names:
+                if not any(a in b or b in a for b in footer_companies):
+                    no_match.append(a)
+            if no_match:
+                hard.append("隐形名片里的公司主体在页脚找不到对应：" + "、".join(sorted(no_match)[:3])
+                            + f"（页脚写的是：{'、'.join(sorted(footer_companies)[:3])}）")
+            else:
+                names = sorted(ld_names | footer_companies)
+                lines.append("识别到的名称（品牌/主体/母公司并存属正常）：" + "、".join(names[:5]))
+
+        slots_found = sum(bool(x) for x in [years, ld_emp | body_emp, ld_tels | body_tels,
+                                            ld_urls, ld_company_names | footer_companies])
+        if slots_found < 2:
+            return self._result(item, Status.SKIP,
+                                "未从名片/页脚/正文抽取到足够公司信息，无法做一致性交叉核对",
+                                detail="可能页面由JS渲染或未标注公司主体信息")
+        detail_parts = hard + soft + lines
+        detail = "；".join(detail_parts)
+        auth_pages = [(urlparse(p.final_url).path or "/") for p in visible_pages]
+        if hard:
+            return self._result(item, Status.FAIL,
+                                f"有 {len(hard)} 处公司关键信息自相矛盾，会削弱 AI 对'你是谁'的采信",
+                                detail=detail, pages=auth_pages)
+        if soft:
+            return self._result(item, Status.WARN,
+                                f"关键信息基本一致，但有 {len(soft)} 处写法不统一",
+                                detail=detail, pages=auth_pages)
+        return self._result(item, Status.PASS, "隐形名片、页脚、正文的公司信息口径一致",
+                            detail=detail, pages=auth_pages)

@@ -1,0 +1,766 @@
+# ============================================================
+# CMS 指纹特征库 v2
+# 改进点：
+#   1. 每条特征带 weight 权重，累计达到 min_confidence 才输出
+#   2. fingerprint_paths 增加 expect_content 内容校验（GET 请求）
+#   3. excludes 互斥规则，implies 依赖推断
+#   4. 国内 SaaS 以 CDN 域名/特定资源路径为主特征，纯拼音降权或移除
+#   5. 前端框架修复误报（去掉 id="app"、data-reactroot 等泛特征）
+#   6. version_extract 版本提取
+# ============================================================
+# 检测维度说明：
+#   meta_generator:  <meta name="generator"> 内容正则匹配
+#   html_patterns:   HTML 源码正则匹配（脚本路径、CDN域名、属性等）
+#   header_patterns: 响应头键值正则匹配
+#   fingerprint_paths: GET 探测路径，校验状态码 + 可选内容
+#   cookie_names:    Cookie 名精确匹配（支持 * 后缀通配）
+#   version_extract: 从指定来源用正则提取版本号
+#   excludes:        命中本平台后排除的平台名列表
+#   implies:         命中本平台后自动附加的平台名列表
+#   min_confidence:  累计权重达到此值才输出结果（0-100）
+# ============================================================
+
+platforms:
+
+  # ========== 国内传统 CMS ==========
+
+  - name: "WordPress"
+    type: cms
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "wordpress", weight: 30, flags: "i" }
+    html_patterns:
+      - { pattern: "wp-content/", weight: 25 }
+      - { pattern: "wp-includes/", weight: 25 }
+      - { pattern: "/wp-json/", weight: 20 }
+      - { pattern: "wp-postpass", weight: 15 }
+      - { pattern: "wp-emoji-release", weight: 15 }
+    header_patterns:
+      - { header: "Link", pattern: "wp-json", weight: 15 }
+    fingerprint_paths:
+      - { path: "/wp-login.php", expect_status: [200], expect_content: "wordpress", weight: 30, method: GET }
+      - { path: "/wp-admin/", expect_status: [200, 302], weight: 15, method: GET }
+    cookie_names:
+      - { name: "wordpress_logged_in_*", weight: 25 }
+      - { name: "wp-settings-*", weight: 15 }
+      - { name: "wp-postpass_*", weight: 15 }
+    version_extract:
+      - { source: meta_generator, regex: "wordpress\\s+([\\d.]+)", flags: "i" }
+      - { source: html, regex: "wp-includes/js/jquery/jquery[\\w.-]*\\.js\\?ver=([\\d.]+)" }
+    excludes: []
+    implies: []
+    suitability: "成熟CMS，插件生态丰富，二次开发友好，适合接手整改"
+
+  - name: "DedeCMS(织梦)"
+    type: cms
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "dedecms", weight: 30, flags: "i" }
+      - { pattern: "织梦", weight: 25 }
+    html_patterns:
+      - { pattern: "/templets/", weight: 20 }
+      - { pattern: "/plus/search\\.php", weight: 25 }
+      - { pattern: "dedeajax", weight: 20 }
+      - { pattern: "/data/common\\.inc\\.php", weight: 25 }
+    fingerprint_paths:
+      - { path: "/plus/", expect_status: [200, 403], weight: 15, method: GET }
+      - { path: "/templets/", expect_status: [200, 403], weight: 10, method: GET }
+      - { path: "/data/admin/ver.txt", expect_status: [200], expect_content: "\\d", weight: 30, method: GET }
+    cookie_names:
+      - { name: "dede_user_id", weight: 25 }
+      - { name: "dede_csrf", weight: 20 }
+    version_extract:
+      - { source: fingerprint, path: "/data/admin/ver.txt", regex: "([\\d.]+)" }
+    excludes: []
+    implies: []
+    suitability: "老牌CMS，源码开放模板灵活，但安全漏洞多，接手后需重点加固"
+
+  - name: "易优CMS(EyouCMS)"
+    type: cms
+    min_confidence: 30
+    html_patterns:
+      - { pattern: "__eyou_basefile__", weight: 40 }
+      - { pattern: "__root_dir__", weight: 20 }
+      - { pattern: "/template/pc/skin/", weight: 30 }
+      - { pattern: "/template/mobile/skin/", weight: 25 }
+      - { pattern: "/public/static/common/js/ey_global\\.js", weight: 35 }
+      - { pattern: "ey_global\\.js\\?v=v[\\d.]+", weight: 30 }
+      - { pattern: "tag_userinfo_json", weight: 25 }
+      - { pattern: "ey_htmlid_", weight: 20 }
+      - { pattern: "ey_login_id_", weight: 20 }
+      - { pattern: "index\\.php\\?m=home&c=Search&a=lists", weight: 25 }
+      - { pattern: "GetUploadify_url", weight: 20 }
+      - { pattern: "/public/plugins/", weight: 15 }
+    fingerprint_paths:
+      - { path: "/login.php", expect_status: [200], expect_content: "eyou|易优|Admin/login", weight: 30, method: GET }
+      - { path: "/template/pc/", expect_status: [200, 403], weight: 15, method: GET }
+      - { path: "/public/static/common/js/ey_global.js", expect_status: [200], expect_content: "eyou", weight: 30, method: GET }
+    version_extract:
+      - { source: html, regex: "ey_global\\.js\\?v=v([\\d.]+)" }
+    excludes: []
+    implies: []
+    suitability: "基于ThinkPHP的开源企业建站CMS，模板灵活，二次开发友好，适合接手整改"
+
+  - name: "EmpireCMS(帝国)"
+    type: cms
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "empirecms", weight: 30, flags: "i" }
+      - { pattern: "帝国", weight: 20 }
+    html_patterns:
+      - { pattern: "/e/data/", weight: 20 }
+      - { pattern: "/e/class/", weight: 20 }
+      - { pattern: "/e/action/", weight: 20 }
+      - { pattern: "eapi\\.php", weight: 25 }
+    fingerprint_paths:
+      - { path: "/e/class/", expect_status: [200, 403], weight: 15, method: GET }
+      - { path: "/e/data/", expect_status: [200, 403], weight: 10, method: GET }
+      - { path: "/e/install/", expect_status: [200, 403], weight: 15, method: GET }
+    cookie_names:
+      - { name: "ecmscookie", weight: 25 }
+      - { name: "empirecms", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "开源CMS，扩展性强，适合接手整改"
+
+  - name: "Discuz!"
+    type: cms
+    min_confidence: 40
+    meta_generator:
+      - { pattern: "discuz", weight: 30, flags: "i" }
+    html_patterns:
+      - { pattern: "forum\\.php\\?mod=", weight: 25 }
+      - { pattern: "source/plugin/", weight: 20 }
+      - { pattern: "static/image/common/", weight: 20 }
+      - { pattern: "data/cache/", weight: 15 }
+    fingerprint_paths:
+      - { path: "/forum.php", expect_status: [200], expect_content: "discuz", weight: 25, method: GET }
+      - { path: "/uc_server/", expect_status: [200, 403], weight: 15, method: GET }
+    cookie_names:
+      - { name: "discuz_*", weight: 25 }
+      - { name: "uchome_*", weight: 20 }
+    version_extract:
+      - { source: html, regex: "Discuz!\\s*X?\\s*([\\d.]+)", flags: "i" }
+    excludes: []
+    implies: []
+    suitability: "论坛型CMS，适合社区类站点，非论坛站不太适用"
+
+  - name: "PHPCMS"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/phpcms/templates/", weight: 25 }
+      - { pattern: "phpcms", weight: 15, flags: "i" }
+      - { pattern: "/statics/js/", weight: 15 }
+    fingerprint_paths:
+      - { path: "/phpcms/", expect_status: [200, 403], weight: 20, method: GET }
+      - { path: "/install/", expect_status: [200], expect_content: "phpcms", weight: 25, method: GET }
+    excludes: []
+    implies: []
+    suitability: "老牌CMS，已停止维护，安全风险较高"
+
+  - name: "ASPCMS"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/aspcms/", weight: 25 }
+      - { pattern: "aspcms", weight: 15, flags: "i" }
+      - { pattern: "\\.asp\\?", weight: 10 }
+    fingerprint_paths:
+      - { path: "/aspcms/", expect_status: [200, 403], weight: 20, method: GET }
+      - { path: "/admin_aspcms/", expect_status: [200, 302, 403], weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: "ASP系CMS，老旧技术栈，建议迁移"
+
+  - name: "CmsEasy"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/cmseasy/", weight: 25 }
+      - { pattern: "cmseasy", weight: 15, flags: "i" }
+    fingerprint_paths:
+      - { path: "/cmseasy/", expect_status: [200, 403], weight: 20, method: GET }
+      - { path: "/index.php?case=main", expect_status: [200], expect_content: "cmseasy", weight: 25, method: GET }
+    excludes: []
+    implies: []
+    suitability: "轻量CMS，二次开发一般"
+
+  - name: "米拓(MetInfo)"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/metinfo/", weight: 25 }
+      - { pattern: "metinfo", weight: 15, flags: "i" }
+      - { pattern: "/templates/", weight: 10 }
+    fingerprint_paths:
+      - { path: "/metinfo/", expect_status: [200, 403], weight: 20, method: GET }
+      - { path: "/admin/", expect_status: [200, 302], expect_content: "metinfo", weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: "企业建站CMS，模板一般"
+
+  - name: "PageAdmin"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/pageadmin/", weight: 25 }
+      - { pattern: "pageadmin", weight: 15, flags: "i" }
+    fingerprint_paths:
+      - { path: "/pageadmin/", expect_status: [200, 403], weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: ".NET系CMS，需Windows服务器"
+
+  - name: "KesionCMS"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/ks_inc/", weight: 25 }
+      - { pattern: "kesion", weight: 15, flags: "i" }
+    fingerprint_paths:
+      - { path: "/ks_inc/", expect_status: [200, 403], weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: "老牌CMS，维护较少"
+
+  - name: "DocCms"
+    type: cms
+    min_confidence: 45
+    html_patterns:
+      - { pattern: "doccms", weight: 20, flags: "i" }
+    fingerprint_paths:
+      - { path: "/doccms/", expect_status: [200, 403], weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: "轻量文档CMS"
+
+  - name: "SupeSite"
+    type: cms
+    min_confidence: 45
+    html_patterns:
+      - { pattern: "supesite", weight: 20, flags: "i" }
+    excludes: []
+    implies: []
+    suitability: "康盛产品，已老旧"
+
+  # ========== 国内 SaaS 建站平台 ==========
+
+  - name: "万网(阿里云建站)"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "/designer/scripts/kino\\.razor\\.min\\.js", weight: 35 }
+      - { pattern: "/designer/scripts/smart\\.animation\\.min\\.js", weight: 30 }
+      - { pattern: "/designer/content/base/css/antchain\\.css", weight: 30 }
+      - { pattern: "/administration/scripts/admin\\.validator\\.min\\.js", weight: 25 }
+      - { pattern: "img\\.wanwang\\.xin", weight: 25 }
+    cookie_names:
+      - { name: "renderer.session", weight: 20 }
+    fingerprint_paths:
+      - { path: "/Administration/", expect_status: [200, 302], weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受平台限制，需确认能否编辑HTML/上传文件/修改URL结构"
+
+  - name: "凡科(Faishe)"
+    type: saas
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "/_nvs/", weight: 30 }
+      - { pattern: "faishe\\.com", weight: 25 }
+      - { pattern: "fksite", weight: 25 }
+      - { pattern: "/_css/", weight: 15 }
+    fingerprint_paths:
+      - { path: "/_nvs/", expect_status: [200, 403], weight: 20, method: GET }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，URL和结构受平台限制，需确认能否编辑HTML/上传文件"
+
+  - name: "建站ABC"
+    type: saas
+    min_confidence: 45
+    html_patterns:
+      - { pattern: "jzabc\\.com", weight: 25 }
+      - { pattern: "jzabc\\.cn", weight: 25 }
+    note: "特征较弱，建议补充平台特定静态资源路径"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限，建议评估是否有源码导出功能"
+
+  - name: "中企动力"
+    type: saas
+    min_confidence: 45
+    html_patterns:
+      - { pattern: "300\\.cn", weight: 20 }
+      - { pattern: "ce\\.net\\.cn", weight: 20 }
+    note: "域名引用可能误报，需结合其他特征"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "上线了(Strikingly)"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "strikinglycdn\\.com", weight: 35 }
+      - { pattern: "s\\.strikinglycdn\\.com", weight: 30 }
+      - { pattern: "strikingly\\.com", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，单页应用为主，整改严重受限"
+
+  - name: "易企点"
+    type: saas
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "yiqidian\\.com", weight: 25 }
+      - { pattern: "yiqidian\\.cn", weight: 25 }
+    note: "纯域名特征，置信度低，建议补充特定资源路径"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "微企点"
+    type: saas
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "weiqidian\\.com", weight: 25 }
+      - { pattern: "weiqidian\\.cn", weight: 25 }
+    note: "纯域名特征，置信度低，建议补充特定资源路径"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "263建站"
+    type: saas
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "263\\.cn", weight: 15 }
+      - { pattern: "263\\.net", weight: 15 }
+    note: "263邮箱链接可能误报，需结合其他特征"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "H5C3"
+    type: saas
+    min_confidence: 45
+    html_patterns:
+      - { pattern: "h5c3\\.com", weight: 25 }
+      - { pattern: "h5c3\\.cn", weight: 25 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，H5页面为主"
+
+  - name: "兔丁(Tuding)"
+    type: saas
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "tuding\\.com", weight: 25 }
+      - { pattern: "tuding\\.cn", weight: 25 }
+    note: "纯域名特征，建议补充特定资源路径"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "刻崖(Keya)"
+    type: saas
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "keya\\.com", weight: 25 }
+      - { pattern: "keya\\.cn", weight: 25 }
+    note: "纯域名特征，建议补充特定资源路径"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "上盟"
+    type: saas
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "shangmeng\\.com", weight: 25 }
+      - { pattern: "shangmeng\\.cn", weight: 25 }
+    note: "纯域名特征，建议补充特定资源路径"
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  # ========== 国际 SaaS 建站平台 ==========
+
+  - name: "Wix"
+    type: saas
+    min_confidence: 30
+    html_patterns:
+      - { pattern: "static\\.wixstatic\\.com", weight: 35 }
+      - { pattern: "wix-website", weight: 25 }
+      - { pattern: "wix\\.com", weight: 15 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，封闭生态，整改严重受限"
+
+  - name: "Shopify"
+    type: ecommerce
+    min_confidence: 30
+    html_patterns:
+      - { pattern: "cdn\\.shopify\\.com", weight: 35 }
+      - { pattern: "shopify\\.theme", weight: 30 }
+      - { pattern: "Shopify\\.Analytics", weight: 25 }
+    header_patterns:
+      - { header: "X-Shopid", pattern: "\\d+", weight: 25 }
+      - { header: "X-Shopify-Stage", pattern: ".+", weight: 20 }
+    cookie_names:
+      - { name: "cart", weight: 15 }
+      - { name: "shopify_pay_*", weight: 25 }
+      - { name: "_shopify_*", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "电商SaaS，适合电商站，但非电商功能受限"
+
+  - name: "Squarespace"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "static1\\.squarespace\\.com", weight: 35 }
+      - { pattern: "squarespace", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，设计导向，整改受限"
+
+  - name: "Weebly"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "wsite-", weight: 30 }
+      - { pattern: "weebly", weight: 20 }
+      - { pattern: "cdn2\\.editmysite\\.com", weight: 25 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，整改受限"
+
+  - name: "WordPress.com"
+    type: saas
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "wp\\.com", weight: 25 }
+      - { pattern: "wordpress\\.com", weight: 20 }
+    excludes: ["WordPress"]
+    implies: []
+    suitability: "SaaS版WordPress，比自托管受限，需确认是否支持插件安装"
+
+  - name: "Webflow"
+    type: saas
+    min_confidence: 30
+    html_patterns:
+      - { pattern: "data-wf-", weight: 35 }
+      - { pattern: "webflow\\.js", weight: 30 }
+      - { pattern: "webflow\\.com", weight: 15 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，设计灵活但代码导出受限"
+
+  - name: "Framer"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "framerusercontent\\.com", weight: 35 }
+      - { pattern: "framer\\.com", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，设计导向，整改受限"
+
+  - name: "Carrd"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "carrdcdn\\.com", weight: 35 }
+      - { pattern: "carrd\\.co", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，单页为主，整改严重受限"
+
+  - name: "Cargo"
+    type: saas
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "cargocollective\\.com", weight: 30 }
+      - { pattern: "cargo\\.site", weight: 25 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，设计导向"
+
+  - name: "Ghost"
+    type: cms
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "ghost", weight: 30, flags: "i" }
+    html_patterns:
+      - { pattern: "content/themes/", weight: 20 }
+      - { pattern: "ghost\\.org", weight: 15 }
+      - { pattern: "__GHOST_URL__", weight: 25 }
+    header_patterns:
+      - { header: "X-Ghost-Cache-Status", pattern: ".+", weight: 25 }
+    excludes: []
+    implies: []
+    suitability: "博客CMS，轻量，适合内容站"
+
+  - name: "Blogger"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "blogger\\.com", weight: 25 }
+      - { pattern: "blogspot\\.com", weight: 25 }
+      - { pattern: "blogspot\\.", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "Google SaaS，功能受限"
+
+  - name: "Medium"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "cdn-client\\.medium\\.com", weight: 35 }
+      - { pattern: "medium\\.com", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "SaaS平台，封闭生态"
+
+  # ========== 电商平台 ==========
+
+  - name: "Magento"
+    type: ecommerce
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "magento", weight: 30, flags: "i" }
+    html_patterns:
+      - { pattern: "mage/cookies", weight: 25 }
+      - { pattern: "skin/frontend", weight: 20 }
+      - { pattern: "Magento_PageBuilder", weight: 30 }
+      - { pattern: "magento\\.requirejs", weight: 25 }
+    cookie_names:
+      - { name: "X-Magento-Vary", weight: 25 }
+      - { name: "mage-cache-sessid", weight: 20 }
+    version_extract:
+      - { source: html, regex: "Magento/([\\d.]+)" }
+    excludes: []
+    implies: []
+    suitability: "企业级电商CMS，功能强大但复杂"
+
+  - name: "OpenCart"
+    type: ecommerce
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "catalog/view/theme", weight: 30 }
+      - { pattern: "opencart", weight: 15, flags: "i" }
+      - { pattern: "index.php\\?route=", weight: 20 }
+    fingerprint_paths:
+      - { path: "/admin/", expect_status: [200, 302], expect_content: "opencart", weight: 25, method: GET }
+    excludes: []
+    implies: []
+    suitability: "轻量电商CMS，插件丰富"
+
+  - name: "PrestaShop"
+    type: ecommerce
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "prestashop", weight: 30, flags: "i" }
+    html_patterns:
+      - { pattern: "prestashop", weight: 15, flags: "i" }
+      - { pattern: "/themes/", weight: 10 }
+      - { pattern: "ps_shoppingcart", weight: 25 }
+    cookie_names:
+      - { name: "PrestaShop-*", weight: 25 }
+    excludes: []
+    implies: []
+    suitability: "开源电商CMS"
+
+  - name: "ECShop"
+    type: ecommerce
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "ecshop", weight: 20, flags: "i" }
+      - { pattern: "js/common\\.js", weight: 10 }
+      - { pattern: "themes/default/", weight: 20 }
+    cookie_names:
+      - { name: "ECS[*", weight: 25 }
+      - { name: "ECS_ID", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "老牌电商CMS，安全漏洞较多"
+
+  - name: "ShopEX"
+    type: ecommerce
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "shopex", weight: 20, flags: "i" }
+      - { pattern: "statics/", weight: 10 }
+    excludes: []
+    implies: []
+    suitability: "老牌电商CMS"
+
+  - name: "有赞"
+    type: saas
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "yzcdn\\.cn", weight: 35 }
+      - { pattern: "youzan\\.com", weight: 20 }
+      - { pattern: "youzan\\.net", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "SaaS电商平台，整改受限"
+
+  - name: "WooCommerce"
+    type: ecommerce
+    min_confidence: 35
+    meta_generator:
+      - { pattern: "woocommerce", weight: 30, flags: "i" }
+    html_patterns:
+      - { pattern: "wp-content/plugins/woocommerce", weight: 35 }
+      - { pattern: "woocommerce", weight: 15, flags: "i" }
+      - { pattern: "wc-ajax", weight: 25 }
+    cookie_names:
+      - { name: "woocommerce_*", weight: 25 }
+    excludes: []
+    implies: ["WordPress"]
+    suitability: "WordPress电商插件，继承WP的灵活性"
+
+  # ========== 静态站生成器 & 前端框架 ==========
+
+  - name: "Hugo"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "hugo-theme", weight: 25 }
+      - { pattern: "generator.*hugo", weight: 30, flags: "i" }
+    excludes: []
+    implies: []
+    suitability: "静态站生成器，适合内容站"
+
+  - name: "Jekyll"
+    type: cms
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "jekyll", weight: 20, flags: "i" }
+      - { pattern: "/assets/main\\.css", weight: 10 }
+    excludes: []
+    implies: []
+    suitability: "静态站生成器，GitHub Pages 常用"
+
+  - name: "Gatsby"
+    type: cms
+    min_confidence: 35
+    html_patterns:
+      - { pattern: "___gatsby", weight: 35 }
+      - { pattern: "gatsby\\.js", weight: 25 }
+      - { pattern: "gatsby-", weight: 20 }
+    excludes: []
+    implies: []
+    suitability: "React 静态站生成器"
+
+  - name: "Next.js"
+    type: framework
+    min_confidence: 30
+    html_patterns:
+      - { pattern: "__next_data__", weight: 35 }
+      - { pattern: "_next/static/", weight: 35 }
+      - { pattern: "__next", weight: 20 }
+    header_patterns:
+      - { header: "X-Powered-By", pattern: "next\\.js", weight: 25, flags: "i" }
+    excludes: ["React SPA", "Vue SPA", "Angular"]
+    implies: []
+    suitability: "React 框架，需后端配合"
+
+  - name: "Nuxt.js"
+    type: framework
+    min_confidence: 30
+    html_patterns:
+      - { pattern: "__nuxt", weight: 35 }
+      - { pattern: "_nuxt/", weight: 35 }
+      - { pattern: "data-server-rendered", weight: 20 }
+    excludes: ["Vue SPA", "React SPA", "Angular"]
+    implies: []
+    suitability: "Vue 框架，需后端配合"
+
+  - name: "Vue SPA"
+    type: framework
+    min_confidence: 45
+    html_patterns:
+      - { pattern: "data-server-rendered=\"true\"", weight: 30 }
+      - { pattern: "__NUXT__", weight: 35 }
+      - { pattern: "vue\\.global", weight: 25 }
+    note: "纯 Vue SPA 的 HTML 通常只有空 div，需 JS 执行才能确认；SSR 场景靠 __NUXT__ 或 data-server-rendered 检测"
+    excludes: ["Nuxt.js", "React SPA", "Angular", "Next.js"]
+    implies: []
+    suitability: "前端 SPA，需后端配合"
+
+  - name: "React SPA"
+    type: framework
+    min_confidence: 50
+    html_patterns:
+      - { pattern: "__REACT_INTERNAL", weight: 35 }
+      - { pattern: "react\\.production\\.min\\.js", weight: 25 }
+      - { pattern: "react-dom\\.production\\.min\\.js", weight: 25 }
+    note: "React 18+ 已废弃 data-reactroot/data-reactid；纯 SPA 需 JS 执行检测 window.React 或 DOM __reactFiber"
+    excludes: ["Next.js", "Gatsby", "Vue SPA", "Angular"]
+    implies: []
+    suitability: "前端 SPA，需后端配合"
+
+  - name: "Angular"
+    type: framework
+    min_confidence: 40
+    html_patterns:
+      - { pattern: "ng-version=", weight: 35 }
+      - { pattern: "ng-stable", weight: 25 }
+      - { pattern: "ng-reflect-", weight: 25 }
+      - { pattern: "<app-root", weight: 20 }
+    version_extract:
+      - { source: html, regex: "ng-version=\"([\\d.]+)\"" }
+    excludes: ["React SPA", "Vue SPA", "Next.js", "Nuxt.js"]
+    implies: []
+    suitability: "前端框架，需后端配合"
+
+# ============================================================
+# 后台路径探测配置（仅用于补充信息，不作为主判定依据）
+# 探测方式：GET 请求，校验状态码
+# ============================================================
+admin_paths:
+  - { label: "WordPress后台", path: "/wp-admin/", expect_status: [200, 302] }
+  - { label: "WordPress登录", path: "/wp-login.php", expect_status: [200] }
+  - { label: "织梦后台", path: "/dede/", expect_status: [200, 302, 403] }
+  - { label: "易优后台", path: "/login.php", expect_status: [200] }
+  - { label: "帝国后台", path: "/e/admin/", expect_status: [200, 302, 403] }
+  - { label: "万网后台", path: "/Administration/", expect_status: [200, 302] }
+  - { label: "通用后台", path: "/admin/", expect_status: [200, 302, 403] }
+  - { label: "通用登录", path: "/login", expect_status: [200, 302] }
+  - { label: "Drupal后台", path: "/user/login", expect_status: [200] }
+  - { label: "Joomla后台", path: "/administrator/", expect_status: [200, 302] }
+  - { label: "Magento后台", path: "/admin/", expect_status: [200, 302] }
+  - { label: "OpenCart后台", path: "/admin/", expect_status: [200, 302] }
+  - { label: "ECShop后台", path: "/admin/", expect_status: [200, 302] }
+
+# ============================================================
+# 全局检测配置
+# ============================================================
+global:
+  # 请求配置
+  request:
+    timeout: 10
+    user_agents:
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    delay_between_requests: 1.5  # 秒，避免触发WAF
+    max_redirects: 5
+
+  # 置信度等级
+  confidence_levels:
+    high: 70      # 多维度强特征命中
+    medium: 40    # 至少2个不同维度命中
+    low: 20       # 单维度命中，仅供参考
+
+  # 输出排序：YAML层（有suitability）优先于Wappalyzer层
+  output_priority:
+    - yaml_layer
+    - wappalyzer_layer
+
+  # Cookie 匹配模式：fullmatch 精确匹配（支持 * 后缀通配）
+  cookie_match_mode: fullmatch

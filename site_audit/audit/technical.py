@@ -1,9 +1,11 @@
 """技术可抓取性检查（11项）"""
 import re
 from typing import List
+from urllib.parse import urlparse, urljoin
 from .checker import BaseChecker
 from site_audit.core.models import CheckResult, Status, Priority, Category
 from site_audit.core.fetcher import PageData
+from site_audit.core.crawler import SiteCrawler
 
 
 class TechnicalChecker(BaseChecker):
@@ -23,6 +25,11 @@ class TechnicalChecker(BaseChecker):
         results.append(self._check_page_size_speed())
         results.append(self._check_mobile_friendly())
         results.append(self._check_url_slug())
+        results.append(self._check_head_get())
+        results.append(self._check_open_graph())
+        results.append(self._check_session_cache())
+        results.append(self._check_security_headers())
+        results.append(self._check_host_canonicalization())
         results.append(self._check_cms_fingerprint())
         results.append(self._check_admin_exposure())
         return results
@@ -95,37 +102,124 @@ class TechnicalChecker(BaseChecker):
             normal="sitemap 存在且可访问，包含主要页面，但可能未更新或未提交站长平台",
             failed="sitemap 不存在，或格式错误无法解析，或几乎不包含任何 URL",
         )
-        resp = self.fetcher.fetch_raw(f"{self.base_url}/sitemap.xml")
-        if resp is None or resp.status_code != 200:
-            for path in ["/sitemap_index.xml", "/sitemap.php", "/sitemap"]:
-                resp = self.fetcher.fetch_raw(f"{self.base_url}{path}")
-                if resp and resp.status_code == 200:
-                    break
-            if resp is None or resp.status_code != 200:
-                return self._result(item, Status.FAIL, "未找到 sitemap.xml")
+        # 站点地图地址：优先用 robots.txt 里声明的，其次常见路径（2026-09-05 升级为内容质量检查）
+        sm_declared = None
+        rbt = self.fetcher.fetch_raw(f"{self.base_url}/robots.txt")
+        if rbt is not None and rbt.status_code == 200:
+            msm = re.search(r"(?im)^\s*Sitemap:\s*(\S+)", rbt.text)
+            if msm:
+                sm_declared = msm.group(1).strip()
+        candidates = ([sm_declared] if sm_declared else []) + [
+            f"{self.base_url}/sitemap.xml", f"{self.base_url}/sitemap_index.xml",
+            f"{self.base_url}/sitemap.php", f"{self.base_url}/sitemap"]
+        resp = None
+        for u in candidates:
+            if not u:
+                continue
+            rr = self.fetcher.fetch_raw(u)
+            if rr is not None and rr.status_code == 200:
+                resp = rr
+                break
+        if resp is None:
+            return self._result(item, Status.FAIL, "未找到 sitemap.xml")
 
         content = resp.text
-        url_count = len(re.findall(r"<loc>", content))
-        if url_count == 0:
-            return self._result(item, Status.WARN, "sitemap 存在但未包含任何 URL")
-        return self._result(item, Status.PASS, f"sitemap 存在，包含 {url_count} 个 URL")
+
+        def _parse(xml):
+            out = []
+            for block in re.findall(r"<url>(.*?)</url>", xml, re.S | re.I):
+                loc = re.search(r"<loc>(.*?)</loc>", block, re.S | re.I)
+                lm = re.search(r"<lastmod>(.*?)</lastmod>", block, re.S | re.I)
+                cf = re.search(r"<changefreq>(.*?)</changefreq>", block, re.S | re.I)
+                if loc:
+                    out.append((loc.group(1).strip(),
+                                (lm.group(1).strip()[:10] if lm else ""),
+                                (cf.group(1).strip().lower() if cf else "")))
+            return out
+
+        entries = _parse(content)
+        sub_maps = re.findall(r"<sitemap>.*?<loc>(.*?)</loc>", content, re.S | re.I)
+        if sub_maps and not entries:  # 一层 sitemap-index
+            for su in sub_maps[:5]:
+                sr = self.fetcher.fetch_raw(su)
+                if sr is not None and sr.status_code == 200:
+                    entries += _parse(sr.text)
+        if not entries:  # 兜底：至少提取 loc
+            raw_locs = re.findall(r"<loc>(.*?)</loc>", content, re.S | re.I)
+            if not raw_locs:
+                return self._result(item, Status.WARN, "sitemap 存在但未包含任何 URL")
+            entries = [(x.strip(), "", "") for x in raw_locs]
+
+        url_count = len(entries)
+        locs = [e[0] for e in entries]
+        cur_host = urlparse(self.page.final_url).netloc.lower()
+
+        def host_of(u):
+            return urlparse(u).netloc.lower()
+
+        def path_of(u):
+            return (urlparse(u).path.lower().rstrip("/") or "/")
+
+        hard, soft = [], []
+
+        # 1) 主机是否统一到当前首选域名
+        bad_host = [u for u in locs if host_of(u) and host_of(u) != cur_host]
+        if bad_host and len(bad_host) / url_count > 0.5:
+            hard.append(f"{len(bad_host)}/{url_count} 个网址用的是「{host_of(bad_host[0])}」，"
+                        f"和当前首选域名「{cur_host}」不一致，会把爬虫引到另一套主机、分散权重")
+        # 2) 是否大量带 index.php 入口段
+        messy = [u for u in locs if "/index.php" in u.lower()]
+        if messy and len(messy) / url_count > 0.5:
+            hard.append(f"{len(messy)}/{url_count} 个网址带 index.php 中间路径（伪静态短链没有用上）")
+        # 3) 站内可达的详情页是否被漏收（按路径比对）
+        sm_paths = {path_of(u) for u in locs}
+        missing = [path_of(p.final_url) for p in self.all_pages
+                   if SiteCrawler._is_detail(p.final_url) and path_of(p.final_url) not in sm_paths]
+        if missing:
+            hard.append(f"{len(missing)} 个站内可达的详情页没进站点地图（如 {missing[0]}），这类高价值页只能靠内链被偶然发现")
+        # 4) lastmod 异常集中（轻提示）
+        lms = [e[1] for e in entries if e[1]]
+        if len(lms) > 10:
+            from collections import Counter
+            top_day, top_n = Counter(lms).most_common(1)[0]
+            if top_n / len(lms) > 0.8:
+                soft.append(f"更新时间有 {top_n}/{len(lms)} 集中在同一天（{top_day}），不像是各页真实更新时间")
+        # 5) changefreq 滥用（引擎基本忽略该字段，仅建议、不重罚）
+        aggressive = [e for e in entries if e[2] in ("always", "hourly")]
+        if aggressive and len(aggressive) / url_count > 0.5:
+            soft.append(f"{len(aggressive)}/{url_count} 标注 always/hourly，更新频率标注过激（搜索引擎基本忽略此字段，建议 weekly/monthly）")
+
+        detail = (["需修正：" + "；".join(hard)] if hard else []) + \
+                 (["可优化：" + "；".join(soft)] if soft else []) + \
+                 [f"地图共 {url_count} 个网址，基准域名 {cur_host}"]
+        if hard:
+            return self._result(item, Status.WARN,
+                                f"站点地图可用但有 {len(hard)} 类实质问题（共 {url_count} 个网址）",
+                                detail="；".join(detail))
+        if soft:
+            return self._result(item, Status.PASS,
+                                f"站点地图可用（{url_count} 个网址、主机统一、核心页已收录），另有细节可优化",
+                                detail="；".join(detail))
+        return self._result(item, Status.PASS,
+                            f"站点地图规范，共 {url_count} 个网址，主机统一且核心页已收录")
 
     # 4. llms.txt
     def _check_llms_txt(self) -> CheckResult:
         item = self._item(
-            "tech-04", "llms.txt 大模型说明文件", Priority.P1,
-            "是否存在 llms.txt，为大模型提供站点说明",
+            "tech-04", "llms.txt 大模型说明文件（前瞻可选）", Priority.P2,
+            "是否存在 llms.txt 为大模型提供站点说明（非必须，属前瞻性布局）",
             "访问 /llms.txt，检查内容有效性",
-            "存在，包含站点简介和核心页面列表",
+            "存在则更好，缺失不扣分（目前无主流搜索引擎/AI 引擎强制要求）",
             manual_check="浏览器访问 https://你的域名/llms.txt，看是否有纯文本的站点介绍、核心页面链接列表和更新时间",
-            purpose="llms.txt 是 GEO 的核心文件，专门给大模型看的'站点说明书'。有了它，AI 能快速理解你是做什么的、有哪些重要页面，大幅提升被引用概率",
-            excellent="llms.txt 存在，包含清晰的站点简介、分类核心页面链接（10+）、服务说明、联系方式和最后更新时间",
-            normal="llms.txt 存在，有站点简介和部分页面链接，但内容较简单或更新时间缺失",
-            failed="llms.txt 不存在（GEO 关键文件缺失）",
+            purpose="llms.txt 是面向大模型的'站点说明书'提案，目前尚无主流搜索引擎或 AI 引擎明确背书、也不影响收录与排名，因此只作前瞻建议、不计分；配置得当可能方便部分 AI 抓取器快速理解站点",
+            excellent="llms.txt 存在，包含清晰的站点简介、分类核心页面链接、服务说明、联系方式和更新时间",
+            normal="llms.txt 存在但内容较简单或更新时间缺失",
+            failed="未配置 llms.txt（非必须，不影响评分）",
+            tier="bonus",
         )
         resp = self.fetcher.fetch_raw(f"{self.base_url}/llms.txt")
         if resp is None or resp.status_code != 200:
-            return self._result(item, Status.FAIL, "未找到 llms.txt（GEO 关键文件缺失）")
+            return self._result(item, Status.WARN, "未配置 llms.txt（前瞻可选项，不计分）")
 
         content = resp.text.strip()
         if len(content) < 20:
@@ -144,6 +238,7 @@ class TechnicalChecker(BaseChecker):
             excellent="存在 ai-plugin.json，包含完整的 name/description/api/logo/contact 字段，且指向 llms.txt 或 OpenAPI 接口",
             normal="存在 ai-plugin.json 或 llms-full.txt 中的一个，但字段不完整",
             failed="未找到任何 .well-known AI 发现文件",
+            tier="bonus",
         )
         found = []
         for path in ["/.well-known/ai-plugin.json", "/.well-known/llms-full.txt",
@@ -197,7 +292,7 @@ class TechnicalChecker(BaseChecker):
             normal="首页有 canonical 标签，但内页可能缺失或指向不够精确",
             failed="未设置 canonical，或 canonical 指向错误页面（如全部指向首页）",
         )
-        canonical = self.page.soup.find("link", attrs={"rel": "canonical"})
+        canonical = self.local_soup.find("link", attrs={"rel": "canonical"})
         if canonical and canonical.get("href"):
             href = canonical["href"]
             if href == self.page.final_url or href == self.page.url:
@@ -241,14 +336,14 @@ class TechnicalChecker(BaseChecker):
             normal="主要内容在 HTML 中，但部分非关键内容（如评论、推荐）依赖 JS 加载",
             failed="初始 HTML 文本量极少，核心内容依赖 JS 渲染，AI 爬虫无法获取有效内容",
         )
-        text = self.page.get_text()
+        text = self.get_text()
         if len(text) < 100:
             return self._result(
                 item, Status.FAIL,
                 "初始 HTML 文本量过少，内容可能依赖 JS 动态渲染",
                 detail=f"初始文本仅 {len(text)} 字符",
             )
-        noscript = self.page.soup.find("noscript")
+        noscript = self.local_soup.find("noscript")
         if noscript and len(text) < 500:
             return self._result(
                 item, Status.WARN,
@@ -259,29 +354,287 @@ class TechnicalChecker(BaseChecker):
     # 10. 页面体积与速度
     def _check_page_size_speed(self) -> CheckResult:
         item = self._item(
-            "tech-10", "页面体积与加载速度", Priority.P1,
-            "页面大小和响应时间是否合理",
-            "测量 HTML 大小和响应时间",
-            "HTML < 500KB，首屏 < 3s",
-            manual_check="用浏览器开发者工具 Network 面板看文档加载时间和大小；或用 PageSpeed Insights / 站长工具测速",
-            purpose="页面过大或加载过慢会降低 AI 爬虫的抓取效率和用户体验，搜索引擎也会把速度作为排名因素",
-            excellent="HTML < 200KB，首屏加载 < 1.5s，图片已压缩，启用了 Gzip/Brotli 压缩和 CDN",
-            normal="HTML < 500KB，首屏 < 3s，基本达标但有优化空间",
-            failed="HTML > 500KB 或首屏 > 3s，严重影响抓取和体验",
+            "tech-10", "页面响应速度与体积", Priority.P1,
+            "服务器返回 HTML 文档的快慢与文档大小（首页+抽样内页一起看），以及是否开启传输压缩",
+            "统计首页和每个抽样内页的文档响应时间、HTML 体积的中位数与最慢页，并检查响应头 Content-Encoding",
+            "文档响应中位数 <0.8s、HTML 中位数 <300KB 为优；>2s 或 >800KB 为差；需开启 gzip/br 压缩",
+            manual_check="本项是'服务器文档响应'（HTML 下载）耗时；真实用户首屏 LCP/INP/CLS 需用 PageSpeed Insights、WebPageTest 或浏览器 Network/Performance 面板复测",
+            purpose="文档响应慢、体积大会拖慢 AI 爬虫与搜索引擎抓取（慢页面抓取配额更低），用户也更易跳出；开压缩能显著减少传输字节",
+            excellent="首页与多数内页文档响应 <0.8s、HTML<300KB，已开启 gzip/br 压缩",
+            normal="文档响应 0.8-2s 或 HTML 300-800KB，或个别内页偏慢，基本可用但有优化空间",
+            failed="文档响应中位数 >2s 或 HTML 中位数 >800KB，明显拖累抓取与体验",
+            scope="全站", applicable_pages="首页+内页",
+            suggestion="开启 gzip/Brotli 压缩与 CDN、给静态资源长缓存、压缩图片与精简内联脚本样式",
         )
-        size_kb = self.page.content_size / 1024
-        time_s = self.page.response_time
+        from statistics import median
+        pages = [self.page] + (self.extra_pages or [])
+        rows = []
+        for p in pages:
+            label = "首页" if p is self.page else self._path_of(p.final_url)
+            rows.append((label, float(p.response_time or 0.0), p.content_size / 1024))
+        times = [r[1] for r in rows]
+        kbs = [r[2] for r in rows]
+        med_t, med_kb = median(times), median(kbs)
+        slowest = sorted(rows, key=lambda r: r[1], reverse=True)[:2]
+        enc = (self.page.headers or {}).get("Content-Encoding", "") or ""
+        compressed = bool(re.search(r"gzip|br|deflate", enc, re.I))
 
-        issues = []
-        if size_kb > 500:
-            issues.append(f"页面体积 {size_kb:.0f}KB 超过 500KB")
-        if time_s > 3:
-            issues.append(f"响应时间 {time_s:.1f}s 超过 3s")
+        issues, soft = [], []
+        if med_t > 2:
+            issues.append(f"文档响应中位数 {med_t:.2f}s 超过 2s")
+        elif med_t > 0.8:
+            soft.append(f"文档响应中位数 {med_t:.2f}s，偏慢（理想<0.8s）")
+        if med_kb > 800:
+            issues.append(f"HTML 体积中位数 {med_kb:.0f}KB 超过 800KB")
+        elif med_kb > 300:
+            soft.append(f"HTML 体积中位数 {med_kb:.0f}KB，偏大（理想<300KB）")
+        if not compressed:
+            soft.append("未检测到 gzip/br 传输压缩（响应头无 Content-Encoding）")
 
+        slow_note = "；最慢页：" + "、".join(f"{l} {t:.2f}s" for l, t, _ in slowest) if len(slowest) >= 1 else ""
+        comp_note = f"传输压缩：{enc}" if compressed else "传输压缩：未开启"
+        scope_note = f"共测 {len(rows)} 页（首页+内页），此为服务器文档响应，非真实首屏渲染，受检测点网络影响，供参考"
+
+        head = rows[0]
+        summary = f"首页 {head[1]:.2f}s/{head[2]:.0f}KB，{len(rows)} 页中位 {med_t:.2f}s/{med_kb:.0f}KB"
+        # 检测过的全部页面挂进 pages，报告来源才能显示与说明一致的全量页面清单
+        measured = [p.final_url for p in pages]
         if issues:
-            return self._result(item, Status.WARN, "页面体积或速度有待优化",
-                                detail="; ".join(issues))
-        return self._result(item, Status.PASS, f"页面 {size_kb:.0f}KB，响应 {time_s:.2f}s")
+            return self._result(item, Status.FAIL, summary + "，速度/体积不达标",
+                                detail="；".join(issues + soft) + slow_note + "；" + comp_note + "；" + scope_note,
+                                pages=measured)
+        if soft:
+            return self._result(item, Status.WARN, summary + "，可进一步优化",
+                                detail="；".join(soft) + slow_note + "；" + comp_note + "；" + scope_note,
+                                pages=measured)
+        return self._result(item, Status.PASS, summary + "，已开压缩",
+                            detail=comp_note + slow_note + "；" + scope_note,
+                            pages=measured)
+
+    @staticmethod
+    def _path_of(url: str) -> str:
+        p = urlparse(url)
+        path = p.path or "/"
+        return path if len(path) <= 32 else "…" + path[-31:]
+
+    # 16. HEAD 与 GET 状态一致
+    def _check_head_get(self) -> CheckResult:
+        item = self._item(
+            "tech-16", "HEAD/GET 状态码一致", Priority.P2,
+            "同一个页面用 HEAD 与 GET 两种方式请求，返回的状态码是否一致",
+            "对首页和部分内页先发 HEAD 再对照已抓到的 GET 状态码",
+            "HEAD 与 GET 返回相同的成功状态码（如都 200）",
+            purpose="部分爬虫、CDN 预检、健康监控会先发 HEAD 探活；若 HEAD 报 404/5xx 而 GET 正常，可能被误判为页面不存在，白白丢掉抓取",
+            manual_check="命令行执行 curl -I 页面地址 看状态码，与浏览器直接打开(GET)是否一致",
+            excellent="HEAD 与 GET 状态码一致",
+            normal="个别静态资源 HEAD 行为不同（不影响正文页可不处理）",
+            failed="正文页 HEAD 报 404/5xx 但 GET 正常",
+            scope="首页+内页", applicable_pages="首页+内页",
+            suggestion="让服务端路由对 HEAD 与 GET 走同一控制器、返回相同状态码，勿把 HEAD 误判成静态文件缺失",
+        )
+        if self.fetcher is None:
+            return self._result(item, Status.SKIP, "无抓取器，无法比对 HEAD")
+        targets = [self.page] + (self.extra_pages or [])[:3]
+        mismatch = []
+        mismatch_pages = []
+        checked = 0
+        for p in targets:
+            head_code = self.fetcher.head_status(p.final_url)
+            get_code = p.status_code
+            checked += 1
+            if head_code is None:
+                continue
+            if head_code >= 400 and (get_code or 0) < 400:
+                mismatch.append(f"{self._path_of(p.final_url)}：GET {get_code} / HEAD {head_code}")
+                mismatch_pages.append(p.final_url)
+        if not mismatch:
+            return self._result(item, Status.PASS, f"{checked} 个抽查页 HEAD 与 GET 状态一致",
+                                pages=[p.final_url for p in targets])
+        return self._result(item, Status.WARN,
+                            f"{len(mismatch)} 个页面 HEAD 报错但 GET 正常",
+                            detail="；".join(mismatch), pages=mismatch_pages)
+
+    # 17. Open Graph 分享卡片
+    def _check_open_graph(self) -> CheckResult:
+        item = self._item(
+            "tech-17", "分享卡片标签(Open Graph)", Priority.P2,
+            "是否配置 og:title/og:description/og:image/og:url/og:type 等分享与AI识别标签",
+            "检查 <meta property='og:*'>，并抽 1 个内页确认公共头是否也带",
+            "核心 og 标签齐全，分享到微信/社交平台时标题、描述、封面图可控",
+            purpose="没有 OG 标签，链接被转发到微信/微博/IM 时标题和配图不可控、点击率受损；部分 AI 抓取器也会读取 og 信息辅助理解",
+            manual_check="用微信发送自己官网链接看卡片是否带标题与图；或查看源代码 og: 标签，用分享调试工具预览",
+            excellent="og:title/description/image/url/type/site_name 齐全，文章页 og:type=article",
+            normal="缺 1-2 个非核心 og 标签",
+            failed="完全没有 og 标签，分享卡片不可控",
+            scope="全站", applicable_pages="全站",
+            suggestion="在公共页头补 og:title/description/url/image/type/site_name，文章页 og:type 用 article",
+        )
+        core = ["og:title", "og:description", "og:image", "og:url", "og:type"]
+
+        def og_props(soup):
+            return {m.get("property", "").strip() for m in soup.find_all("meta")
+                    if (m.get("property") or "").startswith("og:")}
+
+        home_og = og_props(self.page.soup)
+        missing = [k for k in core if k not in home_og]
+        inner_note = ""
+        if self.extra_pages and home_og:
+            ip = self.extra_pages[0]
+            if not og_props(ip.soup):
+                inner_note = f"；内页 {self._path_of(ip.final_url)} 未带 og 标签（公共头可能只在首页加了）"
+        if not home_og:
+            return self._result(item, Status.WARN, "全站未发现 Open Graph 分享标签",
+                                pages=[p.final_url for p in self.all_pages])
+        if missing:
+            return self._result(item, Status.WARN,
+                                f"分享标签缺核心项：{'、'.join(missing)}" + inner_note,
+                                pages=[p.final_url for p in self.all_pages])
+        extra = "og:site_name" if "og:site_name" in home_og else ""
+        return self._result(item, Status.PASS,
+                            "核心分享标签齐全" + ("，含站点名" if extra else "") + inner_note,
+                            pages=[p.final_url for p in self.all_pages])
+
+    # 18. 匿名页会话与缓存
+    def _check_session_cache(self) -> CheckResult:
+        item = self._item(
+            "tech-18", "页面缓存与会话开销", Priority.P2,
+            "匿名访问的前台只读页是否无意义地开启了会话 Cookie、并禁止了缓存",
+            "检查首页响应头 Set-Cookie 是否含会话标识，Cache-Control 是否 private/no-cache",
+            "静态首页不向匿名访客下发会话 Cookie，且允许公共短缓存",
+            purpose="每个匿名访客都开一次会话、又把页面设为 no-cache，会让 CDN/浏览器无法缓存，服务器重复渲染，首字节变慢，爬虫抓取成本也更高",
+            manual_check="查看响应头是否每次都 Set-Cookie: PHPSESSID/JSESSIONID 等，且 Cache-Control 是否为 private/no-cache",
+            excellent="匿名只读页不下发会话 Cookie，Cache-Control 允许 public 短缓存",
+            normal="有会话或缓存其一配置不优，但影响有限",
+            failed="匿名页既强制开会话又禁止缓存，明显拖慢响应",
+            scope="首页", applicable_pages="首页",
+            suggestion="前台只读页关闭 session、允许 public max-age 短缓存，表单/登录走独立接口",
+        )
+        h = {k.lower(): v for k, v in (self.page.headers or {}).items()}
+        set_cookie = h.get("set-cookie", "")
+        cache = h.get("cache-control", "")
+        opens_session = bool(re.search(r"phpsessid|jsessionid|asp\.net_sessionid|sessid|session", set_cookie, re.I))
+        no_cache = bool(re.search(r"no-cache|no-store|private", cache, re.I)) and not re.search(r"public", cache, re.I)
+        if opens_session and no_cache:
+            return self._result(item, Status.WARN, "匿名首页既下发会话 Cookie 又禁止缓存，拖慢响应",
+                                detail=f"Set-Cookie: {set_cookie[:60]}；Cache-Control: {cache or '（无）'}")
+        if opens_session:
+            return self._result(item, Status.WARN, "匿名首页下发了会话 Cookie",
+                                detail=f"Set-Cookie: {set_cookie[:60]}（只读页通常无需为每位访客开会话）")
+        if no_cache:
+            return self._result(item, Status.WARN, "首页禁止了缓存（Cache-Control 不可公开缓存）",
+                                detail=f"Cache-Control: {cache or 'private/no-cache'}（可对只读页设置 public 短缓存）")
+        return self._result(item, Status.PASS, "匿名首页未强制开会话，缓存策略未发现明显问题",
+                            detail=f"Cache-Control: {cache or '未显式设置（服务器默认）'}")
+
+    # 19. 安全响应头
+    def _check_security_headers(self) -> CheckResult:
+        item = self._item(
+            "tech-19", "安全响应头", Priority.P2,
+            "是否配置 HSTS、MIME 嗅探拦截、点击劫持防护、来源策略等基础安全响应头",
+            "检查 Strict-Transport-Security、X-Content-Type-Options、X-Frame-Options/frame-ancestors、Referrer-Policy",
+            "HTTPS 站点至少有 HSTS，并补齐其余基础安全头",
+            purpose="安全头对排名权重影响很轻，属于站点健康与防护项：缺 HSTS 会留下降级访问风险，缺点击劫持/MIME 防护存在被嵌套与误解析隐患",
+            manual_check="查看响应头是否包含上述字段；可在安全检测平台复测",
+            excellent="HSTS、nosniff、frame-ancestors/X-Frame-Options、Referrer-Policy 均已配置",
+            normal="配置了部分安全头，仍有缺失",
+            failed="几乎没有基础安全响应头",
+            scope="首页", applicable_pages="首页",
+            suggestion="在 Web 服务器补 HSTS、X-Content-Type-Options: nosniff、X-Frame-Options 或 CSP frame-ancestors、Referrer-Policy",
+            tier="bonus",  # 安全头对 SEO/GEO 排名影响很轻，按"影响小非必要不计分"仅作建议
+        )
+        h = {k.lower(): v for k, v in (self.page.headers or {}).items()}
+        csp = h.get("content-security-policy", "")
+        checks = [
+            ("HSTS 强制 HTTPS", bool(h.get("strict-transport-security"))),
+            ("MIME 嗅探拦截(X-Content-Type-Options)", "nosniff" in h.get("x-content-type-options", "").lower()),
+            ("点击劫持防护(X-Frame-Options/CSP)", bool(h.get("x-frame-options")) or "frame-ancestors" in csp),
+            ("来源策略(Referrer-Policy)", bool(h.get("referrer-policy"))),
+        ]
+        missing = [name for name, ok in checks if not ok]
+        if not missing:
+            return self._result(item, Status.PASS, "基础安全响应头齐全")
+        is_https = (self.page.final_url or "").startswith("https://")
+        head_lack_hsts = is_https and "HSTS 强制 HTTPS" in missing
+        if len(missing) >= 3:
+            return self._result(item, Status.WARN, f"缺 {len(missing)}/4 项基础安全响应头",
+                                detail=("；".join(missing)) + ("；HTTPS 站点建议优先补 HSTS" if head_lack_hsts else ""))
+        return self._result(item, Status.WARN, f"安全响应头缺：{'、'.join(missing)}")
+
+    # 20. 多入口统一跳转到首选域（www/非www、http/https 收口）
+    def _check_host_canonicalization(self) -> CheckResult:
+        item = self._item(
+            "tech-20", "多入口统一跳转(首选域)", Priority.P0,
+            "http/https、带www/不带www 这几个入口是否都永久跳转到同一个官方网址，而不是各自打开重复内容",
+            "对四个入口逐个不跟随地探测跳转链，判断终点是否都落到本次实际访问的首选网址，以及是否用 301 永久跳转",
+            "所有非首选入口均 301/308 到唯一 https 首选域，无入口直接返回 200 重复页",
+            purpose="同一个站若 www 和不带 www、http 和 https 都能直接打开，搜索引擎会当成多份近似重复站、权重分散、收录不稳；统一 301 收口才能把信号集中到一个官方网址",
+            manual_check="命令行 curl -I 分别访问 http://域名、http://www.域名、https://域名，看是否都 301 到 https://www.域名（或你选定的唯一首选）",
+            excellent="各入口都用 301/308 一跳或两跳收敛到唯一首选域",
+            normal="基本收口，但用了 302 临时跳转或个别入口链路不规范",
+            failed="存在入口直接 200 打开与首选域相同的内容（重复入口未收口）",
+            scope="整站", applicable_pages="整站",
+            suggestion="在 Web 服务器把非首选主机名与 http 全部 301 到唯一 https 首选域，一条链接力、避免多次跳转，并配自引用 canonical",
+        )
+        if self.fetcher is None:
+            return self._result(item, Status.SKIP, "无抓取器，无法探测多入口")
+        pref = urlparse(self.page.final_url)
+        pref_scheme, pref_host = pref.scheme, pref.netloc.lower()
+        host = pref.netloc.lower()
+        bare = host[4:] if host.startswith("www.") else host
+        www = host if host.startswith("www.") else ("www." + host if host else host)
+        hosts = [h for h in dict.fromkeys([bare, www]) if h]
+        entries = [f"{s}://{h}/" for h in hosts for s in ("http", "https")]
+        entries = [u for u in entries if u != f"{pref_scheme}://{pref_host}/"]
+
+        def follow(start, max_hop=3):
+            cur, hops = start, []
+            for _ in range(max_hop):
+                code, loc = self.fetcher.probe(cur)
+                if code is None:
+                    return cur, hops, "unreachable"
+                hops.append((code, loc))
+                if code in (301, 302, 303, 307, 308) and loc:
+                    nxt = urljoin(cur, loc)
+                    if nxt == cur:
+                        return cur, hops, "loop"
+                    cur = nxt
+                    continue
+                if 200 <= code < 300:
+                    return cur, hops, "ok200"
+                return cur, hops, f"err{code}"
+            return cur, hops, "toolong"
+
+        dup_open, temp_only, abnormal, unreachable = [], [], [], []
+        for u in entries:
+            final, hops, state = follow(u)
+            fp = urlparse(final)
+            seq = " → ".join([u] + [f"{c}:{loc or '·'}" for c, loc in hops])
+            lands = fp.scheme == pref_scheme and fp.netloc.lower() == pref_host
+            if state == "ok200" and not lands:
+                dup_open.append(seq)                                    # 非首选地址直接 200 摊开重复页
+            elif state == "ok200" and lands:
+                if any(c in (302, 303, 307) for c, _ in hops):
+                    temp_only.append(seq)                               # 到是到了，但用临时跳转
+            elif state == "unreachable":
+                unreachable.append(u)
+            else:
+                abnormal.append(seq + f"（{state}）")
+
+        if dup_open:
+            return self._result(item, Status.WARN,
+                                f"{len(dup_open)} 个入口直接打开了重复内容、未统一跳转到首选域",
+                                detail="未收口：" + "；".join(dup_open)
+                                       + f"；应统一 301 到 {pref_scheme}://{pref_host}/")
+        if temp_only:
+            return self._result(item, Status.WARN, "入口已收敛但用的是 302 临时跳转，建议改 301 永久跳转",
+                                detail="；".join(temp_only))
+        if abnormal:
+            return self._result(item, Status.WARN, "部分入口跳转链路异常",
+                                detail="；".join(abnormal))
+        note = f"http/https、www/非www 均收敛到 {pref_scheme}://{pref_host}/"
+        if unreachable:
+            note += "；个别入口不可达：" + "、".join(unreachable)
+        return self._result(item, Status.PASS, "各入口已统一 301 收口到首选域", detail=note)
 
     # 11. 移动端友好
     def _check_mobile_friendly(self) -> CheckResult:
@@ -377,184 +730,494 @@ class TechnicalChecker(BaseChecker):
                             detail="；".join(all_issues[:5]))
 
     # 14. CMS指纹识别
+    def _load_cms_config(self) -> dict:
+        """从 YAML 加载国内 CMS 指纹补充库"""
+        import os
+        import yaml
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                   "config", "cms_fingerprints.yaml")
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    def _load_wappalyzer_techs(self) -> dict:
+        """加载 Wappalyzer 技术特征库"""
+        import os
+        import json
+        tech_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                 "config", "wappalyzer", "technologies.json")
+        with open(tech_path, "r", encoding="utf-8") as f:
+            return json.load(f).get("technologies", {})
+
+    def _match_wappalyzer(self, html: str, response_headers: dict,
+                         cookie_names: set, meta_generator: str) -> list:
+        """用 Wappalyzer 特征库匹配技术栈"""
+        import re
+        techs = self._load_wappalyzer_techs()
+        detected = []
+
+        for name, rules in techs.items():
+            cats = rules.get("cats", [])
+            # 只关注 CMS(1), Web Frameworks(6), E-commerce(6), JS Frameworks(12),
+            # Static Site Generators(57), CDN(31), Web Servers(22), Programming Languages(27)
+            target_cats = {1, 6, 12, 57, 31, 22, 27}
+            if not any(c in target_cats for c in cats):
+                continue
+
+            evidence = None
+            confidence = "低"
+
+            # 1) Meta 标签匹配
+            if not evidence and meta_generator and "meta" in rules:
+                for meta_key, pattern in rules["meta"].items():
+                    if meta_key.lower() == "generator":
+                        if isinstance(pattern, str):
+                            if re.search(pattern, meta_generator, re.IGNORECASE):
+                                evidence = f"meta generator: {meta_generator}"
+                                confidence = "高"
+                        elif isinstance(pattern, list):
+                            for p in pattern:
+                                if re.search(p, meta_generator, re.IGNORECASE):
+                                    evidence = f"meta generator: {meta_generator}"
+                                    confidence = "高"
+                                    break
+
+            # 2) HTML 匹配
+            if not evidence and "html" in rules:
+                html_rules = rules["html"]
+                if isinstance(html_rules, str):
+                    html_rules = [html_rules]
+                elif not isinstance(html_rules, list):
+                    html_rules = []
+                for pattern in html_rules:
+                    try:
+                        if re.search(pattern, html, re.IGNORECASE):
+                            evidence = f"HTML特征: {pattern[:60]}"
+                            confidence = "中"
+                            break
+                    except re.error:
+                        pass
+
+            # 3) Headers 匹配
+            if not evidence and "headers" in rules:
+                for header_name, pattern in rules["headers"].items():
+                    header_val = ""
+                    for k, v in response_headers.items():
+                        if k.lower() == header_name.lower():
+                            header_val = v
+                            break
+                    if header_val:
+                        if isinstance(pattern, str):
+                            try:
+                                if re.search(pattern, header_val, re.IGNORECASE):
+                                    evidence = f"Header {header_name}: {pattern[:60]}"
+                                    confidence = "高"
+                                    break
+                            except re.error:
+                                pass
+
+            # 4) Cookie 匹配（精确匹配 cookie 名称，不做正则搜索）
+            if not evidence and "cookies" in rules:
+                for cookie_name, pattern in rules["cookies"].items():
+                    if cookie_name in cookie_names:
+                        evidence = f"Cookie: {cookie_name}"
+                        confidence = "中"
+                        break
+                    if isinstance(pattern, str) and pattern:
+                        for actual_cookie in cookie_names:
+                            try:
+                                if re.fullmatch(pattern, actual_cookie, re.IGNORECASE):
+                                    evidence = f"Cookie: {cookie_name}"
+                                    confidence = "中"
+                                    break
+                            except re.error:
+                                pass
+                        if evidence:
+                            break
+
+            # 5) Script src 匹配
+            if not evidence and "scripts" in rules:
+                script_rules = rules["scripts"]
+                if isinstance(script_rules, str):
+                    script_rules = [script_rules]
+                elif isinstance(script_rules, dict):
+                    script_rules = list(script_rules.values())
+                elif not isinstance(script_rules, list):
+                    script_rules = []
+                for pattern in script_rules:
+                    if isinstance(pattern, str):
+                        try:
+                            if re.search(pattern, html, re.IGNORECASE):
+                                evidence = f"Script: {pattern[:60]}"
+                                confidence = "中"
+                                break
+                        except re.error:
+                            pass
+
+            if evidence:
+                cat_name = self._wappalyzer_cat_name(cats)
+                detected.append({
+                    "cms": name,
+                    "type": cat_name,
+                    "evidence": evidence,
+                    "confidence": confidence,
+                    "cats": cats,
+                    "suitability": "",
+                })
+
+        return detected
+
+    def _match_yaml_platforms(self, html: str, response_headers: dict,
+                              cookie_names: set, meta_generator: str,
+                              base_url: str) -> list:
+        """v2 YAML: 权重累计 + 多维度 + excludes/implies + fingerprint_paths"""
+        import httpx
+        from urllib.parse import urljoin
+
+        config = self._load_cms_config()
+        platforms = config.get("platforms", [])
+        global_config = config.get("global", {})
+        conf_levels = global_config.get("confidence_levels", {})
+        high_threshold = conf_levels.get("high", 70)
+        medium_threshold = conf_levels.get("medium", 40)
+
+        headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        candidates = []
+
+        # Phase 1: 非HTTP维度匹配（meta_generator / html_patterns / header_patterns / cookie_names）
+        for platform in platforms:
+            min_confidence = platform.get("min_confidence", 40)
+            weight_total = 0
+            evidence_parts = []
+            matched_dims = 0
+
+            # meta_generator
+            for rule in (platform.get("meta_generator") or []):
+                pattern = rule.get("pattern", "")
+                weight = rule.get("weight", 20)
+                flags_str = rule.get("flags", "i")
+                flags = re.IGNORECASE if "i" in flags_str else 0
+                if meta_generator and pattern:
+                    try:
+                        if re.search(pattern, meta_generator, flags):
+                            weight_total += weight
+                            matched_dims += 1
+                            evidence_parts.append(f"meta generator: {meta_generator}")
+                            break
+                    except re.error:
+                        pass
+
+            # html_patterns
+            for rule in (platform.get("html_patterns") or []):
+                pattern = rule.get("pattern", "")
+                weight = rule.get("weight", 20)
+                flags_str = rule.get("flags", "i")
+                flags = re.IGNORECASE if "i" in flags_str else 0
+                if pattern:
+                    try:
+                        if re.search(pattern, html, flags):
+                            weight_total += weight
+                            matched_dims += 1
+                            evidence_parts.append(f"HTML特征: {pattern[:80]}")
+                            break
+                    except re.error:
+                        pass
+
+            # header_patterns
+            for rule in (platform.get("header_patterns") or []):
+                header_name = rule.get("header", "")
+                pattern = rule.get("pattern", "")
+                weight = rule.get("weight", 20)
+                flags_str = rule.get("flags", "i")
+                flags = re.IGNORECASE if "i" in flags_str else 0
+                if header_name and pattern:
+                    header_val = ""
+                    for k, v in response_headers.items():
+                        if k.lower() == header_name.lower():
+                            header_val = v
+                            break
+                    if header_val:
+                        try:
+                            if re.search(pattern, header_val, flags):
+                                weight_total += weight
+                                matched_dims += 1
+                                evidence_parts.append(f"Header {header_name}")
+                                break
+                        except re.error:
+                            pass
+
+            # cookie_names
+            for rule in (platform.get("cookie_names") or []):
+                cookie_pattern = rule.get("name", "")
+                weight = rule.get("weight", 20)
+                if not cookie_pattern:
+                    continue
+                for actual_cookie in cookie_names:
+                    if cookie_pattern.endswith("*"):
+                        if actual_cookie.startswith(cookie_pattern[:-1]):
+                            weight_total += weight
+                            matched_dims += 1
+                            evidence_parts.append(f"Cookie: {cookie_pattern}")
+                            break
+                    elif cookie_pattern.startswith("*"):
+                        if actual_cookie.endswith(cookie_pattern[1:]):
+                            weight_total += weight
+                            matched_dims += 1
+                            evidence_parts.append(f"Cookie: {cookie_pattern}")
+                            break
+                    elif cookie_pattern == actual_cookie:
+                        weight_total += weight
+                        matched_dims += 1
+                        evidence_parts.append(f"Cookie: {cookie_pattern}")
+                        break
+
+            candidates.append([platform, weight_total, evidence_parts, matched_dims])
+
+        # Phase 2: fingerprint_paths — 仅对有权重但未达阈值的平台做 GET 探测
+        needs_paths = [c for c in candidates
+                       if 0 < c[1] < c[0].get("min_confidence", 40)]
+        needs_paths.sort(key=lambda x: x[1], reverse=True)
+
+        for cand in needs_paths:
+            platform = cand[0]
+            min_confidence = platform.get("min_confidence", 40)
+            for rule in (platform.get("fingerprint_paths") or []):
+                if cand[1] >= min_confidence:
+                    break
+                path = rule.get("path", "")
+                expect_status = rule.get("expect_status", [200, 302, 403])
+                expect_content = rule.get("expect_content", "")
+                weight = rule.get("weight", 20)
+                if not path:
+                    continue
+                try:
+                    check_url = urljoin(base_url, path)
+                    with httpx.Client(timeout=8, follow_redirects=False, headers=headers) as client:
+                        resp = client.get(check_url)
+                    if resp.status_code in expect_status:
+                        content_ok = True
+                        if expect_content:
+                            try:
+                                if not re.search(expect_content, resp.text[:5000], re.IGNORECASE):
+                                    content_ok = False
+                            except re.error:
+                                pass
+                        if content_ok:
+                            cand[1] += weight
+                            cand[3] += 1
+                            cand[2].append(f"{path} → HTTP {resp.status_code}")
+                except Exception:
+                    pass
+
+        # Phase 3: 收集达标平台
+        detected = []
+        for platform, weight_total, evidence_parts, matched_dims in candidates:
+            min_confidence = platform.get("min_confidence", 40)
+            if weight_total < min_confidence:
+                continue
+
+            name = platform.get("name", "")
+            ptype = platform.get("type", "cms")
+            suitability = platform.get("suitability", "需进一步评估技术栈和可编辑性")
+
+            # version_extract
+            version = None
+            for rule in (platform.get("version_extract") or []):
+                source = rule.get("source", "")
+                regex = rule.get("regex", "")
+                flags_str = rule.get("flags", "i")
+                flags = re.IGNORECASE if "i" in flags_str else 0
+                if not regex:
+                    continue
+                try:
+                    if source == "meta_generator" and meta_generator:
+                        m = re.search(regex, meta_generator, flags)
+                        if m:
+                            version = m.group(1)
+                            break
+                    elif source == "html":
+                        m = re.search(regex, html, flags)
+                        if m:
+                            version = m.group(1)
+                            break
+                except (re.error, IndexError):
+                    pass
+
+            if weight_total >= high_threshold:
+                confidence = "高"
+            elif weight_total >= medium_threshold:
+                confidence = "中"
+            else:
+                confidence = "低"
+
+            display_name = f"{name} {version}" if version else name
+
+            detected.append({
+                "cms": display_name,
+                "original_name": name,
+                "type": ptype,
+                "evidence": "；".join(evidence_parts[:3]) if evidence_parts else "权重累计达标",
+                "confidence": confidence,
+                "weight": weight_total,
+                "matched_dims": matched_dims,
+                "version": version,
+                "suitability": suitability,
+                "excludes": platform.get("excludes", []),
+                "implies": platform.get("implies", []),
+            })
+
+        # Apply excludes
+        to_remove = set()
+        for d in detected:
+            to_remove.update(d.get("excludes", []))
+        if to_remove:
+            detected = [d for d in detected if d["original_name"] not in to_remove]
+
+        # Apply implies
+        implied = set()
+        for d in detected:
+            implied.update(d.get("implies", []))
+        if implied:
+            existing = {d["original_name"] for d in detected}
+            for platform in platforms:
+                pname = platform.get("name", "")
+                if pname in implied and pname not in existing:
+                    detected.append({
+                        "cms": pname,
+                        "original_name": pname,
+                        "type": platform.get("type", "cms"),
+                        "evidence": "由其他技术推断",
+                        "confidence": "低",
+                        "weight": 0,
+                        "matched_dims": 0,
+                        "version": None,
+                        "suitability": platform.get("suitability", ""),
+                        "excludes": [],
+                        "implies": [],
+                    })
+
+        return detected
+
+    def _wappalyzer_cat_name(self, cats: list) -> str:
+        """Wappalyzer 分类 ID → 类型名"""
+        cat_map = {
+            1: "cms",
+            6: "ecommerce",
+            12: "framework",
+            57: "cms",
+            31: "saas",
+        }
+        for cat_id in cats:
+            if cat_id in cat_map:
+                return cat_map[cat_id]
+        return "cms"
+
     def _check_cms_fingerprint(self) -> CheckResult:
         item = self._item(
             "tech-14", "CMS指纹识别", Priority.P1,
             "识别目标网站使用的建站系统/CMS类型",
-            "通过特征文件、meta标签、cookie、目录结构等识别CMS",
-            "识别出CMS类型，评估技术栈是否适合接手整改",
+            "通过Wappalyzer特征库(1270+技术) + 国内平台补充库识别CMS",
+            "识别出CMS类型，评估技术栈是否适合AI GEO优化运营",
             manual_check="查看页面源代码中的generator标签、特征文件路径(如/wp-login.php、/dede/)、cookie名称等",
-            purpose="识别CMS类型可判断技术栈是否适合接手整改，是否能灵活修改URL/结构/内容，以及是否存在已知安全风险",
+            purpose="识别CMS类型可判断技术栈是否适合AI GEO优化运营，是否能灵活修改URL/结构/内容，以及是否存在已知安全风险",
             excellent="识别为常见CMS（WordPress/帝国等），技术栈成熟，二次开发友好，可灵活整改",
             normal="识别为SaaS建站平台（凡科/建站ABC等），整改受平台限制，需评估是否能获取编辑权限",
             failed="无法识别CMS类型（可能为全定制开发），需进一步排查技术栈",
         )
-        from urllib.parse import urljoin
         import httpx
 
-        soup = self.page.soup
+        soup = self.local_soup
         html = self.page.html
         base_url = self.page.final_url
-
-        detected = []
-        confidence = "低"
-
-        # --- 1. Meta generator 标签 ---
-        gen_tag = soup.find("meta", attrs={"name": "generator"})
-        if gen_tag:
-            gen_content = gen_tag.get("content", "").lower()
-            if "wordpress" in gen_content:
-                detected.append({"cms": "WordPress", "evidence": f'meta generator: {gen_tag.get("content","")}'})
-                confidence = "高"
-            elif "dedecms" in gen_content or "织梦" in gen_content:
-                detected.append({"cms": "DedeCMS(织梦)", "evidence": f'meta generator: {gen_tag.get("content","")}'})
-                confidence = "高"
-            elif "drupal" in gen_content:
-                detected.append({"cms": "Drupal", "evidence": f'meta generator: {gen_tag.get("content","")}'})
-                confidence = "高"
-            elif "joomla" in gen_content:
-                detected.append({"cms": "Joomla", "evidence": f'meta generator: {gen_tag.get("content","")}'})
-                confidence = "高"
-            elif "discuz" in gen_content:
-                detected.append({"cms": "Discuz!", "evidence": f'meta generator: {gen_tag.get("content","")}'})
-                confidence = "高"
-            elif "empirecms" in gen_content or "帝国" in gen_content:
-                detected.append({"cms": "EmpireCMS(帝国)", "evidence": f'meta generator: {gen_tag.get("content","")}'})
-                confidence = "高"
-
-        # --- 2. 特征路径探测（HEAD请求，不下载内容）---
-        fingerprint_paths = {
-            "WordPress": ["/wp-login.php", "/wp-admin/", "/wp-content/", "/wp-includes/"],
-            "DedeCMS(织梦)": ["/dede/", "/plus/", "/templets/", "/data/"],
-            "EmpireCMS(帝国)": ["/e/admin/", "/e/class/", "/e/install/"],
-            "Discuz!": ["/uc_server/", "/forum.php", "/portal.php"],
-            "Drupal": ["/user/login", "/sites/default/"],
-            "Joomla": ["/administrator/", "/components/"],
-            "PhpCms": ["/phpcms/", "/install/"],
-        }
+        html_lower = html.lower()
 
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-        for cms_name, paths in fingerprint_paths.items():
-            if any(d["cms"] == cms_name for d in detected):
-                continue
-            matched = False
-            for path in paths[:2]:
-                try:
-                    check_url = urljoin(base_url, path)
-                    with httpx.Client(timeout=8, follow_redirects=False, headers=headers) as client:
-                        resp = client.head(check_url)
-                        if resp.status_code in (200, 301, 302, 403):
-                            detected.append({"cms": cms_name, "evidence": f"{path} → HTTP {resp.status_code}"})
-                            matched = True
-                            confidence = "高"
-                            break
-                except Exception:
-                    pass
-            if matched:
-                break
-
-        # --- 3. HTML特征模式 ---
-        html_lower = html.lower()
-        html_patterns = {
-            "凡科(Faishe)": ["/_nvs/", "faishe", "fksite", "fanke"],
-            "建站ABC": ["jzabc", "建站abc"],
-            "Wix": ["wix.com", "static.wixstatic"],
-            "Shopify": ["cdn.shopify.com", "shopify.theme"],
-            "Squarespace": ["squarespace", "static1.squarespace"],
-            "Weebly": ["weebly", "wsite-"],
-            "WordPress.com": ["wp.com", "wordpress.com"],
-            "Hugo": ["hugo-theme"],
-            "Vue/React SPA": ["__next_data__", "data-reactroot", "id=\"app\"", "id=\"__nuxt\""],
-        }
-        for cms_name, patterns in html_patterns.items():
-            if any(d["cms"] == cms_name for d in detected):
-                continue
-            for pat in patterns:
-                if pat in html_lower:
-                    detected.append({"cms": cms_name, "evidence": f"HTML特征: {pat}"})
-                    confidence = "中"
-                    break
-
-        # --- 4. Cookie特征 ---
-        cookies = self.page.status_code  # placeholder, actual cookies handled below
+        # --- 获取响应头和 Cookie ---
+        response_headers = {}
+        cookie_names = set()
         try:
-            with httpx.Client(timeout=8, follow_redirects=True, headers=headers) as client:
+            with httpx.Client(timeout=10, follow_redirects=True, headers=headers) as client:
                 resp = client.get(base_url)
+                response_headers = dict(resp.headers)
                 cookie_names = set(resp.cookies.keys())
-                cookie_map = {
-                    "WordPress": ["wordpress_logged_in", "wp-settings", "wp-postpass"],
-                    "DedeCMS(织梦)": ["dede_user_id", "dede_csrf"],
-                    "Discuz!": ["*_sid", "*_auth", "ucid"],
-                    "EmpireCMS(帝国)": ["ecmscookie"],
-                }
-                for cms_name, cookie_pats in cookie_map.items():
-                    if any(d["cms"] == cms_name for d in detected):
-                        continue
-                    for pat in cookie_pats:
-                        if pat.startswith("*"):
-                            suffix = pat[1:]
-                            if any(c.endswith(suffix) for c in cookie_names):
-                                detected.append({"cms": cms_name, "evidence": f"Cookie: {pat}"})
-                                confidence = "中"
-                                break
-                        elif pat in cookie_names:
-                            detected.append({"cms": cms_name, "evidence": f"Cookie: {pat}"})
-                            confidence = "中"
-                            break
         except Exception:
             pass
 
+        # --- Meta generator ---
+        gen_tag = soup.find("meta", attrs={"name": "generator"})
+        gen_content = gen_tag.get("content", "") if gen_tag else ""
+
+        detected = []
+
+        # === Layer 1: YAML 特征库（权重累计，多维度）===
+        yaml_results = self._match_yaml_platforms(
+            html, response_headers, cookie_names, gen_content, base_url)
+        detected.extend(yaml_results)
+
+        yaml_names = {d["original_name"] for d in detected if "original_name" in d}
+
+        # === Layer 2: Wappalyzer 特征库（补充，跳过 YAML 已识别的）===
+        wappalyzer_results = self._match_wappalyzer(html, response_headers, cookie_names, gen_content)
+        for wr in wappalyzer_results:
+            if wr["cms"] not in yaml_names:
+                detected.append(wr)
+
+        # === Layer 3: Wappalyzer URL 规则（仅当无匹配时）===
+        if not detected:
+            techs = self._load_wappalyzer_techs()
+            for name, rules in techs.items():
+                if 1 not in rules.get("cats", []):
+                    continue
+                url_patterns = rules.get("url", "")
+                if isinstance(url_patterns, str) and url_patterns:
+                    try:
+                        if re.search(url_patterns, base_url, re.IGNORECASE):
+                            detected.append({"cms": name, "type": "cms",
+                                             "evidence": f"URL匹配: {url_patterns[:60]}",
+                                             "confidence": "中", "suitability": ""})
+                            break
+                    except re.error:
+                        pass
+
         # --- 综合判断 ---
         if detected:
-            cms_list = [d["cms"] for d in detected]
-            evidence_list = [f"{d['cms']}: {d['evidence']}" for d in detected]
-            # 判断是否SaaS建站（整改受限）
-            saas_platforms = ["凡科(Faishe)", "建站ABC", "Wix", "Shopify", "Squarespace", "Weebly", "WordPress.com"]
-            is_saas = any(d["cms"] in saas_platforms for d in detected)
+            # 优先 YAML 结果（有 weight 或 suitability）
+            yaml_hits = [d for d in detected if d.get("weight", 0) > 0 or d.get("suitability")]
+            best = yaml_hits[0] if yaml_hits else detected[0]
+            cms_name = best["cms"]
+            ptype = best.get("type", "cms")
+            confidence = best.get("confidence", "低")
+            suitability = best.get("suitability", "需进一步评估技术栈和可编辑性")
+            evidence = best.get("evidence", "")
 
-            if is_saas:
+            all_names = [d["cms"] for d in detected]
+            tech_stack = ", ".join(all_names[:5])
+
+            if ptype == "saas":
                 status = Status.WARN
-                msg = f"识别为SaaS建站平台: {', '.join(cms_list)}（整改可能受平台限制）"
+                msg = f"识别为SaaS建站平台: {cms_name}（整改可能受平台限制）"
+            elif ptype == "framework":
+                status = Status.WARN
+                msg = f"识别为前端框架: {cms_name}（需后端配合整改）"
+            elif ptype == "ecommerce":
+                status = Status.PASS
+                msg = f"识别为: {cms_name}（电商系统）"
             else:
                 status = Status.PASS
-                msg = f"识别为: {', '.join(cms_list)}（技术栈可接手整改）"
+                msg = f"识别为: {cms_name}（技术栈可接手整改）"
 
-            suitability = self._cms_suitability(cms_list[0])
-            return self._result(item, status, msg,
-                                detail=f"置信度: {confidence}。证据: {'; '.join(evidence_list[:3])}。接手评估: {suitability}")
+            detail = f"置信度: {confidence}。证据: {evidence}。接手评估: {suitability}"
+            if len(all_names) > 1:
+                detail += f"。技术栈: {tech_stack}"
+
+            return self._result(item, status, msg, detail=detail)
         else:
-            # 无法识别，检查是否为静态站或全定制
-            is_static = "/static/" in html_lower or "/assets/" in html_lower
-            has_framework = any(fw in html_lower for fw in ["vue", "react", "angular", "next.js", "nuxt"])
+            has_framework = any(fw in html_lower for fw in ["vue", "react", "angular", "next.js", "nuxt", "__next", "__nuxt"])
             if has_framework:
                 return self._result(item, Status.WARN, "疑似前端框架定制开发(Vue/React/Angular)",
                                     detail="无法确定后端CMS，可能为全定制开发，需进一步排查技术栈")
             return self._result(item, Status.WARN, "未能识别CMS类型（可能为全定制开发）",
-                                detail="无meta generator标签、无特征路径、无HTML特征匹配。建议人工排查技术栈")
-
-    def _cms_suitability(self, cms_name: str) -> str:
-        """评估CMS接手整改的适合度"""
-        suitability_map = {
-            "WordPress": "成熟CMS，插件生态丰富，二次开发友好，适合接手整改",
-            "DedeCMS(织梦)": "老牌CMS，源码开放，模板灵活，但安全漏洞多，接手后需重点加固",
-            "EmpireCMS(帝国)": "开源CMS，扩展性强，适合接手整改",
-            "Discuz!": "论坛型CMS，适合社区类站点，非论坛站不太适用",
-            "Drupal": "企业级CMS，灵活度高但学习曲线陡",
-            "Joomla": "中型CMS，扩展性好，适合接手整改",
-        }
-        saas_map = {
-            "凡科(Faishe)": "SaaS平台，URL和结构受平台限制，需确认能否编辑HTML/上传文件",
-            "建站ABC": "SaaS平台，整改受限，建议评估是否有源码导出功能",
-            "Wix": "SaaS平台，封闭生态，整改严重受限",
-            "Shopify": "电商SaaS，适合电商站，但非电商功能受限",
-            "WordPress.com": "SaaS版WordPress，比自托管受限，需确认是否支持插件安装",
-        }
-        if cms_name in suitability_map:
-            return suitability_map[cms_name]
-        if cms_name in saas_map:
-            return saas_map[cms_name]
-        return "需进一步评估技术栈和可编辑性"
+                                detail="Wappalyzer(1270+技术)和国内补充库均未匹配。建议人工排查技术栈")
 
     # 15. 后台路径暴露
     def _check_admin_exposure(self) -> CheckResult:
@@ -575,26 +1238,9 @@ class TechnicalChecker(BaseChecker):
         base_url = self.page.final_url
         headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-        # 按CMS类型分组的后台路径
-        admin_paths = [
-            # WordPress
-            ("WordPress后台", "/wp-admin/"),
-            ("WordPress登录", "/wp-login.php"),
-            # DedeCMS
-            ("织梦后台", "/dede/"),
-            # EmpireCMS
-            ("帝国后台", "/e/admin/"),
-            # 通用
-            ("通用后台", "/admin/"),
-            ("通用登录", "/login"),
-            ("通用管理", "/manage/"),
-            ("PHP后台", "/system/"),
-            ("ASP后台", "/admin/login"),
-            ("管理员", "/administrator/"),
-            # 其他
-            ("Drupal后台", "/user/login"),
-            ("Joomla后台", "/administrator/"),
-        ]
+        # 从 YAML 配置加载后台路径
+        config = self._load_cms_config()
+        admin_paths = [(p["label"], p["path"]) for p in config.get("admin_paths", [])]
 
         exposed = []
         forbidden = []

@@ -1,0 +1,92 @@
+{
+  "success": true,
+  "outcome": "passed",
+  "repairable": true,
+  "terminalViolations": [],
+  "terminalBlockingSummary": null,
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.08.06.19.15.08",
+    "version_source": "skill-release-manifest.json",
+    "runtime_skill_dir": null,
+    "recorded_at": null,
+    "expected_version": "2026.08.06.19.15.08",
+    "status": "matched",
+    "read_status": "loaded"
+  },
+  "operatingMode": "free-explore",
+  "renderBlockingErrorCount": 0,
+  "softWarningCount": 0,
+  "renderBlockingErrors": [],
+  "errorSignatures": [],
+  "softWarnings": [],
+  "repairPlanHints": [],
+  "repairActionTable": [],
+  "errorCount": 0,
+  "warningCount": 0,
+  "errors": [],
+  "warnings": [],
+  "validationRunDisciplineStatus": {
+    "declared": true,
+    "restoreMode": false,
+    "maxFullValidationRuns": null,
+    "validationHistoryCount": 0,
+    "repairLedgerCount": 0,
+    "softWarningsTriggerRepair": null,
+    "terminalState": null,
+    "nextAction": null,
+    "violations": [],
+    "success": true
+  },
+  "terminalState": null,
+  "nextCheck": {
+    "type": "finish-readiness",
+    "command": "node '/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-finish-readiness.mjs' '/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand' --check=all",
+    "fullValidationAllowed": false,
+    "reason": "workspace validation passed; run complete finish readiness before final delivery"
+  },
+  "repairBatch": [],
+  "repairContextPacket": {
+    "schema_version": "1.0",
+    "purpose": "small-context repair packet; read this before full validation-report.json",
+    "success": true,
+    "terminalState": null,
+    "skillProvenance": {
+      "name": "solo-design",
+      "version": "2026.08.06.19.15.08",
+      "version_source": "skill-release-manifest.json",
+      "runtime_skill_dir": null,
+      "recorded_at": null,
+      "expected_version": "2026.08.06.19.15.08",
+      "status": "matched",
+      "read_status": "loaded"
+    },
+    "renderBlockingErrorCount": 0,
+    "softWarningCount": 0,
+    "renderBlockingErrors": [],
+    "repairActionTable": [],
+    "nextCheck": {
+      "type": "finish-readiness",
+      "command": "node '/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-finish-readiness.mjs' '/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand' --check=all",
+      "fullValidationAllowed": false,
+      "reason": "workspace validation passed; run complete finish readiness before final delivery"
+    },
+    "forbidden": [
+      "do not read validator source",
+      "do not rerun full validation when nextCheck.fullValidationAllowed=false",
+      "do not start preview/browser unless user explicitly asks",
+      "do not hand-edit repair ledger fields"
+    ]
+  },
+  "projectFileHashes": {
+    "geo-audit-report-brand.design": "ddb7ab62a79037679ee0e1052ff40e87d3a598648e74ed999d14ae14302fd4b2",
+    "colors_and_type.css": "f5764da798a2830917b3e466fed131368cec33a7430ce680fbf8e490a1766ee6",
+    "runtime-orchestration-summary.json": "e542f565a0ed7ff0672f8d0b6a918ab67e2af2607785532780ca75ddf63f3cf4",
+    "pages/index.html": "3ded43ed0e60c735230f2b2b828c48770df281c5f36e91b3cb42da5982688f79",
+    "assets/logo.png": "f3c546bf8142591e9b42b9f2a452dc59cee8ae8f797281c7ce6ba28081b35b23"
+  },
+  "designDir": "/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand",
+  "expectedPages": 1,
+  "requireInteractions": null,
+  "checkedAt": "2026-09-04T04:38:23.058Z"
+}

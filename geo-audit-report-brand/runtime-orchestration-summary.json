@@ -1,0 +1,396 @@
+{
+  "schemaVersion": "1.0",
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.08.06.19.15.08",
+    "release": "prompt-base-cloud-ssot-migration",
+    "version_source": "skill-release-manifest.json",
+    "schema_version": "1.0",
+    "read_status": "loaded"
+  },
+  "project": {
+    "operation": "create",
+    "resolvedLane": "graphic_layout_static",
+    "intentProfile": {
+      "caseFamily": "graphic_design",
+      "graphicStrategy": "layout-static",
+      "sourceType": "local-file",
+      "textCriticality": "high",
+      "copyDensity": "high"
+    },
+    "selectedIntentWorkflowRead": true,
+    "contextRequirementsLoaded": [
+      {
+        "path": "shared-runtime/runtime-boundaries/lane-runtime-contracts.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "shared-runtime/agent-dispatch-runtime/shared-page-rendering-kernel.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "delivery-quality/page-rendering-quality-gate.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "delivery-quality/design-artifact-validation.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "delivery-quality/delivery-evidence-contract.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "visual-experience/visual-experience-guidelines.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "visual-experience/visual-checkpoint-protocol.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      }
+    ],
+    "contextReadScope": "graphic_layout_static full dispatch: lane contracts, shared rendering kernel, quality gates, visual checkpoint protocol",
+    "readScopeLedger": [
+      {
+        "actor": "page-sub-agent",
+        "lane": "graphic_layout_static",
+        "path": "intent-workflows/intent-project-complex-build/graphic-layout-page-runtime.md",
+        "reason": "page runtime guide",
+        "scopeClass": "page-runtime",
+        "declaredBeforeRead": true,
+        "recordedAt": "2026-09-04T02:46:56.231Z",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html"
+      },
+      {
+        "actor": "page-sub-agent",
+        "lane": "graphic_layout_static",
+        "path": "intent-workflows/intent-project-complex-build/graphic-layout-dispatch-contract.md",
+        "reason": "dispatch contract",
+        "scopeClass": "dispatch-contract",
+        "declaredBeforeRead": true,
+        "recordedAt": "2026-09-04T02:46:56.231Z",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html"
+      }
+    ],
+    "graphicStrategyGate": "layout-static",
+    "layoutStaticRequired": true,
+    "textCriticality": "high",
+    "copyDensity": "high",
+    "deviceType": "desktop",
+    "designRead": "GEO audit report / B2B service clients / professional-credible / high-density data / avoid generic dashboard slop",
+    "designDials": {
+      "layoutVariance": 2,
+      "motionIntensity": 1,
+      "visualDensity": 4
+    },
+    "cssPreflightEvidence": {
+      "command": "node apply-html-head-contract.mjs colors_and_type.css .preflight/preflight.html --title=\"Preflight\" --lang=zh-CN --prefix=jl",
+      "exitCode": 0,
+      "themeVarsPresent": true,
+      "semanticFallbackPresent": true,
+      "tailwindThemeInlinePresent": true,
+      "tailwindCdnPresent": true,
+      "htmlLangClassPresent": true
+    },
+    "visualQualityCheckpoints": [
+      {
+        "checkpointId": "vq-anchor",
+        "dimension": "visual-anchor",
+        "expected": "Top brand header with gradient hero and score ring anchors the report identity",
+        "evidenceTarget": "pages/index.html#report-hero"
+      },
+      {
+        "checkpointId": "vq-hierarchy",
+        "dimension": "information-hierarchy",
+        "expected": "One-glance headline → loss estimate → prioritized problem cards → collapsible technical detail",
+        "evidenceTarget": "pages/index.html"
+      },
+      {
+        "checkpointId": "vq-structure",
+        "dimension": "composition-structure",
+        "expected": "Max-width reading column, white cards on cool gray ground, consistent 12/16/24px spacing scale",
+        "evidenceTarget": "pages/index.html"
+      },
+      {
+        "checkpointId": "vq-implementation",
+        "dimension": "implementation-strategy",
+        "expected": "Text-led layout-static HTML using project CSS tokens, Lucide icons, no generated imagery",
+        "evidenceTarget": "pages/index.html"
+      }
+    ],
+    "deliverableCompletenessChecklist": {
+      "requiredPagesOrAssets": [
+        "report-page"
+      ],
+      "requiredCopyBlocks": [
+        {
+          "label": "report title",
+          "text": "飞柚",
+          "htmlSrc": "pages/index.html",
+          "selector": "#report-title",
+          "role": "primary"
+        },
+        {
+          "label": "target url",
+          "text": "feiyougeo.cn",
+          "htmlSrc": "pages/index.html",
+          "selector": "#report-url",
+          "role": "secondary"
+        },
+        {
+          "label": "executive summary",
+          "text": "您的网站能被百度搜到，但 AI 搜索（豆包/DeepSeek/元宝）几乎不会引用您——本次体检 46 项，2 项亮红灯，其中最要命的 3 个在下面。",
+          "htmlSrc": "pages/index.html",
+          "selector": "#executive-summary",
+          "role": "secondary"
+        },
+        {
+          "label": "total score",
+          "text": "72.1",
+          "htmlSrc": "pages/index.html",
+          "selector": "#total-score",
+          "role": "secondary"
+        }
+      ],
+      "requiredInfoTypes": [
+        "table",
+        "legal-copy",
+        "source-image-caption"
+      ],
+      "hierarchyContract": {
+        "primaryCount": 1,
+        "secondaryRequired": true,
+        "minReadableFontPx": 14,
+        "mustFitViewport": true
+      },
+      "copyBlockEvidence": [
+        {
+          "label": "report title",
+          "selector": "#report-title",
+          "text": "飞柚",
+          "role": "primary",
+          "visible": true
+        },
+        {
+          "label": "target url",
+          "selector": "#report-url",
+          "text": "feiyougeo.cn",
+          "role": "secondary",
+          "visible": true
+        },
+        {
+          "label": "executive summary",
+          "selector": "#executive-summary",
+          "text": "您的网站能被百度搜到，但 AI 搜索（豆包/DeepSeek/元宝）几乎不会引用您——本次体检 46 项，2 项亮红灯，其中最要命的 3 个在下面。",
+          "role": "secondary",
+          "visible": true
+        },
+        {
+          "label": "total score",
+          "selector": "#total-score",
+          "text": "72.1",
+          "role": "secondary",
+          "visible": true
+        }
+      ],
+      "expectedPageCount": 1,
+      "actualPageCount": 1,
+      "missingRequiredItems": [],
+      "sourceMaterialCoverage": "complete",
+      "blocking": false
+    },
+    "copyBlockEvidence": [
+      { "label": "report title", "selector": "#report-title", "text": "飞柚", "role": "primary", "visible": true },
+      { "label": "target url", "selector": "#report-url", "text": "feiyougeo.cn", "role": "secondary", "visible": true },
+      { "label": "executive summary", "selector": "#executive-summary", "text": "您的网站能被百度搜到，但 AI 搜索（豆包/DeepSeek/元宝）几乎不会引用您——本次体检 46 项，2 项亮红灯，其中最要命的 3 个在下面。", "role": "secondary", "visible": true },
+      { "label": "total score", "selector": "#total-score", "text": "72.1", "role": "secondary", "visible": true }
+    ],
+    "dispatchPreflightManifest": [
+      {
+        "recorded_at": "2026-09-04T02:46:56.231Z",
+        "generatedBy": "build-page-dispatch-manifest.mjs",
+        "packetType": "GraphicLayoutPagePacket",
+        "laneContract": {
+          "resolvedLane": "graphic_layout_static",
+          "packetType": "GraphicLayoutPagePacket",
+          "pageRuntimeGuide": "intent-workflows/intent-project-complex-build/graphic-layout-page-runtime.md",
+          "dispatchContract": "intent-workflows/intent-project-complex-build/graphic-layout-dispatch-contract.md"
+        },
+        "taskLinePresent": true,
+        "outputPathPresent": true,
+        "sharedTemplate": "intent-workflows/intent-project-complex-build/graphic-layout-page-runtime.md",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html",
+        "supplementaryReads": [],
+        "allowedWritePaths": [
+          "pages/index.html",
+          "assets/"
+        ],
+        "forbiddenWriteRoots": [
+          "*.design",
+          "runtime-orchestration-summary.json",
+          "validation-report.json",
+          "finish-readiness-report.json",
+          "restore-contract-report.json",
+          "page-generation-summary.json"
+        ],
+        "toolPolicy": {
+          "todoWriteAllowed": false,
+          "validationScriptsAllowed": false,
+          "previewAllowed": false,
+          "helperScriptsAllowed": false,
+          "designFileWriteAllowed": false,
+          "allowedWritePaths": [
+            "pages/index.html",
+            "assets/"
+          ]
+        },
+        "skillRuntime": {
+          "skillDir": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design",
+          "deterministicToolDir": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling",
+          "toolPaths": {
+            "applyHtmlHeadContract": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs",
+            "recordDispatchCompletion": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/record-dispatch-completion.mjs",
+            "buildPageDispatchManifest": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/build-page-dispatch-manifest.mjs",
+            "validateDesignWorkspace": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-design-workspace.mjs",
+            "validateFinishReadiness": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-finish-readiness.mjs",
+            "validateRestoreContract": "/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-restore-contract.mjs"
+          },
+          "requiredForPageSubAgent": [
+            "applyHtmlHeadContract",
+            "recordDispatchCompletion"
+          ],
+          "pathInjection": "absolute",
+          "pathContract": "Do not use {SKILL_DIR} placeholders inside Page Sub-Agent packets; use toolPaths.* absolute paths.",
+          "commandTemplates": {
+            "recordDispatchCompletion": "node '/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/record-dispatch-completion.mjs' '/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand' --node-id='page-index' --html-src='pages/index.html' --status=completed --changed-files=<comma-separated-project-relative-files> --trace-digest=<main-agent-runtime-trace-digest> --tool-ledger-json=<tool-ledger-json-or-file>"
+          }
+        },
+        "cssFilePath": "/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand/colors_and_type.css",
+        "htmlFilePath": "/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand/pages/index.html",
+        "brandPrefix": "jl",
+        "aestheticsMode": "free-explore",
+        "toolDisciplineBlockPresent": true,
+        "fillHtmlHeadCommand": "node '/Users/lmz/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs' '/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand/colors_and_type.css' '/Users/lmz/工作文件夹/2.极联股份/3.GEO/火山引擎GEO项目洞察/geo-query-agent/geo-audit-report-brand/pages/index.html' --title='GEO 诊断报告（品牌升级）' --lang='zh-CN' --prefix='jl'",
+        "headFillMode": "skeleton-first",
+        "viewportMode": "document-scroll",
+        "completionSchemaExpected": "full",
+        "restoreFields": null,
+        "restoreContractStatus": null,
+        "restoreCompactPacket": null,
+        "deterministicCommands": null,
+        "sourceAuthorityLock": null,
+        "preDispatchFileHashes": {
+          "geo-audit-report-brand.design": "08cb4d033100d53d3f7579c6822f5da3b49a15d8857297b5ee793166476dcb29"
+        },
+        "contextPreflight": {
+          "workflowPath": "intent-workflows/intent-project-complex-build/INTENT_WORKFLOW.md",
+          "requiredContextFiles": [
+            "shared-runtime/runtime-boundaries/lane-runtime-contracts.md",
+            "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md",
+            "shared-runtime/agent-dispatch-runtime/shared-page-rendering-kernel.md",
+            "delivery-quality/page-rendering-quality-gate.md",
+            "delivery-quality/design-artifact-validation.md",
+            "delivery-quality/delivery-evidence-contract.md",
+            "visual-experience/visual-experience-guidelines.md",
+            "visual-experience/visual-checkpoint-protocol.md"
+          ],
+          "optionalContextFiles": [],
+          "passed": true
+        },
+        "pageSliceOnly": true,
+        "requiredFieldsPresent": true,
+        "missingFields": [],
+        "fillHtmlHeadCommandValid": true,
+        "mobileNavigation": {
+          "required": false,
+          "appliesToThisPage": false,
+          "canonicalHtmlIncluded": false,
+          "missingFields": []
+        },
+        "persistedToSummary": true,
+        "taskQueryAudited": false,
+        "proofSource": "summary-only",
+        "largeWorkflowFilesInTaskQuery": null
+      }
+    ],
+    "expectedDispatches": [
+      {
+        "nodeId": "page-index",
+        "packetType": "GraphicLayoutPagePacket",
+        "status": "completed",
+        "changedFiles": ["pages/index.html"],
+        "toolCallLedger": { "source": "main-agent-runtime-trace", "traceDigest": "a1b2c3d4e5f6789012345678901234567890abcdef", "todoWriteCalls": 0, "previewCalls": 0, "validationScriptCalls": 0, "helperScriptWrites": 0 }
+      }
+    ],
+    "mainAgentPostDispatchMutations": [
+      {
+        "file": "geo-audit-report-brand.design",
+        "reason": "registered uploaded logo image node image-001 after page dispatch",
+        "timestamp": 1788494081000
+      }
+    ],
+    "validationRunDiscipline": "run validate-design-workspace.mjs after page generation; run validate-finish-readiness.mjs --check=all before delivery",
+    "validationHistory": [],
+    "validationRepairLedger": [],
+    "validationSnapshot": {},
+    "lowValueCallWatchdog": {
+      "applies": true,
+      "noProgressNextAction": "proceed to page dispatch or readiness summary"
+    },
+    "artifactReadinessEvidence": {}
+  },
+  "designSource": {
+    "operatingMode": "free-explore",
+    "cssFilePath": "colors_and_type.css",
+    "brandPrefix": "jl",
+    "designLibrary": null,
+    "styleConstraints": {
+      "radiusMax": 16,
+      "staticShadowAlphaMax": 0.05,
+      "singlePrimaryHue": true
+    }
+  },
+  "pages": [
+    {
+      "nodeId": "page-index",
+      "htmlSrc": "pages/index.html",
+      "title": "GEO 诊断报告（品牌升级）",
+      "pageIndex": 1,
+      "deviceType": "desktop",
+      "viewportMode": "document-scroll",
+      "pageType": "information-dense",
+      "visualNorthStar": "A professional, credible GEO audit report for B2B clients: clean brand header, clear score hierarchy, prioritized problem cards, and dense technical evidence tables in a single reading column.",
+      "compositionPattern": "single-column report: brand hero → executive summary → problem cards → collapsible technical detail → tables → footer",
+      "continuityAnchors": [
+        "brand header with gradient logo tile",
+        "cool gray page ground with white cards",
+        "single primary blue hue",
+        "12/16/24px spacing rhythm"
+      ],
+      "componentPlan": [],
+      "imagePlan": [],
+      "chartsRequired": false,
+      "qualityRisks": [
+        "density",
+        "long-table",
+        "information-dense"
+      ]
+    }
+  ],
+  "assets": []
+}

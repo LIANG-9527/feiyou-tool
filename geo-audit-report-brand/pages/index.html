@@ -1,0 +1,3098 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GEO 诊断报告（品牌升级）</title>
+    <style id="theme-vars">
+/* 极联股份 · GEO 诊断报告 — 品牌升级设计系统 */
+
+@layer theme {
+  :root {
+    /* Brand primary scale — 极联蓝 */
+    --jl-blue-50: #eff6ff;
+    --jl-blue-100: #dbeafe;
+    --jl-blue-200: #bfdbfe;
+    --jl-blue-300: #93c5fd;
+    --jl-blue-400: #60a5fa;
+    --jl-blue-500: #3b82f6;
+    --jl-blue-600: #2563eb;
+    --jl-blue-700: #1d4ed8;
+    --jl-blue-800: #1e3a5f;
+    --jl-blue-900: #172554;
+
+    /* Neutral scale */
+    --jl-neutral-0: #ffffff;
+    --jl-neutral-50: #f8fafc;
+    --jl-neutral-100: #f1f5f9;
+    --jl-neutral-200: #e2e8f0;
+    --jl-neutral-300: #cbd5e1;
+    --jl-neutral-400: #94a3b8;
+    --jl-neutral-500: #64748b;
+    --jl-neutral-600: #475569;
+    --jl-neutral-700: #334155;
+    --jl-neutral-800: #1e293b;
+    --jl-neutral-900: #0f172a;
+
+    /* Semantic status colors */
+    --state-success: #10b981;
+    --state-success-bg: #ecfdf5;
+    --state-success-text: #065f46;
+    --state-warning: #f59e0b;
+    --state-warning-bg: #fffbeb;
+    --state-warning-text: #92400e;
+    --state-error: #ef4444;
+    --state-error-bg: #fef2f2;
+    --state-error-text: #991b1b;
+    --state-info: #0ea5e9;
+    --state-info-bg: #f0f9ff;
+    --state-info-text: #0c4a6e;
+    --state-orange: #f97316;
+    --state-orange-bg: #fff7ed;
+    --state-orange-text: #9a3412;
+
+    /* Semantic aliases required by head contract */
+    --jl-background: var(--jl-neutral-50);
+    --jl-foreground: var(--jl-neutral-900);
+    --jl-card: var(--jl-neutral-0);
+    --jl-card-foreground: var(--jl-neutral-800);
+    --jl-popover: var(--jl-neutral-0);
+    --jl-popover-foreground: var(--jl-neutral-800);
+    --jl-primary: var(--jl-blue-600);
+    --jl-primary-foreground: #ffffff;
+    --jl-muted: var(--jl-neutral-100);
+    --jl-muted-foreground: var(--jl-neutral-500);
+    --jl-border: var(--jl-neutral-200);
+    --jl-input: var(--jl-neutral-200);
+    --jl-ring: var(--jl-blue-400);
+    --jl-radius-small: 4px;
+    --jl-radius-medium: 8px;
+    --jl-radius-large: 12px;
+
+    /* Legacy semantic aliases */
+    --background: var(--jl-background);
+    --foreground: var(--jl-foreground);
+    --card: var(--jl-card);
+    --card-foreground: var(--jl-card-foreground);
+    --popover: var(--jl-popover);
+    --popover-foreground: var(--jl-popover-foreground);
+    --primary: var(--jl-primary);
+    --primary-foreground: var(--jl-primary-foreground);
+    --muted: var(--jl-muted);
+    --muted-foreground: var(--jl-muted-foreground);
+    --border: var(--jl-border);
+    --input: var(--jl-input);
+    --ring: var(--jl-ring);
+    --radius-sm: var(--jl-radius-small);
+    --radius-md: var(--jl-radius-medium);
+    --radius-lg: var(--jl-radius-large);
+    --radius-full: 9999px;
+
+    /* Typography */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Shadows — static surfaces <= 0.05 alpha */
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+    --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.05), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+    --shadow-float: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.08);
+  }
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    background: var(--jl-background);
+    color: var(--jl-foreground);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    margin: 0;
+    font-weight: 700;
+    line-height: 1.25;
+    color: var(--jl-neutral-900);
+  }
+
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: var(--jl-primary);
+    text-decoration: none;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  code, pre {
+    font-family: var(--font-mono);
+  }
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--jl-background);
+    --color-foreground: var(--jl-foreground);
+    --color-card: var(--jl-card);
+    --color-card-foreground: var(--jl-card-foreground);
+    --color-popover: var(--jl-popover);
+    --color-popover-foreground: var(--jl-popover-foreground);
+    --color-primary: var(--jl-primary);
+    --color-primary-foreground: var(--jl-primary-foreground);
+    --color-muted: var(--jl-muted);
+    --color-muted-foreground: var(--jl-muted-foreground);
+    --color-border: var(--jl-border);
+    --color-input: var(--jl-input);
+    --color-ring: var(--jl-ring);
+    --radius-sm: var(--jl-radius-small);
+    --radius-md: var(--jl-radius-medium);
+    --radius-lg: var(--jl-radius-large);
+  }
+  @layer base {
+    body { background: var(--jl-background); color: var(--jl-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--jl-background); }
+      .text-background { color: var(--jl-background); }
+      .border-background { border-color: var(--jl-background); }
+      .ring-background { --tw-ring-color: var(--jl-background); }
+      .bg-foreground { background-color: var(--jl-foreground); }
+      .text-foreground { color: var(--jl-foreground); }
+      .border-foreground { border-color: var(--jl-foreground); }
+      .ring-foreground { --tw-ring-color: var(--jl-foreground); }
+      .bg-card { background-color: var(--jl-card); }
+      .text-card { color: var(--jl-card); }
+      .border-card { border-color: var(--jl-card); }
+      .ring-card { --tw-ring-color: var(--jl-card); }
+      .bg-card-foreground { background-color: var(--jl-card-foreground); }
+      .text-card-foreground { color: var(--jl-card-foreground); }
+      .border-card-foreground { border-color: var(--jl-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--jl-card-foreground); }
+      .bg-popover { background-color: var(--jl-popover); }
+      .text-popover { color: var(--jl-popover); }
+      .border-popover { border-color: var(--jl-popover); }
+      .ring-popover { --tw-ring-color: var(--jl-popover); }
+      .bg-popover-foreground { background-color: var(--jl-popover-foreground); }
+      .text-popover-foreground { color: var(--jl-popover-foreground); }
+      .border-popover-foreground { border-color: var(--jl-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--jl-popover-foreground); }
+      .bg-primary { background-color: var(--jl-primary); }
+      .text-primary { color: var(--jl-primary); }
+      .border-primary { border-color: var(--jl-primary); }
+      .ring-primary { --tw-ring-color: var(--jl-primary); }
+      .bg-primary-foreground { background-color: var(--jl-primary-foreground); }
+      .text-primary-foreground { color: var(--jl-primary-foreground); }
+      .border-primary-foreground { border-color: var(--jl-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--jl-primary-foreground); }
+      .bg-muted { background-color: var(--jl-muted); }
+      .text-muted { color: var(--jl-muted); }
+      .border-muted { border-color: var(--jl-muted); }
+      .ring-muted { --tw-ring-color: var(--jl-muted); }
+      .bg-muted-foreground { background-color: var(--jl-muted-foreground); }
+      .text-muted-foreground { color: var(--jl-muted-foreground); }
+      .border-muted-foreground { border-color: var(--jl-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--jl-muted-foreground); }
+      .bg-border { background-color: var(--jl-border); }
+      .text-border { color: var(--jl-border); }
+      .border-border { border-color: var(--jl-border); }
+      .ring-border { --tw-ring-color: var(--jl-border); }
+      .bg-input { background-color: var(--jl-input); }
+      .text-input { color: var(--jl-input); }
+      .border-input { border-color: var(--jl-input); }
+      .ring-input { --tw-ring-color: var(--jl-input); }
+      .bg-ring { background-color: var(--jl-ring); }
+      .text-ring { color: var(--jl-ring); }
+      .border-ring { border-color: var(--jl-ring); }
+      .ring-ring { --tw-ring-color: var(--jl-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    
+    <script>lucide.createIcons();</script>
+<main data-editor-id="editor-node-mtmey76n-6">
+
+<div class="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+  <!-- Brand Header -->
+  <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+    <div class="flex items-center gap-3">
+      <img src="../assets/logo.png" alt="极联股份" class="h-10 w-auto object-contain">
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[var(--jl-blue-800)] to-[var(--jl-blue-600)] p-6 sm:p-8 lg:p-10 text-white mb-6 shadow-md">
+    <div class="relative z-10 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-6">
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center gap-2 text-sm text-white/80">
+          <i data-lucide="scan-search" class="w-4 h-4 flex-shrink-0"></i>
+          <span>GEO 官网诊断报告</span>
+        </div>
+        <h1 id="report-title" class="text-2xl sm:text-3xl font-bold text-white pl-6">飞柚</h1>
+        <p id="report-url" class="text-sm text-white/70 pl-6">检测页面: https://feiyougeo.cn/</p>
+      </div>
+      <div class="text-left sm:text-right self-end flex-shrink-0">
+        <div class="text-xs text-white/60">检测时间</div>
+        
+      <div class="text-sm font-semibold text-white/90" data-editor-id="editor-node-mtmgk6v5-3">2026-09-04 10:00:07</div></div>
+    </div>
+    <div class="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/3 blur-2xl"></div>
+  </section>
+
+  <!-- Executive Summary -->
+  <section id="executive-summary" class="bg-[var(--jl-card)] rounded-2xl p-6 sm:p-8 mb-5 shadow-sm border border-[var(--jl-border)]">
+    <div class="flex items-center gap-2 text-sm font-semibold text-[var(--jl-primary)] mb-3">
+      <i data-lucide="sparkles" class="w-4 h-4"></i>
+      <span>30 秒看懂这份报告</span>
+    </div>
+    <p class="text-lg sm:text-xl font-bold text-[var(--jl-neutral-900)] leading-relaxed">
+      您的网站能被百度搜到，但 AI 搜索（豆包/DeepSeek/元宝）几乎不会引用您——本次体检 46 项，2 项亮红灯，其中最要命的 3 个在下面。
+    </p>
+  </section>
+
+  <!-- Problem Cards -->
+  <section class="space-y-4 mb-6">
+
+    <article class="relative bg-[var(--jl-card)] rounded-2xl p-5 sm:p-6 shadow-sm border border-[var(--jl-border)] overflow-hidden">
+      <h2 class="text-lg font-bold text-[var(--state-error)] mb-4">问题①：llms.txt 大模型说明文件</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="rounded-xl p-4 bg-transparent border-l-4 border-[var(--state-error)] shadow-sm">
+          <div class="flex items-center gap-2 text-xs font-bold text-[var(--state-error-text)] mb-2">
+            <i data-lucide="file-search" class="w-3.5 h-3.5"></i>
+            <span>证据（您网站上的真实情况）</span>
+          </div>
+          <p class="text-sm text-[var(--jl-neutral-700)] leading-relaxed">未找到 llms.txt（GEO 关键文件缺失）</p>
+          <p class="text-xs text-[var(--jl-neutral-500)] mt-2 break-all">出自：全站多个页面</p>
+        </div>
+        <div class="rounded-xl p-4 bg-transparent border-l-4 border-[var(--state-warning)] shadow-sm">
+          <div class="flex items-center gap-2 text-xs font-bold text-[var(--state-warning-text)] mb-2">
+            <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+            <span>对您生意的影响</span>
+          </div>
+          <p class="text-sm text-[var(--jl-neutral-700)] leading-relaxed">没有llms.txt，AI无法快速理解你的站点结构和核心页面，被引用概率大幅降低，这是GEO最核心的文件</p>
+        </div>
+      </div>
+      <div class="rounded-xl p-4 bg-transparent border-l-4 border-[var(--state-success)] shadow-sm">
+        <div class="flex items-center gap-2 text-xs font-bold text-[var(--state-success-text)] mb-2">
+          <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i>
+          <span>修改示例（改前 → 改后）</span>
+        </div>
+        <p class="text-sm text-[var(--jl-neutral-700)] leading-relaxed">改前：当前状态：未找到 llms.txt（GEO 关键文件缺失）改后：在网站根目录创建llms.txt，列出站点简介、核心页面URL、服务内容、联系方式</p>
+      </div>
+    </article>
+  
+    <article class="relative bg-[var(--jl-card)] rounded-2xl p-5 sm:p-6 shadow-sm border border-[var(--jl-border)] overflow-hidden">
+      <h2 class="text-lg font-bold text-[var(--state-error)] mb-4">问题②：移动端友好</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="rounded-xl p-4 bg-transparent border-l-4 border-[var(--state-error)] shadow-sm">
+          <div class="flex items-center gap-2 text-xs font-bold text-[var(--state-error-text)] mb-2">
+            <i data-lucide="file-search" class="w-3.5 h-3.5"></i>
+            <span>证据（您网站上的真实情况）</span>
+          </div>
+          <p class="text-sm text-[var(--jl-neutral-700)] leading-relaxed">未设置 viewport meta 标签</p>
+          <p class="text-xs text-[var(--jl-neutral-500)] mt-2 break-all">出自：https://feiyougeo.cn/</p>
+        </div>
+        <div class="rounded-xl p-4 bg-transparent border-l-4 border-[var(--state-warning)] shadow-sm">
+          <div class="flex items-center gap-2 text-xs font-bold text-[var(--state-warning-text)] mb-2">
+            <i data-lucide="alert-triangle" class="w-3.5 h-3.5"></i>
+            <span>对您生意的影响</span>
+          </div>
+          <p class="text-sm text-[var(--jl-neutral-700)] leading-relaxed">没有移动端适配，70%以上的移动搜索流量会流失，AI和搜索引擎都会优先推荐移动端友好的站点</p>
+        </div>
+      </div>
+      <div class="rounded-xl p-4 bg-transparent border-l-4 border-[var(--state-success)] shadow-sm">
+        <div class="flex items-center gap-2 text-xs font-bold text-[var(--state-success-text)] mb-2">
+          <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i>
+          <span>修改示例（改前 → 改后）</span>
+        </div>
+        <p class="text-sm text-[var(--jl-neutral-700)] leading-relaxed"></p>
+      </div>
+    </article>
+  
+  </section>
+
+  <!-- Technical Details -->
+  <details class="group mb-8">
+    <summary class="cursor-pointer list-none bg-[var(--jl-card)] rounded-2xl p-5 sm:p-6 shadow-sm border border-[var(--jl-border)] flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-[var(--jl-radius-large)] bg-[var(--jl-blue-50)] text-[var(--jl-primary)] flex items-center justify-center">
+          <i data-lucide="settings-2" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h2 class="text-base sm:text-lg font-bold text-[var(--jl-neutral-900)]">技术明细</h2>
+          <p class="text-xs text-[var(--jl-muted-foreground)]">46 项全量打分表与检测证据，点击展开</p>
+        </div>
+      </div>
+      <i data-lucide="chevron-down" class="w-5 h-5 text-[var(--jl-neutral-500)] transition-transform group-open:rotate-180"></i>
+    </summary>
+    <div class="pt-5 space-y-6">
+
+      <!-- Total Score -->
+      <section id="total-score" class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div class="lg:col-span-1 bg-[var(--jl-card)] rounded-2xl p-6 text-center shadow-sm border border-[var(--jl-border)]">
+          <div class="text-5xl font-extrabold text-[var(--state-warning)] leading-none">72.1</div>
+          <div class="text-sm text-[var(--jl-neutral-500)] mt-2">总分 (0-100)</div>
+          <div class="mt-4 inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full text-lg font-bold text-white bg-[var(--state-warning)]">
+            C 级
+          </div>
+        </div>
+        <div class="lg:col-span-2 bg-[var(--jl-card)] rounded-2xl p-6 shadow-sm border border-[var(--jl-border)]">
+          <h3 class="text-sm font-semibold text-[var(--jl-neutral-700)] mb-4">检测概览</h3>
+          <div class="grid grid-cols-4 gap-3 text-center">
+            <div class="rounded-xl p-3 bg-[var(--jl-muted)]">
+              <div class="text-2xl font-bold text-[var(--jl-neutral-700)]">46</div>
+              <div class="text-xs text-[var(--jl-neutral-500)]">总检查项</div>
+            </div>
+            <div class="rounded-xl p-3 bg-[var(--state-success-bg)] border border-[var(--state-success)]/10">
+              <div class="text-2xl font-bold text-[var(--state-success)]">23</div>
+              <div class="text-xs text-[var(--state-success-text)]">通过</div>
+            </div>
+            <div class="rounded-xl p-3 bg-[var(--state-warning-bg)] border border-[var(--state-warning)]/10">
+              <div class="text-2xl font-bold text-[var(--state-warning)]">21</div>
+              <div class="text-xs text-[var(--state-warning-text)]">警告</div>
+            </div>
+            <div class="rounded-xl p-3 bg-[var(--state-error-bg)] border border-[var(--state-error)]/10">
+              <div class="text-2xl font-bold text-[var(--state-error)]">2</div>
+              <div class="text-xs text-[var(--state-error-text)]">失败</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Dimension Scores -->
+      <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+
+        <div class="bg-[var(--jl-card)] rounded-2xl p-5 shadow-sm border border-[var(--jl-border)]">
+          <div class="flex justify-between items-center mb-3">
+            <span class="text-sm font-semibold text-[var(--jl-neutral-700)]">技术可抓取性</span>
+            <span class="text-xl font-bold text-[var(--jl-neutral-900)]">73.1</span>
+          </div>
+          <div class="h-2 rounded-full bg-[var(--jl-neutral-200)] overflow-hidden">
+            <div class="h-full rounded-full" style="width: 73.1%; background-color: var(--state-warning);"></div>
+          </div>
+          <div class="mt-3 text-xs text-[var(--jl-neutral-500)]">通过 8 · 警告 3 · 失败 2</div>
+        </div>
+  
+        <div class="bg-[var(--jl-card)] rounded-2xl p-5 shadow-sm border border-[var(--jl-border)]">
+          <div class="flex justify-between items-center mb-3">
+            <span class="text-sm font-semibold text-[var(--jl-neutral-700)]">AI友好度专项</span>
+            <span class="text-xl font-bold text-[var(--jl-neutral-900)]">72.7</span>
+          </div>
+          <div class="h-2 rounded-full bg-[var(--jl-neutral-200)] overflow-hidden">
+            <div class="h-full rounded-full" style="width: 72.7%; background-color: var(--state-warning);"></div>
+          </div>
+          <div class="mt-3 text-xs text-[var(--jl-neutral-500)]">通过 5 · 警告 6 · 失败 0</div>
+        </div>
+  
+        <div class="bg-[var(--jl-card)] rounded-2xl p-5 shadow-sm border border-[var(--jl-border)]">
+          <div class="flex justify-between items-center mb-3">
+            <span class="text-sm font-semibold text-[var(--jl-neutral-700)]">内容质量与结构化</span>
+            <span class="text-xl font-bold text-[var(--jl-neutral-900)]">68.8</span>
+          </div>
+          <div class="h-2 rounded-full bg-[var(--jl-neutral-200)] overflow-hidden">
+            <div class="h-full rounded-full" style="width: 68.8%; background-color: var(--state-warning);"></div>
+          </div>
+          <div class="mt-3 text-xs text-[var(--jl-neutral-500)]">通过 3 · 警告 5 · 失败 0</div>
+        </div>
+  
+        <div class="bg-[var(--jl-card)] rounded-2xl p-5 shadow-sm border border-[var(--jl-border)]">
+          <div class="flex justify-between items-center mb-3">
+            <span class="text-sm font-semibold text-[var(--jl-neutral-700)]">权威与信任信号</span>
+            <span class="text-xl font-bold text-[var(--jl-neutral-900)]">71.4</span>
+          </div>
+          <div class="h-2 rounded-full bg-[var(--jl-neutral-200)] overflow-hidden">
+            <div class="h-full rounded-full" style="width: 71.4%; background-color: var(--state-warning);"></div>
+          </div>
+          <div class="mt-3 text-xs text-[var(--jl-neutral-500)]">通过 3 · 警告 4 · 失败 0</div>
+        </div>
+  
+        <div class="bg-[var(--jl-card)] rounded-2xl p-5 shadow-sm border border-[var(--jl-border)]">
+          <div class="flex justify-between items-center mb-3">
+            <span class="text-sm font-semibold text-[var(--jl-neutral-700)]">商业转化与决策内容</span>
+            <span class="text-xl font-bold text-[var(--jl-neutral-900)]">78.6</span>
+          </div>
+          <div class="h-2 rounded-full bg-[var(--jl-neutral-200)] overflow-hidden">
+            <div class="h-full rounded-full" style="width: 78.6%; background-color: var(--state-success);"></div>
+          </div>
+          <div class="mt-3 text-xs text-[var(--jl-neutral-500)]">通过 4 · 警告 3 · 失败 0</div>
+        </div>
+  
+      </section>
+
+      <!-- Scoring Logic -->
+      <section class="bg-[var(--jl-card)] rounded-2xl p-6 shadow-sm border border-[var(--jl-border)]">
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-5 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          打分逻辑说明
+        </h3>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div>
+            <h4 class="text-sm font-semibold text-[var(--jl-neutral-700)] mb-3">一、维度权重与得分</h4>
+            <div class="overflow-x-auto rounded-xl border border-[var(--jl-border)]">
+              <table class="w-full text-sm">
+                <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+                  <tr>
+                    <th class="px-4 py-2.5 text-left font-medium">维度</th>
+                    <th class="px-4 py-2.5 text-center font-medium">权重</th>
+                    <th class="px-4 py-2.5 text-center font-medium">检查项</th>
+                    <th class="px-4 py-2.5 text-center font-medium">得分</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[var(--jl-border)]">
+                  <tr><td class="px-4 py-2.5 text-[var(--jl-neutral-700)]">技术可抓取性</td><td class="px-4 py-2.5 text-center font-semibold text-[var(--jl-neutral-900)]">30%</td><td class="px-4 py-2.5 text-center text-[var(--jl-neutral-500)]">13 项</td><td class="px-4 py-2.5 text-center font-bold text-[var(--state-warning)]">73.1</td></tr>
+                  <tr><td class="px-4 py-2.5 text-[var(--jl-neutral-700)]">AI友好度专项</td><td class="px-4 py-2.5 text-center font-semibold text-[var(--jl-neutral-900)]">30%</td><td class="px-4 py-2.5 text-center text-[var(--jl-neutral-500)]">11 项</td><td class="px-4 py-2.5 text-center font-bold text-[var(--state-warning)]">72.7</td></tr>
+                  <tr><td class="px-4 py-2.5 text-[var(--jl-neutral-700)]">内容质量与结构化</td><td class="px-4 py-2.5 text-center font-semibold text-[var(--jl-neutral-900)]">20%</td><td class="px-4 py-2.5 text-center text-[var(--jl-neutral-500)]">8 项</td><td class="px-4 py-2.5 text-center font-bold text-[var(--state-warning)]">68.8</td></tr>
+                  <tr><td class="px-4 py-2.5 text-[var(--jl-neutral-700)]">权威与信任信号</td><td class="px-4 py-2.5 text-center font-semibold text-[var(--jl-neutral-900)]">15%</td><td class="px-4 py-2.5 text-center text-[var(--jl-neutral-500)]">7 项</td><td class="px-4 py-2.5 text-center font-bold text-[var(--state-warning)]">71.4</td></tr>
+                  <tr><td class="px-4 py-2.5 text-[var(--jl-neutral-700)]">商业转化与决策内容</td><td class="px-4 py-2.5 text-center font-semibold text-[var(--jl-neutral-900)]">5%</td><td class="px-4 py-2.5 text-center text-[var(--jl-neutral-500)]">7 项</td><td class="px-4 py-2.5 text-center font-bold text-[var(--jl-blue-500)]">78.6</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="text-xs text-[var(--jl-neutral-400)] mt-2">总分 = Σ(各维度得分 × 维度权重)</p>
+          </div>
+          <div>
+            <h4 class="text-sm font-semibold text-[var(--jl-neutral-700)] mb-3">二、单项计分规则</h4>
+            <div class="grid grid-cols-4 gap-2 mb-5">
+              <div class="rounded-xl p-3 text-center bg-[var(--state-success-bg)] border border-[var(--state-success)]/10">
+                <div class="text-lg font-bold text-[var(--state-success)]">1分</div>
+                <div class="text-xs text-[var(--state-success-text)]">通过</div>
+              </div>
+              <div class="rounded-xl p-3 text-center bg-[var(--state-warning-bg)] border border-[var(--state-warning)]/10">
+                <div class="text-lg font-bold text-[var(--state-warning)]">0.5分</div>
+                <div class="text-xs text-[var(--state-warning-text)]">警告</div>
+              </div>
+              <div class="rounded-xl p-3 text-center bg-[var(--state-error-bg)] border border-[var(--state-error)]/10">
+                <div class="text-lg font-bold text-[var(--state-error)]">0分</div>
+                <div class="text-xs text-[var(--state-error-text)]">失败</div>
+              </div>
+              <div class="rounded-xl p-3 text-center bg-[var(--jl-muted)] border border-[var(--jl-border)]">
+                <div class="text-lg font-bold text-[var(--jl-neutral-500)]">--</div>
+                <div class="text-xs text-[var(--jl-neutral-600)]">未检查</div>
+              </div>
+            </div>
+            <h4 class="text-sm font-semibold text-[var(--jl-neutral-700)] mb-3">三、等级划分标准</h4>
+            <div class="grid grid-cols-5 gap-2">
+              <div class="rounded-lg p-2 text-center bg-[var(--state-success-bg)] border border-[var(--state-success)]/10">
+                <div class="text-base font-bold text-[var(--state-success)]">A</div>
+                <div class="text-[10px] text-[var(--state-success-text)]">90-100</div>
+              </div>
+              <div class="rounded-lg p-2 text-center bg-[var(--jl-blue-50)] border border-[var(--jl-blue-200)]">
+                <div class="text-base font-bold text-[var(--jl-blue-500)]">B</div>
+                <div class="text-[10px] text-[var(--jl-blue-700)]">75-89</div>
+              </div>
+              <div class="rounded-lg p-2 text-center bg-[var(--state-warning-bg)] border border-[var(--state-warning)]/10">
+                <div class="text-base font-bold text-[var(--state-warning)]">C</div>
+                <div class="text-[10px] text-[var(--state-warning-text)]">60-74</div>
+              </div>
+              <div class="rounded-lg p-2 text-center bg-[var(--state-orange-bg)] border border-[var(--state-orange-bg)]">
+                <div class="text-base font-bold text-[var(--state-orange)]">D</div>
+                <div class="text-[10px] text-[var(--state-orange-text)]">40-59</div>
+              </div>
+              <div class="rounded-lg p-2 text-center bg-[var(--state-error-bg)] border border-[var(--state-error)]/10">
+                <div class="text-base font-bold text-[var(--state-error)]">F</div>
+                <div class="text-[10px] text-[var(--state-error-text)]">0-39</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          CMS诊断与接手评估
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>CMS指纹识别</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未能识别CMS类型（可能为全定制开发）
+                <div>无meta generator标签、无特征路径、无HTML特征匹配。建议人工排查技术栈</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>通过特征文件和meta标签识别CMS类型，评估是否适合接手整改</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>识别CMS类型可判断技术栈是否适合接手整改，是否能灵活修改URL/结构/内容，以及是否存在已知安全风险</div><div><b>缺失影响：</b>无法识别CMS类型，难以判断技术栈是否适合接手整改，也无法针对性给出优化方案</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>查看页面源代码中的generator标签、特征文件路径(如/wp-login.php、/dede/)、cookie名称等</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>识别为常见CMS（WordPress/帝国等），技术栈成熟，二次开发友好，可灵活整改</div>
+        <div><b>普通：</b>识别为SaaS建站平台（凡科/建站ABC等），整改受平台限制，需评估是否能获取编辑权限</div>
+        <div><b>未完成：</b>无法识别CMS类型（可能为全定制开发），需进一步排查技术栈</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>后台路径暴露检测</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未发现暴露的后台路径
+                <div>扫描了12个常见路径，均为404或重定向</div>
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>后台路径暴露存在被暴力破解或扫描攻击的风险。接手整改前需评估后台安全性</div><div><b>缺失影响：</b>后台路径可公开访问，存在被暴力破解或扫描攻击的风险，安全隐患大</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在浏览器中输入域名+/admin、/dede、/wp-admin等路径，看是否能直接打开后台登录页</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>常见后台路径均返回404或不可访问，后台有IP限制或二次验证</div>
+        <div><b>普通：</b>后台路径返回403禁止访问，或登录页有验证码/频率限制</div>
+        <div><b>未完成：</b>后台登录页可公开访问，无验证码/频率限制，存在被暴力破解风险</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Sampled Pages -->
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-2 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-blue-400)]"></span>
+          多页面抽样覆盖（共 12 个内页）
+        </h3>
+        <p class="text-xs text-[var(--jl-neutral-500)] mb-4">除首页外，按 产品/方案 &gt; 案例 &gt; 资讯 &gt; 关于 的优先级抽样抓取内页；断链检测、Title/Description唯一性、关键词蚕食基于这些页面跨页分析</p>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[700px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium w-12">#</th>
+                <th class="text-left px-4 py-3 font-medium">页面标题</th>
+                <th class="text-left px-4 py-3 font-medium">URL</th>
+                <th class="text-center px-4 py-3 font-medium">状态</th>
+                <th class="text-center px-4 py-3 font-medium">大小</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">1</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">GEO优化|AI排名优化案例-北大青鸟</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/228.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">117KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">2</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">汇川技术GEO优化案例|GEO优化|AI排名优化</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/230.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">96KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">3</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">方太GEO优化案例：AI问答排名|GEO优化公司_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/231.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">107KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">4</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">雅迪GEO优化案例|AI问答排名|GEO优化公司_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/232.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">106KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">5</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">哈曼卡顿 GEO 优化案例｜AI 排名优化落地成果｜企业GEO优化_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/233.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">103KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">6</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">圣奥科技 GEO 优化案例｜办公家具 AI 排名优化成果_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/234.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">106KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">7</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">捷安特 GEO 优化案例｜AI 排名优化成果｜GEO优化_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/235.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">102KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">8</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">光威鱼竿 GEO 优化案例｜AI 排名优化成果｜飞柚GEO服务_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/236.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">125KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">9</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">青岛一缆GEO优化案例｜工业电缆 AI 排名优化｜飞柚GEO 服务_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/237.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">109KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">10</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">美的饮水机 GEO 优化案例｜家电 AI 排名优化｜飞柚GEO 服务_极联股份</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/fuwuanli/238.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">129KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">11</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">GEO优化技巧：技术优化案例实战干货深度解读分析 | 飞柚GEO</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/geoganhuozixun.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">103KB</td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">12</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-neutral-900)] max-w-xs break-words">AI优化排名案例解析丨如何助力企业提升搜索排名-飞柚GEO</td>
+                <td class="text-left px-4 py-2.5 text-[var(--jl-primary)] max-w-sm break-all text-xs">https://feiyougeo.cn/index.php/article/geoganhuozixun/259.html</td>
+                <td class="text-center px-4 py-2.5 font-semibold text-[var(--state-success)]">200</td>
+                <td class="text-center px-4 py-2.5 text-[var(--jl-neutral-500)] whitespace-nowrap">144KB</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          待优化清单
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>robots.txt</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">robots.txt 存在，未封禁 AI 爬虫，但未引用 sitemap 地址
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>检查robots.txt，删除针对GPTBot/ClaudeBot/Google-Extended/Bytespider等AI爬虫的Disallow规则</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>robots.txt 决定 AI 爬虫能不能抓你的站。另外，在robots.txt中引用sitemap，能让搜索引擎和AI爬虫自动发现你的sitemap，提升收录效率</div><div><b>缺失影响：</b>robots.txt封禁AI爬虫，等于主动把自己排除在AI搜索之外，用户问AI时完全不会提到你的品牌</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/robots.txt，查看是否有针对 GPTBot/ClaudeBot/Google-Extended/Bytespider 的 Disallow 规则，以及最后是否有 Sitemap: 行</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>robots.txt 存在，明确允许所有主流 AI 爬虫，引用了 sitemap 地址，规则清晰无歧义</div>
+        <div><b>普通：</b>robots.txt 存在，未封禁主流 AI 爬虫，但未引用 sitemap 地址</div>
+        <div><b>未完成：</b>robots.txt 不存在，或封禁了主流 AI 爬虫</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>Meta Description-描述标签质量</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">描述长度合理（95字符）但缺少行动号召
+                <div>描述: 飞柚GEO（高新技术企业+专精特新企业）：业务包括GEO优化、AI SEO优化、AI搜索优化、deepseek优化等，600人技术团队，在深圳/上海/北京/广州等 20+城市提供本地化服务。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>Description控制在70-160字符，包含核心关键词和行动号召，准确概括页面内容</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>Description 是 AI 生成摘要和搜索结果描述的重要来源。好的描述能让 AI 准确理解页面内容，提升被摘为答案的概率，同时影响搜索结果点击率</div><div><b>缺失影响：</b>没有Description，AI只能从页面随机摘取内容做摘要，可能抓到大段导航或无关文字，严重影响展示效果</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，搜索 name=&quot;description&quot;，看 content 里是否用自然语言概括了页面价值，是否有&#x27;了解更多&#x27;&#x27;免费咨询&#x27;等行动号召</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每页唯一描述，80-160字符，含核心关键词+独特卖点+行动号召，自然不堆砌，与页面内容强相关</div>
+        <div><b>普通：</b>有描述且长度合理，但缺少行动号召或卖点不够突出</div>
+        <div><b>未完成：</b>缺少 description，或描述过短（&lt;50字符）无信息量</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>llms.txt 大模型说明文件</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-error-bg)] text-[var(--state-error-text)] border border-[var(--state-error)]/10"><i data-lucide="x" class="w-3 h-3 mr-1"></i>失败</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未找到 llms.txt（GEO 关键文件缺失）
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>在网站根目录创建llms.txt，列出站点简介、核心页面URL、服务内容、联系方式</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>llms.txt 是 GEO 的核心文件，专门给大模型看的&#x27;站点说明书&#x27;。有了它，AI 能快速理解你是做什么的、有哪些重要页面，大幅提升被引用概率</div><div><b>缺失影响：</b>没有llms.txt，AI无法快速理解你的站点结构和核心页面，被引用概率大幅降低，这是GEO最核心的文件</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/llms.txt，看是否有纯文本的站点介绍、核心页面链接列表和更新时间</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>llms.txt 存在，包含清晰的站点简介、分类核心页面链接（10+）、服务说明、联系方式和最后更新时间</div>
+        <div><b>普通：</b>llms.txt 存在，有站点简介和部分页面链接，但内容较简单或更新时间缺失</div>
+        <div><b>未完成：</b>llms.txt 不存在（GEO 关键文件缺失）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>移动端友好</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-error-bg)] text-[var(--state-error-text)] border border-[var(--state-error)]/10"><i data-lucide="x" class="w-3 h-3 mr-1"></i>失败</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未设置 viewport meta 标签
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>采用响应式设计，确保移动端正常显示，通过Google移动端友好测试</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>超过 70% 的 AI 搜索和传统搜索来自移动端，没有移动端适配的站点会被 AI 和搜索引擎降权</div><div><b>缺失影响：</b>没有移动端适配，70%以上的移动搜索流量会流失，AI和搜索引擎都会优先推荐移动端友好的站点</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码搜索 viewport；或用浏览器手机模式打开网站，看是否有横向滚动、字体过小、按钮重叠</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 viewport 设置，响应式布局，移动端无横向滚动，字体 ≥14px，点击区域 ≥44px，通过 Google 移动端友好测试</div>
+        <div><b>普通：</b>有 viewport 设置，基本可用，但可能存在字体偏小或间距问题</div>
+        <div><b>未完成：</b>未设置 viewport meta 标签，或移动端布局严重错乱</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>.well-known AI 发现文件</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未找到 .well-known AI 发现文件
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>在/.well-known/目录下创建ai-plugin.json或类似发现文件，声明站点能力</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>.well-known 目录是 AI 自动发现网站能力的标准入口。ai-plugin.json 让 ChatGPT 等 AI 助手能自动识别和调用你的网站信息</div><div><b>缺失影响：</b>没有.well-known发现文件，ChatGPT等AI助手无法自动识别你的站点能力，错失AI插件式曝光机会</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/.well-known/ai-plugin.json，看是否返回 JSON 格式的插件描述文件</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>存在 ai-plugin.json，包含完整的 name/description/api/logo/contact 字段，且指向 llms.txt 或 OpenAPI 接口</div>
+        <div><b>普通：</b>存在 ai-plugin.json 或 llms-full.txt 中的一个，但字段不完整</div>
+        <div><b>未完成：</b>未找到任何 .well-known AI 发现文件</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>网址规范化（canonical）</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未设置 canonical 标签
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>在每页head中添加canonical标签，指向该页面的首选URL</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>canonical 告诉 AI 同一个内容的多个 URL（带不带 www、尾斜杠、参数）哪个是正版，避免权重分散和重复内容判定</div><div><b>缺失影响：</b>没有canonical，同一内容多个URL会分散权重，AI可能选到非首选页面，甚至判定为重复内容降权</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看网页源代码，搜索 rel=&quot;canonical&quot;，看是否有指向当前页面的规范 URL</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每页都有 canonical 标签，指向当前页面的规范 URL，与实际 URL 一致，无跨域指向</div>
+        <div><b>普通：</b>首页有 canonical 标签，但内页可能缺失或指向不够精确</div>
+        <div><b>未完成：</b>未设置 canonical，或 canonical 指向错误页面（如全部指向首页）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>AI 答案格式优化</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">仅包含 1 种结构: 列表，建议增加列表/表格/FAQ
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>关键内容用列表（ul/ol）、表格（table）、FAQ结构呈现，便于AI直接摘取答案</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>AI 生成答案时偏好结构化内容。列表、表格、定义、FAQ 这些格式能被 AI 直接摘取，比大段文字更容易成为搜索答案</div><div><b>缺失影响：</b>内容全是大段文字，AI难以直接摘取成答案，用户问具体问题时，AI更愿意引用有列表/表格/FAQ的页面</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面内容，看是否有编号列表、表格、定义列表、FAQ问答等 AI 容易直接摘取成答案的格式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>同时包含列表+表格+定义/FAQ等多种结构，每个核心知识点都有清晰的结构化呈现，可直接被AI摘取</div>
+        <div><b>普通：</b>有1-2种结构化元素（如只有列表），但缺少表格或FAQ等其他格式</div>
+        <div><b>未完成：</b>内容全是大段文字，缺少列表、表格、FAQ等任何 AI 易摘取结构</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>NLP/大模型语义友好度</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容整体结构化且数据丰富，但部分段落冗长、概念未先定义，且存在模糊指代，影响AI语义解析效率。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。内容整体结构化且数据丰富，但部分段落冗长、概念未先定义，且存在模糊指代，影响AI语义解析效率。。问题: &#x27;GEO优化&#x27;和&#x27;AI排名优化&#x27;等核心概念未在开头定义，直接使用，可能造成理解歧义。；部分句子过长，如&#x27;北大青鸟是北大直属IT职业教育品牌...&#x27;一段，信息密度高但结构松散，建议拆分。；&#x27;优化后，品牌在AI问答场景曝光量预计月增70%+...&#x27;中&#x27;优化后&#x27;指代不明确，未说明具体时间范围或优化周期。；&#x27;已有数百家品牌客户选择飞柚...&#x27;中&#x27;飞柚&#x27;未介绍，突然出现，指代不清。；&#x27;获取资深GEO优化总监1对1服务...&#x27;等营销语句与正文内容混杂，可能干扰AI对核心信息的提取。；部分数据如&#x27;月触达60万+用户&#x27;未注明统计口径或来源，降低可信度。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>专业概念首次出现先给定义，用具体名称替代模糊指代，一句话讲清一个点，事实写全主语+结论+依据</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>结构标签解决&#x27;形&#x27;，这项解决&#x27;神&#x27;。语义清晰的内容大模型能准确提取事实；首页是导航页，需在内容页检查正文语义质量</div><div><b>缺失影响：</b>正文语义混乱、概念不定义、指代不明，大模型难以准确提取事实，摘取时容易断章取义或放弃引用</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在文章/案例/产品详情页通读正文：专业概念首次出现是否有定义；是否有&#x27;它/这个/那种&#x27;等模糊指代；一段话是否只讲一个点；事实是否&#x27;主语+结论+依据&#x27;完整</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>概念先定义后展开，实体名称明确无模糊指代，句子简洁，事实陈述完整（主语+结论+依据），AI可直接逐句摘取</div>
+        <div><b>普通：</b>整体可读，但部分段落冗长或存在指代不清，需要AI二次归纳才能引用</div>
+        <div><b>未完成：</b>大段绕弯文字、概念无定义、指代混乱、因果不清，AI无法准确提取事实</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内容原创性与时效性</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">仅 0/13 个内容页标注了时间。内容为营销案例展示，含具体数据和案例，但整体为宣传性描述，原创观点和深度分析有限。
+                <div>未标注页面: https://feiyougeo.cn/, https://feiyougeo.cn/index.php/article/fuwuanli/228.html, https://feiyougeo.cn/index.php/article/fuwuanli/230.html。原创性: 内容为营销案例展示，含具体数据和案例，但整体为宣传性描述，原创观点和深度分析有限。。问题: 内容以企业宣传和优化效果展示为主，缺乏独立第三方视角或深度行业分析；部分数据（如就业率、曝光量增长）为品牌自述，未提供可验证来源；结构类似SEO/GEO服务案例模板，通用性较强，原创性一般。检查页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>在文章/产品页标注发布时间和最后更新时间，使用ISO 8601格式</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>AI 偏好新鲜且有独特价值的内容。更新时间让 AI 判断内容是否过时；原创性决定 AI 是否认为该内容比其他来源更值得引用，拼凑/AI水文会被降权</div><div><b>缺失影响：</b>没有更新时间，AI无法判断内容是否过时；内容若是全网通用套话/AI水文、无原创价值，AI会优先引用有独到观点的竞品</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>逐页看是否有发布/最后更新时间；通读内容判断是否有自己的观点、一手数据、原创案例，还是全网通用套话</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>全部内容页标注发布与更新时间（近3个月，ISO 8601格式），且内容含独到观点、一手数据或原创案例</div>
+        <div><b>普通：</b>部分页面有时间标注但更新较久（超6个月），或内容原创性一般、部分为通用资料整理</div>
+        <div><b>未完成：</b>多数页面未标注时间，且内容为全网通用套话/AI水文，无原创观点和一手数据</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>FAQ 问答结构</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有 FAQ 板块但缺少 FAQPage 结构化标记
+                <div>检测到FAQ板块结构</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>整理客户高频问题，创建FAQ板块，每个问题用h3，答案紧跟其后，并加FAQPage Schema</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>FAQ 是 AI 摘取答案的最高效格式。用户问&#x27;XX怎么样&#x27;&#x27;XX多少钱&#x27;时，AI 会优先从 FAQ 中提取答案</div><div><b>缺失影响：</b>没有FAQ，用户问具体问题时AI没有现成答案可摘，FAQ是GEO转化率最高的内容形式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看页面是否有&#x27;常见问题&#x27;板块，每个问题是否有完整答案；右键查看源代码是否有 FAQPage 结构化数据</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 FAQ 板块（≥5个问答），每个问题有完整答案，且有 FAQPage 结构化数据标记，覆盖客户高频问题</div>
+        <div><b>普通：</b>有 FAQ 板块但缺少结构化标记，或问答数量较少（&lt;5个）</div>
+        <div><b>未完成：</b>未检测到任何 FAQ 问答结构</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内部链接布局</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">11/28 个链接锚文本无意义
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>将&#x27;点击这里&#x27;&#x27;了解更多&#x27;改为描述性锚文本，如&#x27;查看GEO优化服务&#x27;&#x27;阅读客户案例&#x27;</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>锚文本告诉 AI 被链接页面是关于什么的。描述性锚文本能帮助 AI 理解页面间关系，提升目标页面的关键词相关性</div><div><b>缺失影响：</b>锚文本全是&#x27;点击这里&#x27;，AI无法判断被链接页面的主题，内页关键词权重传递失效</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面，看内部链接的文字是&#x27;点击这里&#x27;&#x27;了解更多&#x27;还是具体的&#x27;GEO优化服务&#x27;&#x27;客户案例&#x27;等描述性文字</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>几乎所有内部链接都使用描述性锚文本（含关键词），无&#x27;点击这里&#x27;类无意义链接，锚文本与目标页面强相关</div>
+        <div><b>普通：</b>大部分链接有描述性，但存在少量（&lt;40%）&#x27;了解更多&#x27;&#x27;详情&#x27;类通用锚文本</div>
+        <div><b>未完成：</b>大量内部链接使用&#x27;点击这里&#x27;&#x27;了解更多&#x27;等无意义锚文本（≥40%）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>客户评价与证言</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未检测到客户评价或客户 Logo 展示
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>添加客户评价、客户Logo墙、成功案例、数据成果（服务XX家客户、满意度XX%）</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>客户评价和案例是 AI 判断品牌权威性的重要社会证明。有真实客户背书的品牌更容易被 AI 推荐为可靠选择</div><div><b>缺失影响：</b>没有客户评价和案例，AI缺少社会证明信号，用户决策时没有参考，转化率低</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面，看是否有客户 Logo 墙、客户评价/证言、客户案例详情（含客户名称、行业、成果数据）</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有客户 Logo 墙（≥10个知名客户）+ 详细客户案例（含背景/挑战/方案/成果数据）+ 客户证言，信息真实可验证</div>
+        <div><b>普通：</b>有客户 Logo 展示，但缺少详细案例或评价；或有案例但客户知名度不高</div>
+        <div><b>未完成：</b>未检测到任何客户 Logo、评价或案例展示</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>E-E-A-T 内容可信度信号</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容有具体数据和案例，但作者信息缺失，经验描述为第三方优化总监而非内容作者，关键数据未标注来源。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。内容有具体数据和案例，但作者信息缺失，经验描述为第三方优化总监而非内容作者，关键数据未标注来源。（author:无、experience:有、source:无）。问题: 未检测到作者标签，无法确认内容作者身份和资质；正文中的优化总监介绍为服务提供方，非内容作者，不能作为作者资质；关键数据如就业率、曝光量等未标注具体来源和统计时间；内容为营销推广文案，缺乏第一手经验或实测描述</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>为内容标注作者姓名与专业资质，补充第一手经验/实测/服务案例，关键数据标注来源，建立编辑审核机制</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>E-E-A-T是AI判断内容是否值得引用的核心依据。AI倾向引用有明确作者、专业资质、第一手经验、来源可查的内容，匿名通用文案可信度最低。首页是品牌导航页，E-E-A-T评估对象是内容页</div><div><b>缺失影响：</b>内容无作者署名、无第一手经验、无来源标注，AI无法判断专业可信度，会优先引用有明确专家背书的竞品内容</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在文章/案例/产品详情页检查：是否标注作者姓名及资质头衔；是否有&#x27;我们亲历/实测/服务过XX&#x27;等第一手经验；关键数据是否标注来源；是否有编辑或审核信息</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>内容页明确标注作者姓名+专业资质/头衔，有第一手经验或实测描述，关键数据标注来源，有编辑审核与更新机制，完整体现E-E-A-T</div>
+        <div><b>普通：</b>有作者署名但无资质说明，或部分体现经验但不系统，数据来源标注不全</div>
+        <div><b>未完成：</b>无作者信息、无经验描述、无来源标注，内容像匿名通用文案，无法建立信任</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>技术文档/API文档AI友好</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未检测到技术文档/API文档入口
+                <div>所有页面均未找到文档链接，B端客户和AI无法获取技术信息</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>技术文档采用清晰目录结构、代码示例、API说明，添加llms.txt引用，确保AI可抓取</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户和AI都高度依赖技术文档。文档结构清晰、可被AI抓取，能让AI在回答技术问题时引用你的文档，带来精准的技术流量</div><div><b>缺失影响：</b>技术文档不友好，开发者和技术决策者搜技术问题时找不到你，技术驱动的B端业务流失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>访问文档/API页面，看是否有侧边栏目录、代码块是否有语言高亮、是否有站内搜索、文档是否为静态HTML（非JS渲染）</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>文档站有完整侧边栏目录+面包屑，代码块有语言标记，有OpenAPI/Swagger规范，静态HTML可抓取，有搜索功能，llms.txt包含文档页</div>
+        <div><b>普通：</b>有基本文档结构和目录，但代码块缺少语言标记，或部分内容依赖JS渲染，或搜索功能不完善</div>
+        <div><b>未完成：</b>无技术文档，或文档为纯图片/JS渲染无法被AI抓取，或结构混乱无目录</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>问答型内容覆盖</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">网站覆盖了5个话题维度，但缺少安全/合规相关内容，且无FAQ结构化标记，FAQ板块数量有限，整体覆盖不够系统。
+                <div>规则检测覆盖: 对比/选型, 试用/体验, 价格/费用, 售后/支持, 部署/使用。板块: 3处FAQ板块。LLM判断缺失: 安全/合规。问题: 无FAQ结构化标记；缺少安全/合规话题内容；FAQ板块数量较少，可能不够全面</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>针对&#x27;多少钱&#x27;&#x27;怎么部署&#x27;&#x27;安全吗&#x27;&#x27;和XX比怎么样&#x27;等高意向问题创建问答内容</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户决策前会大量搜索&#x27;XX多少钱&#x27;&#x27;XX怎么部署&#x27;&#x27;XX安全吗&#x27;等问题。覆盖这些问答型内容能让AI直接引用你的答案，截胡高意向流量</div><div><b>缺失影响：</b>没有问答型内容，用户搜&#x27;多少钱&#x27;&#x27;怎么部署&#x27;&#x27;安全吗&#x27;等高意向问题时匹配不到，转化关键节点缺失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览网站FAQ、博客、帮助中心，统计覆盖了多少个客户高频问题（价格、部署方式、数据安全、合规认证、售后支持等），每个问题是否有完整答案</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>覆盖≥15个高频问题（价格/部署/安全/合规/售后等），每个问题有独立页面或FAQ结构化标记，答案完整含数据，有FAQPage Schema</div>
+        <div><b>普通：</b>覆盖5-10个高频问题，有FAQ板块但可能缺少结构化标记，或部分问题答案较简单</div>
+        <div><b>未完成：</b>无FAQ或问答型内容，或覆盖问题&lt;5个，答案不完整</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>面包屑导航</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有面包屑 DOM 但缺少结构化标记
+                <div>检查页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>在内页添加面包屑导航（首页 &gt; 分类 &gt; 详情），并标记BreadcrumbList Schema</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>面包屑帮 AI 理解页面在网站中的层级位置，同时能在搜索结果中显示面包屑路径，提升点击率</div><div><b>缺失影响：</b>没有面包屑，AI无法判断页面在站点中的层级位置，搜索结果也显示不了面包屑路径，点击率降低</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看内页顶部是否有&#x27;首页 &gt; 产品 &gt; XXX&#x27;的路径导航；右键查看源代码是否有 BreadcrumbList 结构化数据</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>内页有面包屑导航，且有 BreadcrumbList 结构化数据标记，路径层级清晰准确</div>
+        <div><b>普通：</b>有面包屑导航 DOM，但缺少 BreadcrumbList 结构化标记</div>
+        <div><b>未完成：</b>内页未检测到面包屑导航</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>搜索引擎/AI 平台验证</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未检测到搜索引擎站长平台验证标签
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>验证百度/Google/Bing站长平台，提交sitemap，监控收录和抓取异常</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>站长平台验证能让你主动提交 sitemap、查看收录情况、接收抓取异常通知，是 SEO 和 GEO 的基础操作</div><div><b>缺失影响：</b>没验证站长平台，无法主动提交sitemap和查看收录异常，问题发现滞后，收录速度慢</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，搜索 site-verification，看是否有百度、谷歌、必应等站长平台的验证标签</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>已验证百度+谷歌+必应等多个站长平台，已提交 sitemap，能查看收录和抓取数据</div>
+        <div><b>普通：</b>已验证至少1个主流站长平台（百度或谷歌）</div>
+        <div><b>未完成：</b>未检测到任何搜索引擎站长平台验证标签</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内容分块与逻辑组织</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容分块基本合理，但存在标题层级混乱、部分板块过长及主题偏离问题。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。内容分块基本合理，但存在标题层级混乱、部分板块过长及主题偏离问题。。问题: H1标题包含&#x27;GEO优化|AI排名优化案例-北大青鸟&#x27;，但正文开头是登录提示，与主题无关。；H2中&#x27;手机验证码登录&#x27;与内容主题无关，属于页面功能元素，不应作为内容标题。；H3标题&#x27;三、AI优化方案&#x27;和&#x27;四、优化收益&#x27;与正文中的&#x27;一、企业介绍&#x27;、&#x27;二、优化结果&#x27;编号不连续，且缺少&#x27;一、二&#x27;对应的H3标题，导致层级不清晰。；正文中&#x27;二、优化结果&#x27;部分内容过长，包含多个子主题（内容矩阵、知识图谱、AI引擎优化、信任网络、UGC、监测体系），但未细分小标题，导致单块内容臃肿。；&#x27;吴越亮&#x27;和&#x27;GEO优化总监&#x27;等人物介绍板块与前后内容衔接突兀，未明确归类。；&#x27;热门案例推荐&#x27;、&#x27;优化GEO(AI SEO)|&#x27;等H3标题与正文内容对应关系不明确，可能为导航或链接，不应作为内容标题。；正文中部分段落（如&#x27;二、优化结果&#x27;）包含大量数据和案例，但未按逻辑分块，阅读时容易迷失重点。；整体标题层级（H1-H3）与正文内容结构不完全匹配，存在标题与内容不对应的情况。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>每个小标题只讲一个要点，按是什么→为什么→怎么做组织板块顺序，过长板块继续拆分到可独立引用</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>好的分块让AI能按用户问题精准定位并整块摘取。首页是导航页，分块质量需在内容页上检查</div><div><b>缺失影响：</b>标题分块只是形式、块内内容东拉西扯，AI定位到小标题却提取不到连贯答案，无法整块引用</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在内容页逐个小标题检查其下内容是否都服务于该标题；块之间是否按&#x27;是什么→为什么→怎么做&#x27;递进；单个板块是否过长需要再拆分</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每个分块聚焦单一要点，块间逻辑递进清晰，单块长度适中，可独立成段被AI直接引用</div>
+        <div><b>普通：</b>分块基本合理，少数板块内容偏离主题或过长，整体仍可理解</div>
+        <div><b>未完成：</b>标题与内容不对应、逻辑跳跃混乱，或整篇无有效分块、大段文字堆砌</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>图片与多媒体优化</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">5/79 张图片缺少 alt
+                <div>缺失alt的图片类型: 模板装饰图3张、上传图片2张</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>重要图片（产品图、分类图、logo、案例图）添加描述性alt；装饰性小图标用alt=&quot;&quot;</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>图片 alt 让 AI 理解图片内容，也是图片搜索排名的基础。描述性文件名能进一步帮助搜索引擎和 AI 理解图片主题</div><div><b>缺失影响：</b>图片没有alt，AI看不懂图片内容，图片搜索流量全丢，无障碍访问也不合格</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，统计 &lt;img&gt; 标签的 alt 属性覆盖率，看重要图片是否有描述性 alt，文件名是 img1.jpg 还是 geo-optimization.png</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>≥80% 图片有描述性 alt（含关键词），文件名描述性（非 img1.jpg/纯数字），图片已压缩</div>
+        <div><b>普通：</b>50-80% 图片有 alt，但部分重要图片缺少或文件名不描述性</div>
+        <div><b>未完成：</b>&lt;50% 图片有 alt，或重要产品图完全没有 alt</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>社交平台存在感</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">社交平台较少: 微信
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>开通微信公众号、知乎、抖音等官方账号，在官网添加链接，保持内容同步更新</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>社交媒体账号是品牌实体的延伸信号。AI 会综合社交平台上的品牌讨论度和官方存在来判断品牌权威性</div><div><b>缺失影响：</b>没有社交平台账号，AI判断品牌存在感弱，品牌实体认知度低，推荐优先级下降</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>拉到页面底部，看是否有微信、微博、知乎、领英、抖音等社交媒体的官方账号链接或二维码</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 ≥3 个主流社交平台的官方认证账号（微信公众号+微博+知乎/领英），账号活跃，内容与官网联动</div>
+        <div><b>普通：</b>有 1-2 个社交平台链接，但可能账号不活跃或平台单一</div>
+        <div><b>未完成：</b>未检测到任何社交媒体链接或二维码</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>跨平台内容分发</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">品牌仅通过微信公众号进行内容分发，未发现知乎、行业媒体等其他平台的内容同步，且公众号内容是否规律更新及外链回官网情况未知。
+                <div>平台: 微信公众号。问题: 仅有一个内容分发平台，未达到核心平台覆盖要求；未发现知乎、行业媒体等平台的内容分发；公众号内容更新规律性及外链回官网情况需进一步确认</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>将官网内容同步分发到知乎、微信公众号、头条等平台，扩大品牌在AI训练数据中的覆盖</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>跨平台分发能扩大品牌在 AI 训练数据中的覆盖面，多平台一致的内容信号会强化 AI 对品牌权威性的判断</div><div><b>缺失影响：</b>没有跨平台分发，AI训练数据中你的品牌出现频次低，覆盖面窄，被提及概率小</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在知乎、微信公众号、行业媒体搜索品牌名或文章标题，看是否有同步发布的内容，且是否链接回官网</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>核心内容同步到≥3个平台（知乎+公众号+行业媒体），每篇都有外链回官网，平台账号与官网品牌一致</div>
+        <div><b>普通：</b>有1-2个平台的内容分发，但部分内容无外链回官网，或更新不规律</div>
+        <div><b>未完成：</b>无任何跨平台内容分发，内容仅存在于官网</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>转化引导与决策路径</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">页面提供多个CTA入口和结构化内容，但转化路径单一且缺乏分层引导，CTA话术与决策阶段匹配度一般。
+                <div>页面提供多个CTA入口和结构化内容，但转化路径单一且缺乏分层引导，CTA话术与决策阶段匹配度一般。（检测到9个CTA入口）。问题: 所有CTA均为&#x27;立即咨询&#x27;或&#x27;免费获取优化方案&#x27;，未根据用户决策阶段（了解、评估、选择）提供差异化引导，如案例下载、白皮书、试用等。；CTA位置集中在页面中后部，首屏无明确转化入口，用户需滚动较深才能看到联系引导。；页面内容以功能对比和公司实力展示为主，但缺少针对不同行业或场景的针对性内容，可能影响用户决策信心。；&#x27;免费获取优化方案&#x27;链接指向&#x27;#&#x27;，未明确表单或落地页，可能造成用户困惑。；在线咨询入口（&#x27;Hi, 我在线欢迎您来随时咨询&#x27;）为聊天组件，但未说明响应时间或服务方式，降低用户尝试意愿。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>按决策阶段设计分层CTA（科普页给资料下载、产品页给预约演示、高意向给咨询），提供多种低门槛联系入口</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端决策链长，需要在合适位置提供匹配决策阶段的引导。内容好但无下一步入口、或一上来就硬推销，都会让用户和AI找不到从了解到联系的路径</div><div><b>缺失影响：</b>内容讲得好却没有下一步入口，或一上来就硬推销，用户和AI都找不到从了解到联系的路径，高意向流量白白流失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>通读页面看是否有明确的下一步入口；判断CTA是否匹配当前内容阶段（科普页给资料、产品页给演示）；是否提供多种低门槛联系方式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>CTA与内容决策阶段匹配，提供分层转化路径（轻量资料→深度演示→直接咨询），入口清晰、话术自然不打扰，AI能识别服务承接方式</div>
+        <div><b>普通：</b>有CTA但形式单一，或位置/话术与决策阶段不完全匹配，转化路径不够顺滑</div>
+        <div><b>未完成：</b>无任何转化引导，或全程硬推销引发反感，用户找不到下一步联系路径</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>关键词蚕食检测</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">发现 1 对疑似关键词蚕食的页面（规则初筛，建议人工确认）
+                <div>「方太GEO优化案例：AI问答排名」↔「雅迪GEO优化案例AI问答排名」相似度75%</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>为每个页面分配差异化的核心关键词，主题相近的页面用canonical或内链锚文本区分主次，建立关键词矩阵</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>多个页面争夺同一关键词时，AI 和搜索引擎分不清该推荐哪页，可能都不引用或引用错误页面，整站该词排名互相拖后腿</div><div><b>缺失影响：</b>多个页面争夺同一关键词，AI分不清该引用哪页，可能都不引用，整站该词排名互相拖后腿</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>列出站内主要页面及核心关键词，对比是否有2个以上页面瞄准同一个词，标题和正文主题是否高度重叠</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>各页面 Title 主题清晰差异化，无高相似页面，形成明确关键词矩阵</div>
+        <div><b>普通：</b>存在少量主题相近页面，但已通过 canonical 或内链锚文本区分主次</div>
+        <div><b>未完成：</b>多个页面标题主题高度重叠，疑似互相蚕食且无主次区分</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          技术可抓取性
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>HTTPS 安全连接</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">已启用 HTTPS
+                
+                
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>HTTPS 是 AI 爬虫和搜索引擎的基础信任信号，未加密的站点会被降低抓取优先级和排名</div><div><b>缺失影响：</b>没有HTTPS，AI爬虫会降低站点信任度，搜索排名靠后，用户浏览器也会提示&#x27;不安全&#x27;，直接影响转化</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器打开网站，看地址栏是否有小锁图标；或访问 https:// 开头的网址看是否正常跳转</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>全站 HTTPS，证书有效期 &gt; 3 个月，支持 TLS 1.2+，HSTS 已开启</div>
+        <div><b>普通：</b>已启用 HTTPS，证书有效，但可能未开启 HSTS 或存在混合内容</div>
+        <div><b>未完成：</b>未启用 HTTPS，或证书已过期/不受信任</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>robots.txt</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">robots.txt 存在，未封禁 AI 爬虫，但未引用 sitemap 地址
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>检查robots.txt，删除针对GPTBot/ClaudeBot/Google-Extended/Bytespider等AI爬虫的Disallow规则</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>robots.txt 决定 AI 爬虫能不能抓你的站。另外，在robots.txt中引用sitemap，能让搜索引擎和AI爬虫自动发现你的sitemap，提升收录效率</div><div><b>缺失影响：</b>robots.txt封禁AI爬虫，等于主动把自己排除在AI搜索之外，用户问AI时完全不会提到你的品牌</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/robots.txt，查看是否有针对 GPTBot/ClaudeBot/Google-Extended/Bytespider 的 Disallow 规则，以及最后是否有 Sitemap: 行</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>robots.txt 存在，明确允许所有主流 AI 爬虫，引用了 sitemap 地址，规则清晰无歧义</div>
+        <div><b>普通：</b>robots.txt 存在，未封禁主流 AI 爬虫，但未引用 sitemap 地址</div>
+        <div><b>未完成：</b>robots.txt 不存在，或封禁了主流 AI 爬虫</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>sitemap.xml 站点地图</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">sitemap 存在，包含 108 个 URL
+                
+                
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>sitemap 告诉 AI 爬虫和搜索引擎你有哪些页面，加快收录速度，避免重要页面被漏掉</div><div><b>缺失影响：</b>没有sitemap，AI爬虫只能靠链接发现页面，重要页面可能长期不被收录，新内容收录极慢</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/sitemap.xml，看是否返回 XML 格式的页面列表，包含产品/案例/文章等核心页面 URL</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>sitemap 存在且格式规范，包含所有核心页面，按类型分 sitemap 索引，最后修改时间准确，已提交站长平台</div>
+        <div><b>普通：</b>sitemap 存在且可访问，包含主要页面，但可能未更新或未提交站长平台</div>
+        <div><b>未完成：</b>sitemap 不存在，或格式错误无法解析，或几乎不包含任何 URL</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>llms.txt 大模型说明文件</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-error-bg)] text-[var(--state-error-text)] border border-[var(--state-error)]/10"><i data-lucide="x" class="w-3 h-3 mr-1"></i>失败</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未找到 llms.txt（GEO 关键文件缺失）
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>在网站根目录创建llms.txt，列出站点简介、核心页面URL、服务内容、联系方式</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>llms.txt 是 GEO 的核心文件，专门给大模型看的&#x27;站点说明书&#x27;。有了它，AI 能快速理解你是做什么的、有哪些重要页面，大幅提升被引用概率</div><div><b>缺失影响：</b>没有llms.txt，AI无法快速理解你的站点结构和核心页面，被引用概率大幅降低，这是GEO最核心的文件</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/llms.txt，看是否有纯文本的站点介绍、核心页面链接列表和更新时间</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>llms.txt 存在，包含清晰的站点简介、分类核心页面链接（10+）、服务说明、联系方式和最后更新时间</div>
+        <div><b>普通：</b>llms.txt 存在，有站点简介和部分页面链接，但内容较简单或更新时间缺失</div>
+        <div><b>未完成：</b>llms.txt 不存在（GEO 关键文件缺失）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>.well-known AI 发现文件</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未找到 .well-known AI 发现文件
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>在/.well-known/目录下创建ai-plugin.json或类似发现文件，声明站点能力</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>.well-known 目录是 AI 自动发现网站能力的标准入口。ai-plugin.json 让 ChatGPT 等 AI 助手能自动识别和调用你的网站信息</div><div><b>缺失影响：</b>没有.well-known发现文件，ChatGPT等AI助手无法自动识别你的站点能力，错失AI插件式曝光机会</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览器访问 https://你的域名/.well-known/ai-plugin.json，看是否返回 JSON 格式的插件描述文件</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>存在 ai-plugin.json，包含完整的 name/description/api/logo/contact 字段，且指向 llms.txt 或 OpenAPI 接口</div>
+        <div><b>普通：</b>存在 ai-plugin.json 或 llms-full.txt 中的一个，但字段不完整</div>
+        <div><b>未完成：</b>未找到任何 .well-known AI 发现文件</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>页面可索引性</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">页面允许索引和抓取
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>noindex 标签会直接告诉 AI 和搜索引擎&#x27;不要收录这个页面&#x27;。很多站点因为测试时加了 noindex 忘了去掉，导致整站不被收录</div><div><b>缺失影响：</b>页面被noindex，等于告诉AI和搜索引擎&#x27;不要收录我&#x27;，核心页面会直接从搜索结果中消失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看网页源代码，搜索 noindex 或 robots；或用浏览器开发者工具看响应头里有没有 X-Robots-Tag: noindex</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>所有核心页面均无 noindex/nofollow， robots  meta 标签配置合理，重要页面有明确的索引指令</div>
+        <div><b>普通：</b>首页可索引，但可能部分内页存在 noindex（如登录页、搜索结果页，这是合理的）</div>
+        <div><b>未完成：</b>首页或核心产品页被设置了 noindex/nofollow，将导致不被 AI 和搜索引擎收录</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>网址规范化（canonical）</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未设置 canonical 标签
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>在每页head中添加canonical标签，指向该页面的首选URL</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>canonical 告诉 AI 同一个内容的多个 URL（带不带 www、尾斜杠、参数）哪个是正版，避免权重分散和重复内容判定</div><div><b>缺失影响：</b>没有canonical，同一内容多个URL会分散权重，AI可能选到非首选页面，甚至判定为重复内容降权</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看网页源代码，搜索 rel=&quot;canonical&quot;，看是否有指向当前页面的规范 URL</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每页都有 canonical 标签，指向当前页面的规范 URL，与实际 URL 一致，无跨域指向</div>
+        <div><b>普通：</b>首页有 canonical 标签，但内页可能缺失或指向不够精确</div>
+        <div><b>未完成：</b>未设置 canonical，或 canonical 指向错误页面（如全部指向首页）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>跳转与状态码</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">返回 200 OK
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>4xx/5xx 状态码意味着 AI 爬虫打不开页面，直接无法收录。3xx 重定向链过长也会降低抓取效率</div><div><b>缺失影响：</b>返回4xx/5xx，AI爬虫根本打不开页面，无法抓取任何内容，该页面完全不会被收录</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>用浏览器开发者工具 Network 面板看首页请求的状态码；或用在线 HTTP 状态码检测工具</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>首页返回 200 OK，所有核心页面均正常，无重定向链，响应头完整</div>
+        <div><b>普通：</b>首页返回 200，但可能存在少量重定向或个别内页 404</div>
+        <div><b>未完成：</b>首页返回 4xx/5xx 错误，AI 爬虫无法访问</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内容可访问性</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">初始 HTML 包含 5236 字符文本
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>很多 AI 爬虫不执行 JS，如果你的内容全靠 JS 动态渲染，AI 看到的就是空白页，完全无法理解和引用</div><div><b>缺失影响：</b>内容全靠JS渲染，AI爬虫看到的是空白页，完全无法理解和引用你的内容，等于做了个隐形网站</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看网页源代码（不是审查元素），看正文内容是否在 HTML 里；或禁用 JS 后刷新页面看内容是否还在</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>核心内容全部在初始 HTML 中，禁用 JS 后页面内容完整，无 noscript 降级提示</div>
+        <div><b>普通：</b>主要内容在 HTML 中，但部分非关键内容（如评论、推荐）依赖 JS 加载</div>
+        <div><b>未完成：</b>初始 HTML 文本量极少，核心内容依赖 JS 渲染，AI 爬虫无法获取有效内容</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>页面体积与加载速度</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">页面 131KB，响应 0.36s
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>页面过大或加载过慢会降低 AI 爬虫的抓取效率和用户体验，搜索引擎也会把速度作为排名因素</div><div><b>缺失影响：</b>页面过大或加载过慢，AI爬虫可能超时放弃抓取，用户也会因等待流失，搜索引擎也会降权</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>用浏览器开发者工具 Network 面板看文档加载时间和大小；或用 PageSpeed Insights / 站长工具测速</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>HTML &lt; 200KB，首屏加载 &lt; 1.5s，图片已压缩，启用了 Gzip/Brotli 压缩和 CDN</div>
+        <div><b>普通：</b>HTML &lt; 500KB，首屏 &lt; 3s，基本达标但有优化空间</div>
+        <div><b>未完成：</b>HTML &gt; 500KB 或首屏 &gt; 3s，严重影响抓取和体验</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>移动端友好</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-error-bg)] text-[var(--state-error-text)] border border-[var(--state-error)]/10"><i data-lucide="x" class="w-3 h-3 mr-1"></i>失败</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未设置 viewport meta 标签
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>采用响应式设计，确保移动端正常显示，通过Google移动端友好测试</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>超过 70% 的 AI 搜索和传统搜索来自移动端，没有移动端适配的站点会被 AI 和搜索引擎降权</div><div><b>缺失影响：</b>没有移动端适配，70%以上的移动搜索流量会流失，AI和搜索引擎都会优先推荐移动端友好的站点</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码搜索 viewport；或用浏览器手机模式打开网站，看是否有横向滚动、字体过小、按钮重叠</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 viewport 设置，响应式布局，移动端无横向滚动，字体 ≥14px，点击区域 ≥44px，通过 Google 移动端友好测试</div>
+        <div><b>普通：</b>有 viewport 设置，基本可用，但可能存在字体偏小或间距问题</div>
+        <div><b>未完成：</b>未设置 viewport meta 标签，或移动端布局严重错乱</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>URL结构与可读性</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">所有12个子页面URL结构良好
+                <div>已检查12个内页路径，均简短可读</div>
+                
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                内页适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>URL Slug 是 AI 和搜索引擎理解页面主题的辅助信号。首页URL是域名无需检查，需检查各子页面路径质量</div><div><b>缺失影响：</b>URL含动态参数或纯数字，AI和用户都无法从URL判断页面主题，分享时显示不专业，搜索引擎也会降低可读性评分</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>查看各子页面浏览器地址栏的URL路径，是 /products/geo-optimization 这种可读形式，还是 /p?id=123 或 /12345.html 这种动态形式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>所有子页面路径简短（&lt;3层目录），含描述性关键词，用连字符分隔，全小写，无动态参数</div>
+        <div><b>普通：</b>大部分路径可读，但个别页面偏长或含少量动态参数</div>
+        <div><b>未完成：</b>多个页面URL含动态参数（?id=、?p=），或纯数字路径，或路径过深（&gt;5层）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内部链接可访问性（断链检测）</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">抽样检查的站内链接均可访问（覆盖 13 个页面）
+                
+                
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>死链会让 AI 爬虫抓取中断、降低整站抓取效率，用户点击到 404 页面也会直接流失，是站点健康度的基础指标</div><div><b>缺失影响：</b>站内存在死链，AI爬虫抓取会中断、降低整站抓取效率，用户点到404页面直接流失，搜索引擎也会降低站点健康度评分</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在浏览器逐个点击导航和正文链接，或用 Xenu/Screaming Frog 爬取，筛选状态码为 404/5xx 的链接</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>全站抽样链接全部返回 200，无任何死链，重定向链短</div>
+        <div><b>普通：</b>存在 1-2 个死链，集中在非核心页面</div>
+        <div><b>未完成：</b>存在 3 个及以上死链，或核心导航/产品链接打不开</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          AI友好度专项
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>Meta Title</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">标题合理（35字符）
+                <div>标题: GEO优化｜AI搜索优化｜领先的GEO优化服务公司-飞柚GEO【官网】</div>
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>Title 是 AI 理解页面主题的第一信号，也是搜索结果里显示的标题。写得好能直接提升 AI 引用概率和点击率</div><div><b>缺失影响：</b>没有Title或过短，AI无法判断页面主题，搜索结果显示无意义标题，点击率和引用率双降</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看网页源代码，找到 &lt;title&gt; 标签，看内容是否包含品牌名和核心业务关键词，长度是否在30-60字符</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每页唯一标题，含核心关键词+品牌名+差异化卖点，30-60字符，核心词前置</div>
+        <div><b>普通：</b>有标题且包含品牌或关键词，长度基本合理，但可能缺少卖点或关键词布局不够精准</div>
+        <div><b>未完成：</b>缺少 title，或标题只有品牌名无业务关键词，或标题过短/过长</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>Meta Description-描述标签质量</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">描述长度合理（95字符）但缺少行动号召
+                <div>描述: 飞柚GEO（高新技术企业+专精特新企业）：业务包括GEO优化、AI SEO优化、AI搜索优化、deepseek优化等，600人技术团队，在深圳/上海/北京/广州等 20+城市提供本地化服务。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>Description控制在70-160字符，包含核心关键词和行动号召，准确概括页面内容</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>Description 是 AI 生成摘要和搜索结果描述的重要来源。好的描述能让 AI 准确理解页面内容，提升被摘为答案的概率，同时影响搜索结果点击率</div><div><b>缺失影响：</b>没有Description，AI只能从页面随机摘取内容做摘要，可能抓到大段导航或无关文字，严重影响展示效果</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，搜索 name=&quot;description&quot;，看 content 里是否用自然语言概括了页面价值，是否有&#x27;了解更多&#x27;&#x27;免费咨询&#x27;等行动号召</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每页唯一描述，80-160字符，含核心关键词+独特卖点+行动号召，自然不堆砌，与页面内容强相关</div>
+        <div><b>普通：</b>有描述且长度合理，但缺少行动号召或卖点不够突出</div>
+        <div><b>未完成：</b>缺少 description，或描述过短（&lt;50字符）无信息量</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>大标题唯一性与子标题层级结构</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">标题层级规范（H1:1 H2:12 H3:22）
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>标题层级是 AI 理解页面内容结构的骨架。清晰的 H1→H2→H3 结构让 AI 能快速定位关键信息，更容易摘取成答案</div><div><b>缺失影响：</b>标题层级混乱，AI无法理解内容结构，难以定位关键信息，摘取答案时容易遗漏核心内容</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，统计 &lt;h1&gt;、&lt;h2&gt;、&lt;h3&gt; 标签数量，看是否只有1个H1，H2/H3是否按层级递进</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>仅1个H1（含核心关键词），H2按主题分块，H3在H2下细分，层级递进不跳级，每个标题都有实质内容</div>
+        <div><b>普通：</b>有H1且数量≤2，有H2子标题，基本结构合理，但可能存在跳级或标题空泛</div>
+        <div><b>未完成：</b>缺少H1，或有多个H1（&gt;3个），或完全没有H2/H3结构</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>结构化数据</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">检测到 1 种结构化数据，含富结果类型
+                <div>类型: Organization</div>
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>结构化数据是给 AI 和搜索引擎看的&#x27;内容标签&#x27;，能让 AI 精准识别你的产品、文章、评价等信息类型，大幅提升出富摘要和被引用的概率</div><div><b>缺失影响：</b>没有结构化数据，AI无法识别你的产品/文章/评价类型，出不了富摘要，被精准引用的概率降低</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，搜索 application/ld+json，看是否有 Schema.org 结构化数据；或用 Google 富结果测试工具检测能出哪些富摘要</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 Organization + Product/Article + FAQPage + BreadcrumbList 等多种结构化数据，含 Review/Product 等高价值富结果类型，字段完整无报错</div>
+        <div><b>普通：</b>有至少1种结构化数据（如 Organization 或 Article），但缺少 Product/Review/FAQ 等高价值富结果类型，或字段不完整</div>
+        <div><b>未完成：</b>未检测到任何 JSON-LD 或 Microdata 结构化数据标记</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>AI 答案格式优化</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">仅包含 1 种结构: 列表，建议增加列表/表格/FAQ
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>关键内容用列表（ul/ol）、表格（table）、FAQ结构呈现，便于AI直接摘取答案</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>AI 生成答案时偏好结构化内容。列表、表格、定义、FAQ 这些格式能被 AI 直接摘取，比大段文字更容易成为搜索答案</div><div><b>缺失影响：</b>内容全是大段文字，AI难以直接摘取成答案，用户问具体问题时，AI更愿意引用有列表/表格/FAQ的页面</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面内容，看是否有编号列表、表格、定义列表、FAQ问答等 AI 容易直接摘取成答案的格式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>同时包含列表+表格+定义/FAQ等多种结构，每个核心知识点都有清晰的结构化呈现，可直接被AI摘取</div>
+        <div><b>普通：</b>有1-2种结构化元素（如只有列表），但缺少表格或FAQ等其他格式</div>
+        <div><b>未完成：</b>内容全是大段文字，缺少列表、表格、FAQ等任何 AI 易摘取结构</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>面包屑导航</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有面包屑 DOM 但缺少结构化标记
+                <div>检查页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>在内页添加面包屑导航（首页 &gt; 分类 &gt; 详情），并标记BreadcrumbList Schema</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>面包屑帮 AI 理解页面在网站中的层级位置，同时能在搜索结果中显示面包屑路径，提升点击率</div><div><b>缺失影响：</b>没有面包屑，AI无法判断页面在站点中的层级位置，搜索结果也显示不了面包屑路径，点击率降低</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看内页顶部是否有&#x27;首页 &gt; 产品 &gt; XXX&#x27;的路径导航；右键查看源代码是否有 BreadcrumbList 结构化数据</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>内页有面包屑导航，且有 BreadcrumbList 结构化数据标记，路径层级清晰准确</div>
+        <div><b>普通：</b>有面包屑导航 DOM，但缺少 BreadcrumbList 结构化标记</div>
+        <div><b>未完成：</b>内页未检测到面包屑导航</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>站内链接丰富度</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有 39 个站内链接
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>内部链接是 AI 爬虫发现你其他页面的主要路径。链接丰富的站点能让 AI 抓取更多页面，理解更全面的品牌信息</div><div><b>缺失影响：</b>站内链接极少，AI爬虫发现不了你的其他页面，整站收录率低，品牌信息不完整</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览首页，统计有多少个链接指向网站内其他页面（产品、案例、文章等），看是否形成页面互联网络</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有大量（≥10个）描述性内部链接，形成产品-案例-文章的互联网络，锚文本包含关键词</div>
+        <div><b>普通：</b>有一定数量（5-10个）的内部链接，基本覆盖主要页面，但锚文本可能不够描述性</div>
+        <div><b>未完成：</b>站内链接极少（&lt;5个），或几乎没有指向其他内容页面的链接</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>搜索引擎/AI 平台验证</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未检测到搜索引擎站长平台验证标签
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>验证百度/Google/Bing站长平台，提交sitemap，监控收录和抓取异常</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>站长平台验证能让你主动提交 sitemap、查看收录情况、接收抓取异常通知，是 SEO 和 GEO 的基础操作</div><div><b>缺失影响：</b>没验证站长平台，无法主动提交sitemap和查看收录异常，问题发现滞后，收录速度慢</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，搜索 site-verification，看是否有百度、谷歌、必应等站长平台的验证标签</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>已验证百度+谷歌+必应等多个站长平台，已提交 sitemap，能查看收录和抓取数据</div>
+        <div><b>普通：</b>已验证至少1个主流站长平台（百度或谷歌）</div>
+        <div><b>未完成：</b>未检测到任何搜索引擎站长平台验证标签</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>NLP/大模型语义友好度</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容整体结构化且数据丰富，但部分段落冗长、概念未先定义，且存在模糊指代，影响AI语义解析效率。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。内容整体结构化且数据丰富，但部分段落冗长、概念未先定义，且存在模糊指代，影响AI语义解析效率。。问题: &#x27;GEO优化&#x27;和&#x27;AI排名优化&#x27;等核心概念未在开头定义，直接使用，可能造成理解歧义。；部分句子过长，如&#x27;北大青鸟是北大直属IT职业教育品牌...&#x27;一段，信息密度高但结构松散，建议拆分。；&#x27;优化后，品牌在AI问答场景曝光量预计月增70%+...&#x27;中&#x27;优化后&#x27;指代不明确，未说明具体时间范围或优化周期。；&#x27;已有数百家品牌客户选择飞柚...&#x27;中&#x27;飞柚&#x27;未介绍，突然出现，指代不清。；&#x27;获取资深GEO优化总监1对1服务...&#x27;等营销语句与正文内容混杂，可能干扰AI对核心信息的提取。；部分数据如&#x27;月触达60万+用户&#x27;未注明统计口径或来源，降低可信度。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>专业概念首次出现先给定义，用具体名称替代模糊指代，一句话讲清一个点，事实写全主语+结论+依据</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>结构标签解决&#x27;形&#x27;，这项解决&#x27;神&#x27;。语义清晰的内容大模型能准确提取事实；首页是导航页，需在内容页检查正文语义质量</div><div><b>缺失影响：</b>正文语义混乱、概念不定义、指代不明，大模型难以准确提取事实，摘取时容易断章取义或放弃引用</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在文章/案例/产品详情页通读正文：专业概念首次出现是否有定义；是否有&#x27;它/这个/那种&#x27;等模糊指代；一段话是否只讲一个点；事实是否&#x27;主语+结论+依据&#x27;完整</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>概念先定义后展开，实体名称明确无模糊指代，句子简洁，事实陈述完整（主语+结论+依据），AI可直接逐句摘取</div>
+        <div><b>普通：</b>整体可读，但部分段落冗长或存在指代不清，需要AI二次归纳才能引用</div>
+        <div><b>未完成：</b>大段绕弯文字、概念无定义、指代混乱、因果不清，AI无法准确提取事实</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内容分块与逻辑组织</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容分块基本合理，但存在标题层级混乱、部分板块过长及主题偏离问题。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。内容分块基本合理，但存在标题层级混乱、部分板块过长及主题偏离问题。。问题: H1标题包含&#x27;GEO优化|AI排名优化案例-北大青鸟&#x27;，但正文开头是登录提示，与主题无关。；H2中&#x27;手机验证码登录&#x27;与内容主题无关，属于页面功能元素，不应作为内容标题。；H3标题&#x27;三、AI优化方案&#x27;和&#x27;四、优化收益&#x27;与正文中的&#x27;一、企业介绍&#x27;、&#x27;二、优化结果&#x27;编号不连续，且缺少&#x27;一、二&#x27;对应的H3标题，导致层级不清晰。；正文中&#x27;二、优化结果&#x27;部分内容过长，包含多个子主题（内容矩阵、知识图谱、AI引擎优化、信任网络、UGC、监测体系），但未细分小标题，导致单块内容臃肿。；&#x27;吴越亮&#x27;和&#x27;GEO优化总监&#x27;等人物介绍板块与前后内容衔接突兀，未明确归类。；&#x27;热门案例推荐&#x27;、&#x27;优化GEO(AI SEO)|&#x27;等H3标题与正文内容对应关系不明确，可能为导航或链接，不应作为内容标题。；正文中部分段落（如&#x27;二、优化结果&#x27;）包含大量数据和案例，但未按逻辑分块，阅读时容易迷失重点。；整体标题层级（H1-H3）与正文内容结构不完全匹配，存在标题与内容不对应的情况。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>每个小标题只讲一个要点，按是什么→为什么→怎么做组织板块顺序，过长板块继续拆分到可独立引用</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>好的分块让AI能按用户问题精准定位并整块摘取。首页是导航页，分块质量需在内容页上检查</div><div><b>缺失影响：</b>标题分块只是形式、块内内容东拉西扯，AI定位到小标题却提取不到连贯答案，无法整块引用</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在内容页逐个小标题检查其下内容是否都服务于该标题；块之间是否按&#x27;是什么→为什么→怎么做&#x27;递进；单个板块是否过长需要再拆分</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>每个分块聚焦单一要点，块间逻辑递进清晰，单块长度适中，可独立成段被AI直接引用</div>
+        <div><b>普通：</b>分块基本合理，少数板块内容偏离主题或过长，整体仍可理解</div>
+        <div><b>未完成：</b>标题与内容不对应、逻辑跳跃混乱，或整篇无有效分块、大段文字堆砌</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>Title/Description 唯一性</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">13 个抽样页面的 Title/Description 均唯一
+                
+                
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>多页共用同一 Title/Description 会让 AI 和搜索引擎无法区分页面主题，导致权重分散、该收录的页面不被收录</div><div><b>缺失影响：</b>多个页面共用相同Title/Description，AI和搜索引擎无法区分页面主题，导致权重分散、该收录的内页不被收录</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>把站内主要页面的 title 和 description 复制到表格对比，看是否有多页完全相同</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>所有抽样页面 Title、Description 均唯一且准确描述各自主题，无重复</div>
+        <div><b>普通：</b>个别页面 Title/Description 相似但不完全相同，或模板化程度较高</div>
+        <div><b>未完成：</b>多个页面 Title 或 Description 完全相同，页面主题无法区分</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          内容质量与结构化
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>核心内容深度</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容充足（约 5236 字）
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>AI 引用内容时偏好信息密度高的页面。内容过薄的页面 AI 无法提取有效信息，不会被选为答案来源</div><div><b>缺失影响：</b>内容过薄，AI提取不到有效信息，不会选为答案来源，用户也觉得不专业，跳出率高</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面正文，看是否有详细的产品参数、应用场景、数据支撑、具体案例，而不是空泛的营销口号</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>正文 &gt; 1000 字，包含具体参数、数据、场景、对比，信息密度高，有独特观点和深度分析</div>
+        <div><b>普通：</b>正文 500-1000 字，有基本的产品介绍和场景说明，但数据和细节不足</div>
+        <div><b>未完成：</b>正文 &lt; 500 字，内容过薄，多为空泛营销语，AI 难以提取有效信息</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内容原创性与时效性</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">仅 0/13 个内容页标注了时间。内容为营销案例展示，含具体数据和案例，但整体为宣传性描述，原创观点和深度分析有限。
+                <div>未标注页面: https://feiyougeo.cn/, https://feiyougeo.cn/index.php/article/fuwuanli/228.html, https://feiyougeo.cn/index.php/article/fuwuanli/230.html。原创性: 内容为营销案例展示，含具体数据和案例，但整体为宣传性描述，原创观点和深度分析有限。。问题: 内容以企业宣传和优化效果展示为主，缺乏独立第三方视角或深度行业分析；部分数据（如就业率、曝光量增长）为品牌自述，未提供可验证来源；结构类似SEO/GEO服务案例模板，通用性较强，原创性一般。检查页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>在文章/产品页标注发布时间和最后更新时间，使用ISO 8601格式</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/index.php/article/fuwuanli/228.html</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>AI 偏好新鲜且有独特价值的内容。更新时间让 AI 判断内容是否过时；原创性决定 AI 是否认为该内容比其他来源更值得引用，拼凑/AI水文会被降权</div><div><b>缺失影响：</b>没有更新时间，AI无法判断内容是否过时；内容若是全网通用套话/AI水文、无原创价值，AI会优先引用有独到观点的竞品</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>逐页看是否有发布/最后更新时间；通读内容判断是否有自己的观点、一手数据、原创案例，还是全网通用套话</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>全部内容页标注发布与更新时间（近3个月，ISO 8601格式），且内容含独到观点、一手数据或原创案例</div>
+        <div><b>普通：</b>部分页面有时间标注但更新较久（超6个月），或内容原创性一般、部分为通用资料整理</div>
+        <div><b>未完成：</b>多数页面未标注时间，且内容为全网通用套话/AI水文，无原创观点和一手数据</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>FAQ 问答结构</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有 FAQ 板块但缺少 FAQPage 结构化标记
+                <div>检测到FAQ板块结构</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>整理客户高频问题，创建FAQ板块，每个问题用h3，答案紧跟其后，并加FAQPage Schema</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>FAQ 是 AI 摘取答案的最高效格式。用户问&#x27;XX怎么样&#x27;&#x27;XX多少钱&#x27;时，AI 会优先从 FAQ 中提取答案</div><div><b>缺失影响：</b>没有FAQ，用户问具体问题时AI没有现成答案可摘，FAQ是GEO转化率最高的内容形式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看页面是否有&#x27;常见问题&#x27;板块，每个问题是否有完整答案；右键查看源代码是否有 FAQPage 结构化数据</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 FAQ 板块（≥5个问答），每个问题有完整答案，且有 FAQPage 结构化数据标记，覆盖客户高频问题</div>
+        <div><b>普通：</b>有 FAQ 板块但缺少结构化标记，或问答数量较少（&lt;5个）</div>
+        <div><b>未完成：</b>未检测到任何 FAQ 问答结构</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>图片与多媒体优化</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">5/79 张图片缺少 alt
+                <div>缺失alt的图片类型: 模板装饰图3张、上传图片2张</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>重要图片（产品图、分类图、logo、案例图）添加描述性alt；装饰性小图标用alt=&quot;&quot;</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>图片 alt 让 AI 理解图片内容，也是图片搜索排名的基础。描述性文件名能进一步帮助搜索引擎和 AI 理解图片主题</div><div><b>缺失影响：</b>图片没有alt，AI看不懂图片内容，图片搜索流量全丢，无障碍访问也不合格</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>右键查看源代码，统计 &lt;img&gt; 标签的 alt 属性覆盖率，看重要图片是否有描述性 alt，文件名是 img1.jpg 还是 geo-optimization.png</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>≥80% 图片有描述性 alt（含关键词），文件名描述性（非 img1.jpg/纯数字），图片已压缩</div>
+        <div><b>普通：</b>50-80% 图片有 alt，但部分重要图片缺少或文件名不描述性</div>
+        <div><b>未完成：</b>&lt;50% 图片有 alt，或重要产品图完全没有 alt</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>内部链接布局</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">11/28 个链接锚文本无意义
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>将&#x27;点击这里&#x27;&#x27;了解更多&#x27;改为描述性锚文本，如&#x27;查看GEO优化服务&#x27;&#x27;阅读客户案例&#x27;</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>锚文本告诉 AI 被链接页面是关于什么的。描述性锚文本能帮助 AI 理解页面间关系，提升目标页面的关键词相关性</div><div><b>缺失影响：</b>锚文本全是&#x27;点击这里&#x27;，AI无法判断被链接页面的主题，内页关键词权重传递失效</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面，看内部链接的文字是&#x27;点击这里&#x27;&#x27;了解更多&#x27;还是具体的&#x27;GEO优化服务&#x27;&#x27;客户案例&#x27;等描述性文字</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>几乎所有内部链接都使用描述性锚文本（含关键词），无&#x27;点击这里&#x27;类无意义链接，锚文本与目标页面强相关</div>
+        <div><b>普通：</b>大部分链接有描述性，但存在少量（&lt;40%）&#x27;了解更多&#x27;&#x27;详情&#x27;类通用锚文本</div>
+        <div><b>未完成：</b>大量内部链接使用&#x27;点击这里&#x27;&#x27;了解更多&#x27;等无意义锚文本（≥40%）</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>多语言/多地区设置</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">单语言站点，无需多语言设置
+                <div>未检测到 hreflang 和语言切换，站点为单语言，符合预期</div>
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>hreflang 告诉 AI 每个语言版本对应哪个地区的用户，避免不同语言版本互相竞争排名，提升海外用户的 AI 搜索可见性</div><div><b>缺失影响：</b>多语言无hreflang，不同语言版本互相竞争排名，海外用户可能看到错误语言的页面</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看页面是否有语言切换按钮；右键查看源代码搜索 hreflang，看是否标注了各语言版本</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有多语言站点，每个页面都有正确的 hreflang 标记（含 x-default），语言切换功能正常，各语言内容完整</div>
+        <div><b>普通：</b>有语言切换功能，但缺少 hreflang 标记，或 hreflang 标注不完整</div>
+        <div><b>未完成：</b>单语言站点（不适用），或有多语言但完全没有 hreflang 且语言切换混乱</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>搜索意图匹配</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">页面内容为北大青鸟GEO优化案例介绍，与核心关键词&#x27;GEO优化案例&#x27;和&#x27;AI排名优化案例&#x27;的搜索意图高度匹配，内容详实且聚焦。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。页面内容为北大青鸟GEO优化案例介绍，与核心关键词&#x27;GEO优化案例&#x27;和&#x27;AI排名优化案例&#x27;的搜索意图高度匹配，内容详实且聚焦。（意图类型: 信息型）</div>
+                
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>搜索意图匹配是&#x27;有流量没转化&#x27;和AI不引用的根因。AI回答问题时会优先选择内容类型与用户意图一致的页面，首页意图天然是品牌型，搜索意图匹配需在内容页上检查</div><div><b>缺失影响：</b>内容类型与用户搜索意图错位（想找方案却看到公司介绍），AI判定答非所问不予引用，用户也快速跳出</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>先确定这页想被搜到的核心词，想清楚用户搜它时是想&#x27;学知识/比方案/直接买&#x27;，再看页面内容类型是否对得上——想找方案却看到公司介绍就是错位</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>核心搜索意图明确，内容类型（科普/方案/产品/对比）与意图高度匹配，完整覆盖用户在该决策阶段的核心问题</div>
+        <div><b>普通：</b>意图基本相关但覆盖不全，或一页混合多种意图导致重点不够聚焦</div>
+        <div><b>未完成：</b>内容类型与目标意图明显错位（如方案词对应公司介绍页），或页面无明确主题焦点</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>关键词蚕食检测</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">发现 1 对疑似关键词蚕食的页面（规则初筛，建议人工确认）
+                <div>「方太GEO优化案例：AI问答排名」↔「雅迪GEO优化案例AI问答排名」相似度75%</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>为每个页面分配差异化的核心关键词，主题相近的页面用canonical或内链锚文本区分主次，建立关键词矩阵</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>多个页面争夺同一关键词时，AI 和搜索引擎分不清该推荐哪页，可能都不引用或引用错误页面，整站该词排名互相拖后腿</div><div><b>缺失影响：</b>多个页面争夺同一关键词，AI分不清该引用哪页，可能都不引用，整站该词排名互相拖后腿</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>列出站内主要页面及核心关键词，对比是否有2个以上页面瞄准同一个词，标题和正文主题是否高度重叠</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>各页面 Title 主题清晰差异化，无高相似页面，形成明确关键词矩阵</div>
+        <div><b>普通：</b>存在少量主题相近页面，但已通过 canonical 或内链锚文本区分主次</div>
+        <div><b>未完成：</b>多个页面标题主题高度重叠，疑似互相蚕食且无主次区分</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          权威与信任信号
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>可信与安全信号</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">可信信号完善: ICP备案, 联系方式
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>AI 判断网站可信度时会看这些基础信号。没有备案和联系方式的站点会被 AI 视为低可信度，不会优先推荐</div><div><b>缺失影响：</b>没有备案和联系方式，AI判定为低可信度站点，不会优先推荐，用户也不敢联系，律所/金融等行业尤其致命</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>拉到页面底部，看是否有 ICP 备案号、公司地址、电话/邮箱、隐私政策链接、关于我们页面</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 ICP 备案号、完整公司信息（地址/电话/邮箱）、隐私政策、服务条款、关于我们页面，信息真实可验证</div>
+        <div><b>普通：</b>有 ICP 备案和基本联系方式，但可能缺少隐私政策或公司信息不完整</div>
+        <div><b>未完成：</b>缺少 ICP 备案、联系方式、隐私政策中的2项以上，可信度严重不足</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>客户评价与证言</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未检测到客户评价或客户 Logo 展示
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>添加客户评价、客户Logo墙、成功案例、数据成果（服务XX家客户、满意度XX%）</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>客户评价和案例是 AI 判断品牌权威性的重要社会证明。有真实客户背书的品牌更容易被 AI 推荐为可靠选择</div><div><b>缺失影响：</b>没有客户评价和案例，AI缺少社会证明信号，用户决策时没有参考，转化率低</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面，看是否有客户 Logo 墙、客户评价/证言、客户案例详情（含客户名称、行业、成果数据）</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有客户 Logo 墙（≥10个知名客户）+ 详细客户案例（含背景/挑战/方案/成果数据）+ 客户证言，信息真实可验证</div>
+        <div><b>普通：</b>有客户 Logo 展示，但缺少详细案例或评价；或有案例但客户知名度不高</div>
+        <div><b>未完成：</b>未检测到任何客户 Logo、评价或案例展示</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>社交平台存在感</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">社交平台较少: 微信
+                
+                
+            <div>
+                <div>修复建议</div>
+                <div>开通微信公众号、知乎、抖音等官方账号，在官网添加链接，保持内容同步更新</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>社交媒体账号是品牌实体的延伸信号。AI 会综合社交平台上的品牌讨论度和官方存在来判断品牌权威性</div><div><b>缺失影响：</b>没有社交平台账号，AI判断品牌存在感弱，品牌实体认知度低，推荐优先级下降</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>拉到页面底部，看是否有微信、微博、知乎、领英、抖音等社交媒体的官方账号链接或二维码</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 ≥3 个主流社交平台的官方认证账号（微信公众号+微博+知乎/领英），账号活跃，内容与官网联动</div>
+        <div><b>普通：</b>有 1-2 个社交平台链接，但可能账号不活跃或平台单一</div>
+        <div><b>未完成：</b>未检测到任何社交媒体链接或二维码</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>外部链接质量</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有 6 个权威外链
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>链向权威网站能提升 AI 对你网站的可信度评估。同时，被权威网站引用（反向链接）是品牌权威性的核心指标</div><div><b>缺失影响：</b>没有权威外链，AI判断站点缺乏第三方背书，权威性不足，排名和推荐都靠后</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览页面，看是否有指向行业权威网站、媒体报道、合作伙伴官网的链接，而不是只链向自己的页面</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 ≥3 个指向行业权威网站/媒体/合作伙伴的高质量外链，且自身有被权威网站引用的记录</div>
+        <div><b>普通：</b>有 1-2 个外部链接，或外链质量一般（如链向普通博客）</div>
+        <div><b>未完成：</b>没有任何指向第三方权威网站的外链，或所有链接都是站内链接</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>知识图谱品牌实体</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">品牌[深圳飞柚数智营销技术有限公司]在百度百科有词条
+                <div>百科平台: 百度百科。</div>
+                
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>知识图谱实体是 AI 判断品牌权威性的核心信号。有百科词条的品牌会被 AI 视为已知实体，推荐概率大幅提升</div><div><b>缺失影响：</b>没有百科/知识面板，AI不认为你是知名品牌实体，品牌词搜索时不会出知识卡片</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在百度/谷歌搜索品牌名，看右侧是否有知识面板；搜索&#x27;品牌名 百科&#x27;看是否有百科词条</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>百度百科+维基百科+谷歌知识面板均有品牌实体，信息完整准确，与官网一致，定期更新</div>
+        <div><b>普通：</b>至少在百度百科或维基百科有1个品牌词条，基本信息准确，但可能不够完整</div>
+        <div><b>未完成：</b>无任何百科词条或知识面板，品牌在 AI 知识图谱中不存在</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>跨平台内容分发</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">品牌仅通过微信公众号进行内容分发，未发现知乎、行业媒体等其他平台的内容同步，且公众号内容是否规律更新及外链回官网情况未知。
+                <div>平台: 微信公众号。问题: 仅有一个内容分发平台，未达到核心平台覆盖要求；未发现知乎、行业媒体等平台的内容分发；公众号内容更新规律性及外链回官网情况需进一步确认</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>将官网内容同步分发到知乎、微信公众号、头条等平台，扩大品牌在AI训练数据中的覆盖</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>跨平台分发能扩大品牌在 AI 训练数据中的覆盖面，多平台一致的内容信号会强化 AI 对品牌权威性的判断</div><div><b>缺失影响：</b>没有跨平台分发，AI训练数据中你的品牌出现频次低，覆盖面窄，被提及概率小</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在知乎、微信公众号、行业媒体搜索品牌名或文章标题，看是否有同步发布的内容，且是否链接回官网</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>核心内容同步到≥3个平台（知乎+公众号+行业媒体），每篇都有外链回官网，平台账号与官网品牌一致</div>
+        <div><b>普通：</b>有1-2个平台的内容分发，但部分内容无外链回官网，或更新不规律</div>
+        <div><b>未完成：</b>无任何跨平台内容分发，内容仅存在于官网</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>E-E-A-T 内容可信度信号</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">内容有具体数据和案例，但作者信息缺失，经验描述为第三方优化总监而非内容作者，关键数据未标注来源。
+                <div>检查页面: GEO优化|AI排名优化案例-北大青鸟。内容有具体数据和案例，但作者信息缺失，经验描述为第三方优化总监而非内容作者，关键数据未标注来源。（author:无、experience:有、source:无）。问题: 未检测到作者标签，无法确认内容作者身份和资质；正文中的优化总监介绍为服务提供方，非内容作者，不能作为作者资质；关键数据如就业率、曝光量等未标注具体来源和统计时间；内容为营销推广文案，缺乏第一手经验或实测描述</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>为内容标注作者姓名与专业资质，补充第一手经验/实测/服务案例，关键数据标注来源，建立编辑审核机制</div>
+            </div>
+                
+        <div>
+            <span>
+                内容页级
+            </span>
+            <span>
+                内容页适用
+            </span>
+            <span>检测页面: GEO优化|AI排名优化案例-北大青鸟</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>E-E-A-T是AI判断内容是否值得引用的核心依据。AI倾向引用有明确作者、专业资质、第一手经验、来源可查的内容，匿名通用文案可信度最低。首页是品牌导航页，E-E-A-T评估对象是内容页</div><div><b>缺失影响：</b>内容无作者署名、无第一手经验、无来源标注，AI无法判断专业可信度，会优先引用有明确专家背书的竞品内容</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>在文章/案例/产品详情页检查：是否标注作者姓名及资质头衔；是否有&#x27;我们亲历/实测/服务过XX&#x27;等第一手经验；关键数据是否标注来源；是否有编辑或审核信息</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>内容页明确标注作者姓名+专业资质/头衔，有第一手经验或实测描述，关键数据标注来源，有编辑审核与更新机制，完整体现E-E-A-T</div>
+        <div><b>普通：</b>有作者署名但无资质说明，或部分体现经验但不系统，数据来源标注不全</div>
+        <div><b>未完成：</b>无作者信息、无经验描述、无来源标注，内容像匿名通用文案，无法建立信任</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 class="text-base font-bold text-[var(--jl-neutral-900)] mb-4 flex items-center gap-2">
+          <span class="w-1 h-5 rounded-full bg-[var(--jl-primary)]"></span>
+          商业转化与决策内容
+        </h3>
+        <div class="overflow-x-auto rounded-2xl border border-[var(--jl-border)] bg-[var(--jl-card)] shadow-sm">
+          <table class="w-full min-w-[1100px] text-sm">
+            <thead class="bg-[var(--jl-muted)] text-[var(--jl-neutral-500)]">
+              <tr>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检查项</th>
+                <th class="text-center px-4 py-3 font-medium whitespace-nowrap">状态</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">检测结果</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">作用与缺失影响</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">怎么检查（手动）</th>
+                <th class="text-left px-4 py-3 font-medium whitespace-nowrap">优秀 / 普通 / 未完成标准</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[var(--jl-border)]">
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>产品/解决方案页面结构化</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">检测到 1 个产品/方案入口
+                <div>包含: 企业选型必备：GEO优化服务商筛选的六大核心维度
+在数字营销竞争日益激烈的今天，GEO优化服务商成为众多企业提升产品曝光、实现精准获客的关键合作伙伴。面对市场中众多的服务提供商，企业应如何科学评估、理性选择？本
+2026-01-14</div>
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户搜索具体产品或解决方案时，AI 需要找到对应的独立页面来回答。只有首页没有产品详情页，AI 无法精准匹配用户需求</div><div><b>缺失影响：</b>没有独立产品/方案页，AI无法匹配用户的具体产品搜索需求，B端精准流量全丢</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看网站导航是否有&#x27;产品&#x27;&#x27;解决方案&#x27;入口，点进去是否有每个产品的独立详情页，包含功能、参数、应用场景</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有清晰的产品矩阵页，每个产品有独立详情页（含功能/参数/场景/价格或询价/FAQ），URL 结构规范</div>
+        <div><b>普通：</b>有产品/解决方案入口，但详情页内容较简单（缺少参数或场景），或部分产品没有独立页</div>
+        <div><b>未完成：</b>没有产品/解决方案页面入口，或所有产品信息都挤在首页没有独立详情页</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>案例研究可抓取性</div>
+                <div>
+                    <span>
+                        P0
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有客户案例入口（6个）
+                <div>包含: 什么是 AI 优化排名？一篇文章带你看懂
+本文通过真实案例解析AI优化排名的核心逻辑与3大实操步骤，详解飞柚GEO如何帮助企业适配生成式搜索逻辑，快速提升内容在AI搜索结果中的展现与点击效果，规避传统SEO低效困境。
+2025-09-06, GEO(AI SEO)优化案例, 2025GEO优化公司选择擂台赛：数据说话，一眼看出最靠谱合
+前言声明以下分析基于各品牌公开信息、第三方报告及平台数据，作客观展示.一、GEO优化市场概况在数字化营销的浪潮中，GEO优化成为企业精准触达目标客户、提升市场竞
+2025-12-17</div>
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户做决策时高度依赖案例。AI 回答&#x27;XX公司用了什么方案&#x27;&#x27;XX行业有什么成功案例&#x27;时，会优先引用有完整数据的案例页</div><div><b>缺失影响：</b>没有客户案例，B端客户决策时缺少信任依据，AI回答&#x27;XX行业谁做过&#x27;时也不会提到你</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看导航是否有&#x27;客户案例&#x27;&#x27;成功案例&#x27;入口，点进去看案例是否为独立页面，是否包含客户背景、挑战、方案、成果数据</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 ≥5 个详细客户案例（独立页面），每个案例含客户背景/挑战/方案/成果数据（量化），有客户 Logo 和证言</div>
+        <div><b>普通：</b>有案例入口和案例列表，但案例详情较简单（缺少成果数据或挑战分析），或案例数量 &lt;5</div>
+        <div><b>未完成：</b>没有客户案例页面，或只有客户 Logo 没有案例详情</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>行业解决方案覆盖度</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">覆盖 13 个行业/场景
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户常搜索&#x27;XX行业解决方案&#x27;&#x27;XX场景用什么工具&#x27;。按行业拆分的页面能精准匹配这些搜索意图，被 AI 引用的概率大幅提升</div><div><b>缺失影响：</b>没有行业方案页，用户搜&#x27;XX行业解决方案&#x27;时匹配不到，错失高意向行业流量</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看导航是否有&#x27;行业解决方案&#x27;&#x27;应用场景&#x27;入口，是否按零售、金融、教育、医疗等行业拆分了独立页面</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>覆盖 ≥5 个目标行业，每个行业有独立页面，针对行业痛点定制内容（含场景/方案/案例/数据）</div>
+        <div><b>普通：</b>覆盖 2-3 个行业，有行业页面但内容较通用，未针对行业痛点深度定制</div>
+        <div><b>未完成：</b>没有按行业/场景拆分，所有内容都在通用页面，或行业覆盖 &lt;2 个</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>对比类内容存在性</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-success-bg)] text-[var(--state-success-text)] border border-[var(--state-success)]/10"><i data-lucide="check" class="w-3 h-3 mr-1"></i>通过</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">有对比类内容入口: 企业选型必备：GEO优化服务商筛选的六大核心维度
+在数字营销竞争日益激烈的今天，GEO优化服务商成为众多企业提升产品曝光、实现精准获客的关键合作伙伴。面对市场中众多的服务提供商，企业应如何科学评估、理性选择？本
+2026-01-14, 传统SEO和GEO(AI SEO)的区别, GEO优化和SEO有什么区别？一文讲清AI搜索时代的新获客逻
+GEO优化和SEO的核心区别在于：SEO争取网页在搜索结果中的可见位置，GEO优化争取品牌在AI生成答案中的准确出现、合理推荐和可信引用。企业不应把两者理解成替
+2026-07-10
+                
+                
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户选型阶段会大量搜索&#x27;XX和XX哪个好&#x27;&#x27;XX选型指南&#x27;。有这类内容的网站能截胡竞品流量，被 AI 选为对比答案的来源</div><div><b>缺失影响：</b>没有对比/选型内容，用户在竞品对比阶段找不到你，被竞品内容截胡流量</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>看网站是否有&#x27;XX对比XX&#x27;&#x27;XX哪家好&#x27;&#x27;选型指南&#x27;类文章，内容是否客观中立、有数据支撑</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>有 ≥3 篇高质量对比/选型文章，客观中立（不贬低竞品），有数据/表格/场景分析，有独立页面且 URL 规范</div>
+        <div><b>普通：</b>有 1-2 篇对比内容，但可能不够客观（过度自夸）或缺少数据支撑</div>
+        <div><b>未完成：</b>没有任何对比/选型类内容</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>技术文档/API文档AI友好</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">未检测到技术文档/API文档入口
+                <div>所有页面均未找到文档链接，B端客户和AI无法获取技术信息</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>技术文档采用清晰目录结构、代码示例、API说明，添加llms.txt引用，确保AI可抓取</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户和AI都高度依赖技术文档。文档结构清晰、可被AI抓取，能让AI在回答技术问题时引用你的文档，带来精准的技术流量</div><div><b>缺失影响：</b>技术文档不友好，开发者和技术决策者搜技术问题时找不到你，技术驱动的B端业务流失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>访问文档/API页面，看是否有侧边栏目录、代码块是否有语言高亮、是否有站内搜索、文档是否为静态HTML（非JS渲染）</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>文档站有完整侧边栏目录+面包屑，代码块有语言标记，有OpenAPI/Swagger规范，静态HTML可抓取，有搜索功能，llms.txt包含文档页</div>
+        <div><b>普通：</b>有基本文档结构和目录，但代码块缺少语言标记，或部分内容依赖JS渲染，或搜索功能不完善</div>
+        <div><b>未完成：</b>无技术文档，或文档为纯图片/JS渲染无法被AI抓取，或结构混乱无目录</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>问答型内容覆盖</div>
+                <div>
+                    <span>
+                        P1
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">网站覆盖了5个话题维度，但缺少安全/合规相关内容，且无FAQ结构化标记，FAQ板块数量有限，整体覆盖不够系统。
+                <div>规则检测覆盖: 对比/选型, 试用/体验, 价格/费用, 售后/支持, 部署/使用。板块: 3处FAQ板块。LLM判断缺失: 安全/合规。问题: 无FAQ结构化标记；缺少安全/合规话题内容；FAQ板块数量较少，可能不够全面</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>针对&#x27;多少钱&#x27;&#x27;怎么部署&#x27;&#x27;安全吗&#x27;&#x27;和XX比怎么样&#x27;等高意向问题创建问答内容</div>
+            </div>
+                
+        <div>
+            <span>
+                全站级
+            </span>
+            <span>
+                全站适用
+            </span>
+            <span>检测页面: 全站配置</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端客户决策前会大量搜索&#x27;XX多少钱&#x27;&#x27;XX怎么部署&#x27;&#x27;XX安全吗&#x27;等问题。覆盖这些问答型内容能让AI直接引用你的答案，截胡高意向流量</div><div><b>缺失影响：</b>没有问答型内容，用户搜&#x27;多少钱&#x27;&#x27;怎么部署&#x27;&#x27;安全吗&#x27;等高意向问题时匹配不到，转化关键节点缺失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>浏览网站FAQ、博客、帮助中心，统计覆盖了多少个客户高频问题（价格、部署方式、数据安全、合规认证、售后支持等），每个问题是否有完整答案</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>覆盖≥15个高频问题（价格/部署/安全/合规/售后等），每个问题有独立页面或FAQ结构化标记，答案完整含数据，有FAQPage Schema</div>
+        <div><b>普通：</b>覆盖5-10个高频问题，有FAQ板块但可能缺少结构化标记，或部分问题答案较简单</div>
+        <div><b>未完成：</b>无FAQ或问答型内容，或覆盖问题&lt;5个，答案不完整</div>
+    </div></td>
+              </tr>
+              <tr class="align-top">
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>转化引导与决策路径</div>
+                <div>
+                    <span>
+                        P2
+                    </span>
+                </div></td>
+                <td class="text-center px-4 py-3 text-[var(--jl-neutral-700)]"><span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--state-warning-bg)] text-[var(--state-warning-text)] border border-[var(--state-warning)]/10"><i data-lucide="alert-circle" class="w-3 h-3 mr-1"></i>警告</span></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]">页面提供多个CTA入口和结构化内容，但转化路径单一且缺乏分层引导，CTA话术与决策阶段匹配度一般。
+                <div>页面提供多个CTA入口和结构化内容，但转化路径单一且缺乏分层引导，CTA话术与决策阶段匹配度一般。（检测到9个CTA入口）。问题: 所有CTA均为&#x27;立即咨询&#x27;或&#x27;免费获取优化方案&#x27;，未根据用户决策阶段（了解、评估、选择）提供差异化引导，如案例下载、白皮书、试用等。；CTA位置集中在页面中后部，首屏无明确转化入口，用户需滚动较深才能看到联系引导。；页面内容以功能对比和公司实力展示为主，但缺少针对不同行业或场景的针对性内容，可能影响用户决策信心。；&#x27;免费获取优化方案&#x27;链接指向&#x27;#&#x27;，未明确表单或落地页，可能造成用户困惑。；在线咨询入口（&#x27;Hi, 我在线欢迎您来随时咨询&#x27;）为聊天组件，但未说明响应时间或服务方式，降低用户尝试意愿。</div>
+                
+            <div>
+                <div>修复建议</div>
+                <div>按决策阶段设计分层CTA（科普页给资料下载、产品页给预约演示、高意向给咨询），提供多种低门槛联系入口</div>
+            </div>
+                
+        <div>
+            <span>
+                首页级
+            </span>
+            <span>
+                首页适用
+            </span>
+            <span>检测页面: https://feiyougeo.cn/</span>
+        </div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div><b>作用：</b>B端决策链长，需要在合适位置提供匹配决策阶段的引导。内容好但无下一步入口、或一上来就硬推销，都会让用户和AI找不到从了解到联系的路径</div><div><b>缺失影响：</b>内容讲得好却没有下一步入口，或一上来就硬推销，用户和AI都找不到从了解到联系的路径，高意向流量白白流失</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>通读页面看是否有明确的下一步入口；判断CTA是否匹配当前内容阶段（科普页给资料、产品页给演示）；是否提供多种低门槛联系方式</div></td>
+                <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)]"><div>
+        <div><b>优秀：</b>CTA与内容决策阶段匹配，提供分层转化路径（轻量资料→深度演示→直接咨询），入口清晰、话术自然不打扰，AI能识别服务承接方式</div>
+        <div><b>普通：</b>有CTA但形式单一，或位置/话术与决策阶段不完全匹配，转化路径不够顺滑</div>
+        <div><b>未完成：</b>无任何转化引导，或全程硬推销引发反感，用户找不到下一步联系路径</div>
+    </div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+  </details>
+
+  <!-- Footer -->
+  <footer class="mt-8 pt-6 border-t border-[var(--jl-border)] text-center text-xs text-[var(--jl-neutral-400)]">
+    <p>本报告由飞柚GEO提供</p>
+  </footer>
+</div>
+
+    </main>
+    <style>
+      body {
+        background:
+          radial-gradient(circle at 20% 0%, rgba(59, 130, 246, 0.1) 0%, transparent 35%),
+          radial-gradient(circle at 80% 100%, rgba(37, 99, 235, 0.1) 0%, transparent 35%),
+          linear-gradient(180deg, var(--jl-blue-100) 0%, var(--jl-blue-50) 15%, #ffffff 40%, #ffffff 60%, var(--jl-blue-50) 85%, var(--jl-blue-100) 100%) !important;
+        background-attachment: fixed;
+      }
+      main > div > section:not(.bg-gradient-to-br),
+      main details > summary,
+      main article {
+        background: rgba(255,255,255,0.78) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</body>
+</html>

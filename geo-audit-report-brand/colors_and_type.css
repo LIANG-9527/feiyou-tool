@@ -1,0 +1,134 @@
+/* 极联股份 · GEO 诊断报告 — 品牌升级设计系统 */
+
+@layer theme {
+  :root {
+    /* Brand primary scale — 极联蓝 */
+    --jl-blue-50: #eff6ff;
+    --jl-blue-100: #dbeafe;
+    --jl-blue-200: #bfdbfe;
+    --jl-blue-300: #93c5fd;
+    --jl-blue-400: #60a5fa;
+    --jl-blue-500: #3b82f6;
+    --jl-blue-600: #2563eb;
+    --jl-blue-700: #1d4ed8;
+    --jl-blue-800: #1e3a5f;
+    --jl-blue-900: #172554;
+
+    /* Neutral scale */
+    --jl-neutral-0: #ffffff;
+    --jl-neutral-50: #f8fafc;
+    --jl-neutral-100: #f1f5f9;
+    --jl-neutral-200: #e2e8f0;
+    --jl-neutral-300: #cbd5e1;
+    --jl-neutral-400: #94a3b8;
+    --jl-neutral-500: #64748b;
+    --jl-neutral-600: #475569;
+    --jl-neutral-700: #334155;
+    --jl-neutral-800: #1e293b;
+    --jl-neutral-900: #0f172a;
+
+    /* Semantic status colors */
+    --state-success: #10b981;
+    --state-success-bg: #ecfdf5;
+    --state-success-text: #065f46;
+    --state-warning: #f59e0b;
+    --state-warning-bg: #fffbeb;
+    --state-warning-text: #92400e;
+    --state-error: #ef4444;
+    --state-error-bg: #fef2f2;
+    --state-error-text: #991b1b;
+    --state-info: #0ea5e9;
+    --state-info-bg: #f0f9ff;
+    --state-info-text: #0c4a6e;
+    --state-orange: #f97316;
+    --state-orange-bg: #fff7ed;
+    --state-orange-text: #9a3412;
+
+    /* Semantic aliases required by head contract */
+    --jl-background: var(--jl-neutral-50);
+    --jl-foreground: var(--jl-neutral-900);
+    --jl-card: var(--jl-neutral-0);
+    --jl-card-foreground: var(--jl-neutral-800);
+    --jl-popover: var(--jl-neutral-0);
+    --jl-popover-foreground: var(--jl-neutral-800);
+    --jl-primary: var(--jl-blue-600);
+    --jl-primary-foreground: #ffffff;
+    --jl-muted: var(--jl-neutral-100);
+    --jl-muted-foreground: var(--jl-neutral-500);
+    --jl-border: var(--jl-neutral-200);
+    --jl-input: var(--jl-neutral-200);
+    --jl-ring: var(--jl-blue-400);
+    --jl-radius-small: 4px;
+    --jl-radius-medium: 8px;
+    --jl-radius-large: 12px;
+
+    /* Legacy semantic aliases */
+    --background: var(--jl-background);
+    --foreground: var(--jl-foreground);
+    --card: var(--jl-card);
+    --card-foreground: var(--jl-card-foreground);
+    --popover: var(--jl-popover);
+    --popover-foreground: var(--jl-popover-foreground);
+    --primary: var(--jl-primary);
+    --primary-foreground: var(--jl-primary-foreground);
+    --muted: var(--jl-muted);
+    --muted-foreground: var(--jl-muted-foreground);
+    --border: var(--jl-border);
+    --input: var(--jl-input);
+    --ring: var(--jl-ring);
+    --radius-sm: var(--jl-radius-small);
+    --radius-md: var(--jl-radius-medium);
+    --radius-lg: var(--jl-radius-large);
+    --radius-full: 9999px;
+
+    /* Typography */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Shadows — static surfaces <= 0.05 alpha */
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.05), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+    --shadow-lg: 0 10px 15px -3px rgba(15, 23, 42, 0.05), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+    --shadow-float: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.08);
+  }
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    background: var(--jl-background);
+    color: var(--jl-foreground);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    margin: 0;
+    font-weight: 700;
+    line-height: 1.25;
+    color: var(--jl-neutral-900);
+  }
+
+  p {
+    margin: 0;
+  }
+
+  a {
+    color: var(--jl-primary);
+    text-decoration: none;
+  }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  code, pre {
+    font-family: var(--font-mono);
+  }
+}

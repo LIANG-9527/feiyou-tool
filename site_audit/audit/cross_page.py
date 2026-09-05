@@ -36,7 +36,7 @@ class CrossPageChecker(BaseChecker):
         item = self._item(
             "tech-13", "内部链接可访问性（断链检测）", Priority.P1,
             "站内链接是否都能正常打开，无 404/5xx 死链",
-            "抓取首页及抽样内页中的同域链接，逐个请求状态码",
+            "抓取首页及抽样内页中的同域链接，逐个请求状态码，并识别 htts:// 之类漏写字母的非法协议链接",
             "站内无死链，所有内链返回 200",
             manual_check="在浏览器逐个点击导航和正文链接，或用 Xenu/Screaming Frog 爬取，筛选状态码为 404/5xx 的链接",
             purpose="死链会让 AI 爬虫抓取中断、降低整站抓取效率，用户点击到 404 页面也会直接流失，是站点健康度的基础指标",
@@ -49,13 +49,27 @@ class CrossPageChecker(BaseChecker):
             return self._result(item, Status.SKIP,
                                 "未检查（需多页面抽样，当前仅抓取首页）")
         crawler = SiteCrawler(self.fetcher)
-        broken = crawler.check_internal_link_status(self.all_pages)
+        broken, bad_schemes = crawler.check_internal_link_status(self.all_pages)
+        sampled = [p.final_url for p in self.all_pages]
+        # 站内非法协议链接（如 htts:// 漏写字母）等同死链；外链只在明细提示、不改判级
+        for href, is_internal, anchor in bad_schemes:
+            if is_internal:
+                broken.append((href, "非法协议", anchor))
+        ext_bad = [h for h, internal, _ in bad_schemes if not internal]
         if not broken:
-            return self._result(item, Status.PASS,
-                                f"抽样检查的站内链接均可访问（覆盖 {len(self.all_pages)} 个页面）")
+            msg = (f"抽样检查的站内链接均可访问（覆盖 {len(self.all_pages)} 个页面）"
+                   + (f"；发现 {len(ext_bad)} 个外链协议拼写疑似笔误（如 htts://），点击即失效，建议修正"
+                      if ext_bad else ""))
+            return self._result(item, Status.PASS, msg,
+                                detail="；".join(ext_bad[:5]) if ext_bad else None,
+                                pages=sampled)
         detail = "；".join(f"{url} → {code or '无响应'}" for url, code, _ in broken[:8])
+        if ext_bad:
+            detail += "；外链协议笔误：" + "、".join(ext_bad[:5])
         status = Status.FAIL if len(broken) >= 3 else Status.WARN
-        return self._result(item, status, f"发现 {len(broken)} 个失效内部链接", detail=detail)
+        return self._result(item, status, f"发现 {len(broken)} 个失效内部链接",
+                            detail=detail,
+                            pages=sampled + [u for u, _, _ in broken if u not in sampled])
 
     # AI-11 重复 Title/Description
     def _check_duplicate_meta(self) -> CheckResult:
@@ -150,10 +164,12 @@ class CrossPageChecker(BaseChecker):
                                  urlparse(cores[i][0]).path, urlparse(cores[j][0]).path))
         if not hits:
             return self._result(item, Status.PASS,
-                                f"{len(cores)} 个页面标题主题差异化，未发现关键词蚕食")
+                                f"{len(cores)} 个页面标题主题差异化，未发现关键词蚕食",
+                                pages=[u for u, _, _ in cores])
         hits.sort(reverse=True)
         detail = "；".join(f"「{a}」↔「{b}」相似度{int(s*100)}%" for s, a, b, _, _ in hits[:5])
         status = Status.FAIL if len(hits) >= 3 else Status.WARN
+        hit_pages = sorted({u for h in hits[:5] for u in (h[3], h[4])})
         return self._result(item, status,
                             f"发现 {len(hits)} 对疑似关键词蚕食的页面（规则初筛，建议人工确认）",
-                            detail=detail)
+                            detail=detail, pages=hit_pages)

@@ -1,0 +1,53 @@
+{
+  "data": [
+    {
+      "id": "page-index",
+      "title": "GEO 诊断报告（品牌升级）",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1788489900000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 1259,
+          "viewportWidth": 1440,
+          "sourceHash": "fnv1a-4373ab96",
+          "measuredAt": 1788496718515
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/index.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "image-001",
+      "title": "极联股份 Logo",
+      "type": "image",
+      "version": 1,
+      "createdAt": 1788494081000,
+      "canvasData": {
+        "x": 0,
+        "y": 480,
+        "naturalSize": {
+          "width": 1200,
+          "height": 420
+        }
+      },
+      "devMetadata": {
+        "imageSrc": "assets/logo.png"
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "GEO 诊断报告品牌升级",
+    "designLibrary": null,
+    "showEdge": true,
+    "visualEditorEnabled": false
+  }
+}

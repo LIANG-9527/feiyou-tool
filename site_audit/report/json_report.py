@@ -8,8 +8,10 @@ def report_to_dict(report: AuditReport) -> dict:
     return {
         "url": report.url,
         "final_url": report.final_url,
+        "site_brand": report.site_brand or "",
         "timestamp": report.timestamp,
         "prompt_version": report.prompt_version,
+        "token_usage": report.token_usage,
         "total_score": report.total_score,
         "grade": report.grade,
         "summary": report.summary,
@@ -46,6 +48,9 @@ def report_to_dict(report: AuditReport) -> dict:
                 "excellent": r.excellent,
                 "normal": r.normal,
                 "failed": r.failed,
+                "tier": r.tier,
+                "skip_kind": r.skip_kind,
+                "pages": r.pages or [],
             }
             for r in report.results
         ],

@@ -1,6 +1,16 @@
 """评分引擎：根据检查结果计算维度分和总分"""
 from typing import List
-from .models import CheckResult, Status, Category, CategoryScore, AuditReport
+from .models import CheckResult, Status, Priority, Category, CategoryScore, AuditReport
+
+
+# 三档计票分量：致命问题(P0)2票、重要(P1)1票、轻微(P2)半票。
+# 维度得分 = Σ(状态分×分量) / Σ分量，状态分 pass=1 / warn=0.5 / fail=0。
+# 用既有优先级一物两用，不引入一堆人工小数权重；致命项不合格会明显更压分。
+PRIORITY_WEIGHT = {Priority.P0: 2.0, Priority.P1: 1.0, Priority.P2: 0.5}
+
+
+def _weight_of(result: CheckResult) -> float:
+    return PRIORITY_WEIGHT.get(getattr(result, "priority", Priority.P1), 1.0)
 
 
 # 各维度权重（合计 1.0）
@@ -37,6 +47,9 @@ def calculate_category_scores(results: List[CheckResult]) -> List[CategoryScore]
     for r in results:
         if r.item_id in CMS_ITEM_IDS:
             continue
+        # 锦上添花项不参与计分（总分与维度统计均为核心项口径）
+        if getattr(r, 'tier', 'core') == 'bonus':
+            continue
         if r.category not in category_map:
             category_map[r.category] = []
         category_map[r.category].append(r)
@@ -49,11 +62,18 @@ def calculate_category_scores(results: List[CheckResult]) -> List[CategoryScore]
         failed = sum(1 for i in items if i.status == Status.FAIL)
         skipped = sum(1 for i in items if i.status == Status.SKIP)
 
-        # 计分：pass=1, warn=0.5, fail=0, skip 不计入分母
-        scorable = [i for i in items if i.status != Status.SKIP]
-        if scorable:
-            earned = sum(i.score for i in scorable)
-            score = (earned / len(scorable)) * 100
+        # 计分：pass=1, warn=0.5, fail=0。
+        # SKIP 分两类：天然不适用(skip_kind=na)剔出分母、不罚；
+        # 该查却没抽到/证据不足(missing)按中性 0.5 计入分母，防止"检查得越少分越高"。
+        scored = [i for i in items if i.status != Status.SKIP]
+        missing = [i for i in items
+                   if i.status == Status.SKIP and getattr(i, "skip_kind", "na") == "missing"]
+        # 三档加权：每项按优先级分量计票（P0=2/P1=1/P2=0.5）
+        denom_weight = sum(_weight_of(i) for i in scored) + sum(_weight_of(i) for i in missing)
+        if denom_weight:
+            earned_weight = sum(i.score * _weight_of(i) for i in scored) \
+                + 0.5 * sum(_weight_of(i) for i in missing)
+            score = (earned_weight / denom_weight) * 100
         else:
             score = 0.0
 
@@ -85,7 +105,9 @@ def calculate_total_score(category_scores: List[CategoryScore]) -> float:
 
 def build_report(url: str, final_url: str, timestamp: str,
                  results: List[CheckResult], sampled_pages: list = None,
-                 prompt_version: str = "") -> AuditReport:
+                 prompt_version: str = "",
+                 token_usage: dict = None,
+                 site_brand: str = "") -> AuditReport:
     """构建完整报告"""
     category_scores = calculate_category_scores(results)
     total_score = calculate_total_score(category_scores)
@@ -101,4 +123,6 @@ def build_report(url: str, final_url: str, timestamp: str,
         results=results,
         sampled_pages=sampled_pages or [],
         prompt_version=prompt_version,
+        token_usage=token_usage or {},
+        site_brand=site_brand,
     )

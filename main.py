@@ -19,6 +19,7 @@ from pydantic import BaseModel as PydanticModel, Field
 from llm_client import LLMClient
 from agent import Agent, ChatAgent
 from site_audit.runner import run_site_audit
+from site_audit.core.ai_engine import estimate_cost_cny
 
 logging.basicConfig(
     level=logging.INFO,
@@ -512,14 +513,14 @@ def _shorten_brand_name(full_name: str) -> str:
     name = full_name.strip()
     # 去掉括号及注释
     name = re.sub(r"[（(].*?[)）]", "", name)
-    # 去掉地域前缀
-    for prefix in ("中国", "全国", "北京市", "上海市", "深圳市", "广州市", "杭州市", "东莞市", "苏州市", "南京市", "成都市", "武汉市", "西安市", "佛山市", "中山市", "珠海市", "惠州市", "汕头市", "深圳市", "广东省", "江苏省", "浙江省", "福建省", "山东省", "四川省", "湖南省", "湖北省", "安徽省", "河南省", "河北省", "辽宁省", "陕西省", "重庆", "天津"):
-        if name.startswith(prefix) and len(name) > len(prefix):
+    # 去掉地域前缀（长前缀优先）
+    for prefix in sorted(["中国", "全国", "北京市", "上海市", "深圳市", "深圳市", "广州", "广州市", "杭州", "东莞市", "东莞", "苏州", "南京市", "南京", "成都", "成都市", "武汉", "西安市", "西安", "佛山", "中山市", "中山", "珠海", "惠州", "汕头", "广东", "广东省", "江苏", "江苏省", "浙江", "浙江省", "福建", "福建省", "山东", "山东省", "四川", "湖南省", "湖南", "湖北省", "湖北", "安徽", "河南省", "河南", "河北", "辽宁省", "辽宁", "陕西", "陕西省", "重庆", "天津", "深圳"], key=len, reverse=True):
+        if name.startswith(prefix) and len(name) > len(prefix) + 1:
             name = name[len(prefix):]
             break
-    # 去掉公司后缀
-    for suffix in ("集团有限公司", "科技有限公司", "技术服务有限公司", "信息技术有限公司", "网络科技有限公司", "互联网服务有限公司", "企业管理有限公司", "营销技术有限公司", "企业管理咨询有限公司", "企服集团有限公司", "律师事务所", "有限公司", "有限责任公司", "股份有限公司", "合伙企业", "集团"):
-        if name.endswith(suffix) and len(name) > len(suffix):
+    # 去掉公司后缀（长后缀优先）
+    for suffix in sorted(["集团有限公司", "科技有限公司", "技术服务有限公司", "信息技术有限公司", "网络科技有限公司", "互联网服务有限公司", "企业管理有限公司", "营销技术有限公司", "企业管理咨询有限公司", "企服集团有限公司", "律师事务所", "有限公司", "有限责任公司", "股份有限公司", "合伙企业", "集团"], key=len, reverse=True):
+        if name.endswith(suffix) and len(name) > len(suffix) + 1:
             name = name[:-len(suffix)]
             break
     name = name.strip()
@@ -536,8 +537,11 @@ async def list_audit_reports():
     audit_dir = BASE_DIR / "output" / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
     reports = []
-    for f in sorted(audit_dir.glob("*.html"), key=lambda x: x.stat().st_mtime, reverse=True):
+    for f in audit_dir.glob("*.html"):
         stem = f.stem
+        # 跳过 regen 派生报告（开发期 UI 迭代产物，底层诊断数据与原始报告完全相同）
+        if "_regen_" in stem:
+            continue
         json_file = audit_dir / f"{stem}.json"
         info = {"html_file": f.name, "filename": stem}
         if json_file.exists():
@@ -553,6 +557,15 @@ async def list_audit_reports():
                 info["fail"] = summary.get("fail", 0)
                 info["skip"] = summary.get("skip", 0)
                 info["total"] = summary.get("total", 0)
+                # LLM token 用量与费用（旧报告无此字段则不展示）
+                tu = data.get("token_usage") or {}
+                if tu.get("total_tokens"):
+                    info["tokens"] = tu.get("total_tokens", 0)
+                    info["token_calls"] = tu.get("calls", 0)
+                    # 永远按当前官方峰谷价现场计算（存档 cost_cny 仅留档），
+                    # 价格修正后历史报告显示自动跟随对账
+                    info["cost"] = estimate_cost_cny(
+                        tu, ts_hint=data.get("timestamp", ""))
                 # 提取品牌名：优先 auth-05 message（品牌[XXX]），其次 tech-14
                 import re
                 brand_name = ""
@@ -600,6 +613,8 @@ async def list_audit_reports():
         import datetime
         info["mtime"] = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         reports.append(info)
+    # 按诊断时间排序（不是文件修改时间），最新的在前
+    reports.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return JSONResponse(reports)
 
 
@@ -2674,6 +2689,12 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
 .report-bar .meta{font-size:13px;color:#86868b}
 .report-bar a{font-size:13px;color:#0071e3;text-decoration:none;font-weight:600}
 .report-frame{width:100%;height:60vh;border:1px solid #e0e0e5;border-radius:14px;background:#fff}
+.report-expand{display:none;margin:3px 0 16px 0;padding:16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);border-top:2px solid #0071e3}
+.report-expand.show{display:block}
+.report-expand .expand-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.report-expand .expand-bar .meta{font-size:13px;color:#6b7280}
+.report-expand .expand-bar a{font-size:13px;color:#0071e3;text-decoration:none}
+.report-expand .expand-bar a:hover{text-decoration:underline}
 .history-section{margin-top:24px}
 .history-section h3{font-size:16px;margin-bottom:12px;color:#1d1d1f}
 .report-list{display:flex;flex-direction:column;gap:8px}
@@ -2686,6 +2707,9 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
 .report-item .r-url{font-size:14px;color:#1d1d1f;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .report-item .r-score{font-size:20px;font-weight:700;flex-shrink:0;min-width:48px;text-align:right}
 .report-item .r-time{font-size:12px;color:#86868b;flex-shrink:0;min-width:100px;text-align:right}
+.report-item .r-tokens{position:relative;font-size:11px;font-weight:600;color:#5C3CF1;background:#5C3CF11a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
+.report-item .r-tokens .tok-tip{display:none;position:absolute;top:calc(100% + 6px);right:0;background:#1d1d1f;color:#fff;font-size:11px;font-weight:400;padding:5px 10px;border-radius:6px;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.18);pointer-events:none}
+.report-item .r-tokens:hover .tok-tip{display:block}
 .report-item .r-stats{font-size:11px;color:#86868b;flex-shrink:0}
 .report-item .r-stats .s-pass{color:#16a34a}
 .report-item .r-stats .s-warn{color:#d97706}
@@ -2706,7 +2730,7 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
 <div class="wrap">
   <header>
     <h1>GEO 官网诊断</h1>
-    <p>输入官网网址，自动抽样抓取内页，从技术可抓取性、AI友好度、内容质量、权威信任、商业转化与决策内容 5 个维度执行 46 项检查（含断链、重复元信息、关键词蚕食等跨页面检测）并生成诊断报告</p>
+    <p>输入官网网址，自动抽样抓取内页，从技术可抓取性、AI友好度、内容质量、权威信任、商业转化与决策内容 5 个维度执行数十项检查（含断链、重复元信息、关键词蚕食等跨页面检测）并生成诊断报告</p>
   </header>
 
   <div class="audit-form">
@@ -2714,22 +2738,14 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
            onkeydown="if(event.key==='Enter')startAudit()">
     <button id="auditBtn" onclick="startAudit()">开始诊断</button>
   </div>
-  <div class="hint">需抓取首页、抽样内页及 robots/sitemap/llms.txt 等配置并检查站内链接，约需 20-40 秒，请耐心等待</div>
+  <div class="hint">需抓取首页、抽样内页及 robots/sitemap/llms.txt 等配置并检查站内链接，约需 1～2 分钟，请耐心等待</div>
 
-  <div class="msg err" id="errMsg"></div>
+  <div class="msg" id="errMsg"></div>
 
   <div class="loading" id="loadingBox">
     <div class="spinner"></div>
     <div class="lt">正在诊断中…</div>
     <div class="ls" id="loadingStep">正在抓取首页、抽样内页并执行 46 项检查</div>
-  </div>
-
-  <div class="result" id="resultBox">
-    <div class="report-bar">
-      <span class="meta" id="reportMeta"></span>
-      <a id="openFull" href="#" target="_blank">新窗口打开完整报告 ↗</a>
-    </div>
-    <iframe class="report-frame" id="reportFrame" title="诊断报告"></iframe>
   </div>
 
   <div class="history-section">
@@ -2749,12 +2765,12 @@ async function startAudit(){
   const btn = document.getElementById('auditBtn');
   const errBox = document.getElementById('errMsg');
   const loading = document.getElementById('loadingBox');
-  const result = document.getElementById('resultBox');
-  errBox.style.display='none';
-  if(!url){errBox.textContent='请输入要诊断的网址';errBox.style.display='block';return;}
+  errBox.classList.remove('err'); errBox.style.display='none';
+  if(!url){errBox.textContent='请输入要诊断的网址';errBox.classList.add('err');errBox.style.display='block';return;}
+  if(!window.confirm('当前检测大约需要1～2分钟左右，是否确认开始？')) return;
   btn.disabled=true; btn.textContent='诊断中…';
-  result.style.display='none'; loading.style.display='block';
-  document.getElementById('loadingStep').textContent='正在抓取首页、抽样内页并执行 46 项检查（约20-40秒）…';
+  loading.style.display='block';
+  document.getElementById('loadingStep').textContent='正在抓取首页、抽样内页并逐项检查（约1～2分钟）…';
   try{
     const resp = await fetch('/api/audit',{
       method:'POST',headers:{'Content-Type':'application/json'},
@@ -2765,7 +2781,7 @@ async function startAudit(){
     renderResult(data);
   }catch(e){
     loading.style.display='none';
-    errBox.textContent='诊断失败：'+e.message; errBox.style.display='block';
+    errBox.textContent='诊断失败：'+e.message; errBox.classList.add('err'); errBox.style.display='block';
   }finally{
     btn.disabled=false; btn.textContent='开始诊断';
   }
@@ -2773,12 +2789,7 @@ async function startAudit(){
 
 function renderResult(d){
   document.getElementById('loadingBox').style.display='none';
-  const box = document.getElementById('resultBox');
-  box.style.display='block';
-  const reportUrl='/audit-result/'+encodeURIComponent(d.html_file);
-  document.getElementById('reportFrame').src=reportUrl;
-  document.getElementById('openFull').href=reportUrl;
-  document.getElementById('reportMeta').textContent='目标：'+d.final_url+' ｜ 响应 '+d.response_time+'s ｜ '+d.page_kb+'KB';
+  // 新诊断完成后，加载历史列表并自动展开最新的
   loadReportList(d.html_file);
 }
 
@@ -2803,14 +2814,16 @@ async function loadReportList(activeFile){
       const isActive = r.html_file === currentReportFile;
       const stats = r.total ? '<span class="r-stats">✓<span class="s-pass">'+r.pass+'</span> ⚠<span class="s-warn">'+r.warn+'</span> ✕<span class="s-fail">'+r.fail+'</span></span>' : '';
       const brandTag = r.brand_name ? '<span class="badge-brand">'+r.brand_name+'</span>' : '';
+      const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost < 0.01 ? r.cost.toFixed(3) : r.cost.toFixed(2))+'<span class="tok-tip">LLM调用 '+r.token_calls+' 次 · 共消耗 '+r.tokens.toLocaleString()+' tokens</span></span>' : '';
       return '<div class="report-item'+(isActive?' active':'')+'" data-file="'+r.html_file+'">'+
         (isNew ? '<span class="badge-new">最新</span>' : '')+
-        '<span class="badge-grade" style="background:'+gc+'">'+grade+'</span>'+
         brandTag+
         '<span class="r-url">'+url+'</span>'+
         stats+
         '<span class="r-score" style="color:'+gc+'">'+score+'</span>'+
+        '<span class="badge-grade" style="background:'+gc+'">'+grade+'</span>'+
         '<span class="r-time">'+time+'</span>'+
+        tokenTag+
         '<button class="btn-del" data-del="'+r.html_file+'" title="删除">&times;</button>'+
       '</div>';
     }).join('');
@@ -2826,6 +2839,11 @@ async function loadReportList(activeFile){
         handleDelete(this);
       });
     });
+    // 如果有激活项，自动展开
+    if(activeFile){
+      const activeEl = document.querySelector('.report-item.active');
+      if(activeEl) viewReport(activeFile, activeEl);
+    }
   }catch(e){
     document.getElementById('reportList').innerHTML = '<div style="text-align:center;color:#c0392b;font-size:13px;padding:20px">加载失败</div>';
   }
@@ -2833,11 +2851,31 @@ async function loadReportList(activeFile){
 
 function viewReport(htmlFile, el){
   const url = '/audit-result/'+encodeURIComponent(htmlFile);
-  document.getElementById('reportFrame').src = url;
-  document.getElementById('openFull').href = url;
-  document.getElementById('resultBox').style.display = 'block';
+  // 如果点击的是当前已展开的，收起
+  const nextEl = el.nextElementSibling;
+  if(nextEl && nextEl.classList.contains('report-expand') && nextEl.classList.contains('show')){
+    nextEl.classList.remove('show');
+    el.classList.remove('active');
+    currentReportFile = null;
+    return;
+  }
+  // 收起所有已展开的
+  document.querySelectorAll('.report-expand').forEach(function(e){e.classList.remove('show');});
   document.querySelectorAll('.report-item').forEach(function(e){e.classList.remove('active');});
-  if(el) el.classList.add('active');
+  // 在点击项后面插入展开区域（或复用已有的）
+  let expandEl = nextEl && nextEl.classList.contains('report-expand') ? nextEl : null;
+  if(!expandEl){
+    expandEl = document.createElement('div');
+    expandEl.className = 'report-expand';
+    expandEl.innerHTML = '<div class="expand-bar"><span class="meta"></span><a href="'+url+'" target="_blank" rel="noopener" class="open-full">新窗口打开完整报告 ↗</a></div><iframe class="report-frame" title="诊断报告" src="'+url+'"></iframe>';
+    el.parentNode.insertBefore(expandEl, el.nextSibling);
+  } else {
+    expandEl.querySelector('iframe').src = url;
+    expandEl.querySelector('.open-full').href = url;
+  }
+  expandEl.classList.add('show');
+  el.classList.add('active');
+  expandEl.querySelector('.meta').textContent = htmlFile.replace(/\.html$/, '');
   currentReportFile = htmlFile;
 }
 
@@ -2860,10 +2898,8 @@ function handleDelete(btn){
       if(d.ok){
         if(currentReportFile === fileName){
           currentReportFile = null;
-          document.getElementById('resultBox').style.display = 'none';
-          document.getElementById('reportFrame').src = '';
         }
-        loadReportList(currentReportFile);
+        loadReportList(null);
       }
     });
 }

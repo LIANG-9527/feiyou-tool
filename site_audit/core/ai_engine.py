@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -17,6 +18,84 @@ logger = logging.getLogger("site_audit.ai_engine")
 # geo-v1.1（2026-09-03 阿栈）：check_knowledge_graph 新增「LLM 提炼核心品牌词兜底重试」prompt，
 # 修复品牌变体漏核心名导致的百科误判（hcqycs 案例：变体只有全名/简称，漏「和创企赢」）。
 PROMPT_VERSION = "geo-v1.1"
+
+# DeepSeek 官方峰谷价格（人民币/百万tokens，2026-09-05 核对 api-docs.deepseek.com/quick_start/pricing）
+# 项目配置的 deepseek-chat 已弃用，自动路由到 deepseek-v4-flash 非思考模式。
+# 峰谷规则：高峰=北京时间周一至周五 9:00-12:00、14:00-18:00（午休12-14为空闲）；空闲价=高峰价一半。
+# 价格如官方调整，改下面两组常量即可。
+PRICE_PEAK = {   # 高峰时段（工作日 9-12 / 14-18）
+    "input_hit": 0.10,     # 输入·缓存命中
+    "input_miss": 3.0,     # 输入·缓存未命中
+    "output": 9.0,         # 输出
+}
+PRICE_OFFPEAK = {  # 空闲时段（其余全部时间，含周末/早晚/工作日午休）
+    "input_hit": 0.05,
+    "input_miss": 1.5,
+    "output": 4.5,
+}
+
+
+def _is_peak(dt) -> bool:
+    """DeepSeek 高峰时段：北京时间周一至周五 9:00-12:00、14:00-18:00。
+    注意午休 12:00-14:00 属于空闲时段，不是高峰。"""
+    if dt.weekday() >= 5:  # 周六=5 周日=6
+        return False
+    return 9 <= dt.hour < 12 or 14 <= dt.hour < 18
+
+
+def _price_for_hour(hour_key: str) -> dict:
+    """按调用时刻返回价格表 {input_hit, input_miss, output}（元/百万tokens）。
+
+    hour_key 格式 "YYYY-MM-DDTHH"（本地时间=北京时间），含日期与小时，
+    完整覆盖 DeepSeek 峰谷规则（工作日+时段双重维度）。
+    解析失败按高峰价返回（上界，不低估成本）。
+    """
+    try:
+        dt = datetime.strptime(hour_key, "%Y-%m-%dT%H")
+    except (ValueError, TypeError):
+        return PRICE_PEAK
+    return PRICE_PEAK if _is_peak(dt) else PRICE_OFFPEAK
+
+
+def estimate_cost_cny(tu: dict, ts_hint: str = None) -> float:
+    """按 DeepSeek 官方峰谷价格估算 token 费用（元）。
+
+    优先用 usage_by_hour 分时桶逐桶查价（精确峰谷对账）；
+    旧报告无分时数据时，用 ts_hint（报告时间戳，"YYYY-MM-DD HH:MM:SS"）
+    判断该次诊断所处时段按单一时段价计算；无 ts_hint 按高峰价（上界）。
+    无缓存细分按全部未命中计价（上界，不会低估成本）。
+    """
+    if not tu:
+        return 0.0
+    total = 0.0
+    by_hour = tu.get("usage_by_hour")
+    if by_hour:
+        for hour_key, b in by_hour.items():
+            p = _price_for_hour(hour_key)
+            total += (b.get("miss", 0) / 1_000_000 * p["input_miss"]
+                      + b.get("hit", 0) / 1_000_000 * p["input_hit"]
+                      + b.get("completion", 0) / 1_000_000 * p["output"])
+        return round(total, 4)
+    # 旧数据兜底：按报告时间戳判断峰谷
+    if ts_hint:
+        try:
+            dt = datetime.strptime(ts_hint[:19], "%Y-%m-%d %H:%M:%S")
+            p = PRICE_PEAK if _is_peak(dt) else PRICE_OFFPEAK
+        except ValueError:
+            p = PRICE_PEAK
+    else:
+        p = PRICE_PEAK
+    miss = tu.get("prompt_cache_miss_tokens")
+    if miss is None:
+        miss = tu.get("prompt_tokens", 0)
+        hit = 0
+    else:
+        hit = tu.get("prompt_cache_hit_tokens", 0)
+    completion = tu.get("completion_tokens", 0)
+    cost = (miss / 1_000_000 * p["input_miss"]
+            + hit / 1_000_000 * p["input_hit"]
+            + completion / 1_000_000 * p["output"])
+    return round(cost, 4)
 
 # 常见地域前缀（省级+主要城市），用于从公司名提炼核心品牌词；按长度降序匹配，长前缀优先
 REGION_PREFIXES = tuple(sorted([
@@ -94,8 +173,12 @@ class AIEngine:
         self.timeout = timeout
         self.max_retries = max_retries
         self._cache = {}
+        # 缓存开关：consensus 多轮判定时第 2..n 轮关闭缓存，确保真调 LLM 而非复读第 1 轮结果
+        self._cache_enabled = True
         # 原始 LLM 调用留痕：[{system, user, response}]，供快照落盘取证
         self.raw_log = []
+        # Token 用量累计（每次成功调用 DeepSeek 都累加 usage 字段），用于报告成本展示
+        self.token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
         # 外部数据通道原始响应留痕：[{check, channel, query, url, status_code, snippet, verdict}]，
         # 随快照落盘为 search_raw.json（对齐老周凭证链要求：外部判定必须可重放取证）
         self.search_raw = []
@@ -105,14 +188,41 @@ class AIEngine:
         content = system_prompt + "\x00" + user_prompt
         return hashlib.md5(content.encode("utf-8")).hexdigest()
 
+    def _accumulate_usage(self, usage: dict):
+        """累加一次成功调用的 token 用量。
+
+        总量字段（prompt/completion/total/hit/miss/calls）供展示；
+        usage_by_hour 分时桶（本地时间"YYYY-MM-DDTHH"）供未来峰谷/分时定价对账，
+        hour_key 含日期，可衍生工作日/周末、节假日等任意定价维度。
+        """
+        self.token_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
+        self.token_usage["completion_tokens"] += usage.get("completion_tokens", 0)
+        self.token_usage["total_tokens"] += usage.get("total_tokens", 0)
+        hit = usage.get("prompt_cache_hit_tokens") or 0
+        miss = usage.get("prompt_cache_miss_tokens")
+        if miss is None:
+            miss = max(usage.get("prompt_tokens", 0) - hit, 0)
+        self.token_usage["prompt_cache_hit_tokens"] = (
+            self.token_usage.get("prompt_cache_hit_tokens", 0) + hit)
+        self.token_usage["prompt_cache_miss_tokens"] = (
+            self.token_usage.get("prompt_cache_miss_tokens", 0) + miss)
+        self.token_usage["calls"] += 1
+        hour = datetime.now().strftime("%Y-%m-%dT%H")
+        buckets = self.token_usage.setdefault("usage_by_hour", {})
+        b = buckets.setdefault(hour, {"hit": 0, "miss": 0, "completion": 0})
+        b["hit"] += hit
+        b["miss"] += miss
+        b["completion"] += usage.get("completion_tokens", 0)
+
     def _call_llm(self, system_prompt: str, user_prompt: str) -> Optional[dict]:
-        """调用LLM并解析JSON响应（带缓存，相同输入只调用一次）"""
+        """调用LLM并解析JSON响应（带缓存，相同输入只调用一次；consensus 轮次可绕过）"""
         key = self._cache_key(system_prompt, user_prompt)
-        if key in self._cache:
+        if self._cache_enabled and key in self._cache:
             return self._cache[key]
 
         result = self._call_llm_raw(system_prompt, user_prompt)
-        self._cache[key] = result
+        if self._cache_enabled:
+            self._cache[key] = result
         return result
 
     def _call_llm_raw(self, system_prompt: str, user_prompt: str) -> Optional[dict]:
@@ -142,10 +252,14 @@ class AIEngine:
                     data = resp.json()
                     text = data["choices"][0]["message"]["content"]
                     result = json.loads(text)
+                    # 累加 token 用量（总量字段 + 按小时分时桶，供峰谷定价对账）
+                    usage_data = data.get("usage") or {}
+                    self._accumulate_usage(usage_data)
                     self.raw_log.append({
                         "system": system_prompt,
                         "user": user_prompt,
                         "response": result,
+                        "usage": usage_data,
                     })
                     return result
             except Exception as e:
@@ -168,6 +282,62 @@ class AIEngine:
         if s in ("warn", "warning", "normal", "一般", "注意"):
             return Status.WARN
         return Status.FAIL
+
+    @staticmethod
+    def _majority_status(statuses: list) -> Status:
+        """软性项多轮取多数结论：fail 一票否决（保守最严）+ 多数档
+
+        规则（按优先级）：
+          1) 含 fail → 取 fail（质量保守，宁可判严不放过）
+          2) ≥2 一致 → 取该
+          3) 全异或平局无 fail → 取 warn（中间档）
+        """
+        from collections import Counter
+        if not statuses:
+            return Status.WARN
+        if Status.FAIL in statuses:
+            return Status.FAIL
+        c = Counter(statuses)
+        most, n = c.most_common(1)[0]
+        if n >= 2:
+            return most
+        return Status.WARN
+
+    def consensus(self, call_fn, n: int = 3) -> tuple[Status, str, str]:
+        """对软性LLM判定项做 n 轮取多数结论，降低 LLM 非确定性抖动
+
+        call_fn: 无参 callable，返回 (Status, summary, detail)
+        返回: (多数结论status, 首轮的summary, 首轮的detail)
+
+        注意：第 1 轮走正常缓存；第 2..n 轮关闭缓存真调 LLM（相同 prompt 若命中缓存
+        会直接复读第 1 轮答案，"多轮取多数"就退化成单次判定）。
+        """
+        runs = []
+        try:
+            for i in range(n):
+                if i > 0:
+                    self._cache_enabled = False
+                try:
+                    runs.append(call_fn())
+                except Exception as e:
+                    logger.warning(f"consensus round {i+1}/{n} 异常: {e}")
+                    runs.append((Status.WARN, "", f"本轮判定异常: {e}"))
+        finally:
+            self._cache_enabled = True
+        statuses = [r[0] for r in runs]
+        consensus_status = self._majority_status(statuses)
+        _, sm, dt = runs[0]
+        # 记录多轮分布到 raw_log，便于审计
+        try:
+            self.raw_log.append({
+                "type": "consensus",
+                "n": n,
+                "rounds": [s.value for s in statuses],
+                "consensus": consensus_status.value,
+            })
+        except Exception:
+            pass
+        return consensus_status, sm, dt
 
     def check_nlp_friendly(self, page: PageData) -> tuple[Status, str, str]:
         """ai-09: NLP/大模型语义友好度"""

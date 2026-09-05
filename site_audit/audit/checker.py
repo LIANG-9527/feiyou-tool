@@ -23,6 +23,11 @@ IMPACT_MAP = {
     "tech-13": "站内存在死链，AI爬虫抓取会中断、降低整站抓取效率，用户点到404页面直接流失，搜索引擎也会降低站点健康度评分",
     "tech-14": "无法识别CMS类型，难以判断技术栈是否适合接手整改，也无法针对性给出优化方案",
     "tech-15": "后台路径可公开访问，存在被暴力破解或扫描攻击的风险，安全隐患大",
+    "tech-16": "正文页 HEAD 报错而 GET 正常，部分爬虫、CDN 预检、监控会先用 HEAD 探活，可能误判页面不存在而放弃抓取",
+    "tech-17": "没有分享标签，链接转发到微信等平台时标题、描述、封面图不可控，点击率受损，部分 AI 抓取器也读不到摘要信息",
+    "tech-18": "匿名只读页强行开会话又禁缓存，CDN/浏览器无法缓存、服务器重复渲染，首字节变慢，抓取成本上升",
+    "tech-19": "缺基础安全响应头，存在被嵌套点击劫持、MIME 误解析、降级访问等隐患，属站点健康度扣分项",
+    "tech-20": "www/非www、http/https 多入口都能直接打开，搜索引擎会当成多份重复站、权重分散、收录不稳，信号集中不到官方网址",
     # AI友好度
     "ai-01": "没有Title或过短，AI无法判断页面主题，搜索结果显示无意义标题，点击率和引用率双降",
     "ai-02": "没有Description，AI只能从页面随机摘取内容做摘要，可能抓到大段导航或无关文字，严重影响展示效果",
@@ -67,6 +72,18 @@ IMPACT_MAP = {
     "b2b-05": "技术文档不友好，开发者和技术决策者搜技术问题时找不到你，技术驱动的B端业务流失",
     "b2b-06": "没有问答型内容，用户搜'多少钱''怎么部署''安全吗'等高意向问题时匹配不到，转化关键节点缺失",
     "b2b-07": "内容讲得好却没有下一步入口，或一上来就硬推销，用户和AI都找不到从了解到联系的路径，高意向流量白白流失",
+    "b2b-08": "全站找不到有效联系方式，高意向访客无法触达，获客链路直接断开，AI也给不出可信的联系路径",
+    "b2b-09": "缺少可点的行动按钮（咨询/预约/购买），访客产生兴趣后没有明确下一步，意向在页面上流失",
+    "b2b-10": "价格、怎么买、流程、售后、覆盖范围这些下决心前的信息缺失，客户在犹豫中流失，AI也无法替你说清",
+    # 内页多页聚合扫描（2026-09-05 整改新增）
+    "mp-01": "内页缺独立标题/描述或套用首页，搜索和AI分不清每页主题，该收录的内页不被收录、不被引用",
+    "mp-02": "一个页面出现多个H1，AI抓不到页面主题，正文结构混乱会被降权并减少引用",
+    "mp-03": "文章/产品/案例详情页没有结构化标记，AI认不出它是什么类型的内容，难以精准引用",
+    "mp-04": "内页正文过薄给不出有效信息，AI不会把它选为答案来源，也撑不起要竞争的关键词",
+    "mp-05": "内页图片没有alt，AI看不懂图片内容，图片搜索流量丢失，无障碍也不合格",
+    "mp-06": "缺关于/产品服务/FAQ/隐私等必备页，AI答不出'你是谁、卖什么、客户常问什么、是否正规'；缺FAQ直接降低被引用概率",
+    "mp-07": "关于等内页只是首页内容的复制副本、没有独立信息，属于重复内容，搜索不重复收录、AI也得不到新的可引用事实",
+    "auth-08": "成立年、规模、电话、官网等同一事实在名片/页脚/正文里出现两种说法，AI做实体对齐时无法判断哪个可信，会降低采信甚至弃用，是GEO硬伤",
 }
 
 # 每个检查项的检测范围：全站 vs 首页 vs 内容页
@@ -137,6 +154,11 @@ SUGGESTION_MAP = {
     "tech-13": "用Screaming Frog/Xenu等工具全站爬链，修复或301跳转所有404/5xx死链，定期巡检",
     "tech-14": "通过特征文件和meta标签识别CMS类型，评估是否适合接手整改",
     "tech-15": "限制后台路径访问IP/添加验证/改默认路径，确保后台不暴露在公网",
+    "tech-16": "让服务端对 HEAD 与 GET 走同一控制器、返回相同状态码，勿把 HEAD 误判为静态文件缺失",
+    "tech-17": "在公共页头补齐 og:title/description/url/image/type/site_name，文章页 og:type 用 article",
+    "tech-18": "前台只读页关闭会话、允许 public 短缓存，表单/登录走独立接口",
+    "tech-19": "在 Web 服务器补 HSTS、X-Content-Type-Options: nosniff、X-Frame-Options 或 CSP frame-ancestors、Referrer-Policy",
+    "tech-20": "把非首选主机名与 http 全部 301 永久跳转到唯一 https 首选域，一条链接力、避免多次跳转，并在页面写自引用 canonical",
     # AI友好度
     "ai-01": "Title控制在30-60字符，格式：核心关键词 + 品牌/地域，避免堆砌",
     "ai-02": "Description控制在70-160字符，包含核心关键词和行动号召，准确概括页面内容",
@@ -175,6 +197,18 @@ SUGGESTION_MAP = {
     "b2b-05": "技术文档采用清晰目录结构、代码示例、API说明，添加llms.txt引用，确保AI可抓取",
     "b2b-06": "针对'多少钱''怎么部署''安全吗''和XX比怎么样'等高意向问题创建问答内容",
     "b2b-07": "按决策阶段设计分层CTA（科普页给资料下载、产品页给预约演示、高意向给咨询），提供多种低门槛联系入口",
+    "b2b-08": "在页脚固定电话/微信/二维码，关键页面放咨询表单或在线客服，确保链接真实可点、至少两种通道",
+    "b2b-09": "首屏、产品/服务、案例页各放一个明确按钮（免费咨询/预约到店/立即购买等），链接指向真实表单或联系方式",
+    "b2b-10": "补齐价格或获取报价方式、购买/合作流程、服务流程、售后承诺、服务范围/配送/门店等信息",
+    # 内页多页聚合扫描（2026-09-05 整改新增）
+    "mp-01": "为每个栏目/详情页填写独立标题(15-80字)与描述(50-200字)，不要复用首页 SEO 字段",
+    "mp-02": "每页只保留1个H1，正文小节标题统一改为 H2/H3",
+    "mp-03": "文章加 Article、产品加 Product、案例加 Article/Service 结构化标记",
+    "mp-04": "充实内页正文，建议≥500字，补足参数、场景、细节，避免只有标题和图片",
+    "mp-05": "为内页所有重要图片补非空、描述性的 alt",
+    "mp-06": "补齐关于、产品/服务、FAQ、隐私政策等必备页，优先建立可被AI摘取的FAQ问答页",
+    "mp-07": "把关于/介绍页做成含公司主体、沿革、团队、资质的独立实体页，导航指向独立URL而非首页锚点",
+    "auth-08": "先定一份唯一的官方事实表（主体全称、成立年、规模、对外电话、官网标准写法），再同步改正文、页脚与隐形名片",
 }
 
 
@@ -193,6 +227,20 @@ class BaseChecker(ABC):
         self.base_url = self._get_base_url()
         # AI语义引擎（可选，用于AI层检查）
         self.ai_engine = ai_engine
+        # 独立soup副本：从page.html重新解析，不受AI引擎decompose影响
+        self._local_soup = None
+
+    @property
+    def local_soup(self):
+        """独立解析的soup副本，规则检查专用，不受AI引擎操作影响"""
+        if self._local_soup is None:
+            from bs4 import BeautifulSoup
+            self._local_soup = BeautifulSoup(self.page.html, "lxml")
+        return self._local_soup
+
+    def get_text(self) -> str:
+        """从独立副本获取页面纯文本"""
+        return self.local_soup.get_text(separator=" ", strip=True)
 
     def _get_base_url(self) -> str:
         from urllib.parse import urlparse
@@ -200,7 +248,8 @@ class BaseChecker(ABC):
         return f"{parsed.scheme}://{parsed.netloc}"
 
     def _result(self, item: CheckItem, status: Status, message: str,
-                detail: str = None, score: float = None) -> CheckResult:
+                detail: str = None, score: float = None,
+                skip_kind: str = "na", pages: list = None) -> CheckResult:
         """构造检查结果"""
         if score is None:
             score = {Status.PASS: 1.0, Status.WARN: 0.5, Status.FAIL: 0.0, Status.SKIP: 0.0}[status]
@@ -222,13 +271,20 @@ class BaseChecker(ABC):
             excellent=item.excellent,
             normal=item.normal,
             failed=item.failed,
+            tier=item.tier,
+            description=item.description,
+            check_method=item.check_method,
+            standard=item.standard,
+            skip_kind=skip_kind,
+            pages=pages,
         )
 
     def _item(self, id: str, name: str, priority: Priority,
               description: str, check_method: str, standard: str,
               manual_check: str = "", purpose: str = "", impact: str = "",
               scope: str = "", applicable_pages: str = "", suggestion: str = "",
-              excellent: str = "", normal: str = "", failed: str = "") -> CheckItem:
+              excellent: str = "", normal: str = "", failed: str = "",
+              tier: str = "core") -> CheckItem:
         # 如果没传 impact，从全局字典查找
         if not impact:
             impact = IMPACT_MAP.get(id, "")
@@ -247,6 +303,7 @@ class BaseChecker(ABC):
             manual_check=manual_check, purpose=purpose, impact=impact,
             scope=scope, applicable_pages=applicable_pages, suggestion=suggestion,
             excellent=excellent, normal=normal, failed=failed,
+            tier=tier,
         )
 
     def _skip_if_homepage(self, item: CheckItem) -> CheckResult:
@@ -277,6 +334,14 @@ class BaseChecker(ABC):
         if best and best.word_count() > 100:
             return best
         return None
+
+    @staticmethod
+    def _pg(page) -> list:
+        """把选中的 PageData 转成可溯源的路径列表（供结果 pages 使用，报告侧再补全成完整链接）。"""
+        from urllib.parse import urlparse
+        if page is None:
+            return []
+        return [urlparse(page.final_url).path or "/"]
 
     @abstractmethod
     def run(self) -> List[CheckResult]:

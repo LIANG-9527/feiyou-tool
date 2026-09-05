@@ -36,7 +36,7 @@ class AIFriendlyChecker(BaseChecker):
             normal="有标题且包含品牌或关键词，长度基本合理，但可能缺少卖点或关键词布局不够精准",
             failed="缺少 title，或标题只有品牌名无业务关键词，或标题过短/过长",
         )
-        title_tag = self.page.soup.find("title")
+        title_tag = self.local_soup.find("title")
         if not title_tag or not title_tag.text.strip():
             return self._result(item, Status.FAIL, "缺少 <title> 标签")
 
@@ -96,9 +96,9 @@ class AIFriendlyChecker(BaseChecker):
             normal="有H1且数量≤2，有H2子标题，基本结构合理，但可能存在跳级或标题空泛",
             failed="缺少H1，或有多个H1（>3个），或完全没有H2/H3结构",
         )
-        h1 = self.page.soup.find_all("h1")
-        h2 = self.page.soup.find_all("h2")
-        h3 = self.page.soup.find_all("h3")
+        h1 = self.local_soup.find_all("h1")
+        h2 = self.local_soup.find_all("h2")
+        h3 = self.local_soup.find_all("h3")
 
         issues = []
         if len(h1) == 0:
@@ -127,8 +127,8 @@ class AIFriendlyChecker(BaseChecker):
             normal="有至少1种结构化数据（如 Organization 或 Article），但缺少 Product/Review/FAQ 等高价值富结果类型，或字段不完整",
             failed="未检测到任何 JSON-LD 或 Microdata 结构化数据标记",
         )
-        json_ld = self.page.soup.find_all("script", attrs={"type": "application/ld+json"})
-        microdata = self.page.soup.find_all(attrs={"itemscope": True})
+        json_ld = self.local_soup.find_all("script", attrs={"type": "application/ld+json"})
+        microdata = self.local_soup.find_all(attrs={"itemscope": True})
 
         schemas = []
         rich_types = ["Product", "Review", "FAQPage", "Article", "Organization",
@@ -174,10 +174,10 @@ class AIFriendlyChecker(BaseChecker):
             normal="有1-2种结构化元素（如只有列表），但缺少表格或FAQ等其他格式",
             failed="内容全是大段文字，缺少列表、表格、FAQ等任何 AI 易摘取结构",
         )
-        has_list = bool(self.page.soup.find(["ol", "ul"]))
-        has_table = bool(self.page.soup.find("table"))
-        has_definition = bool(self.page.soup.find(["dl", "dt"]))
-        has_faq = bool(self.page.soup.find_all(class_=re.compile(r"faq", re.I)))
+        has_list = bool(self.local_soup.find(["ol", "ul"]))
+        has_table = bool(self.local_soup.find("table"))
+        has_definition = bool(self.local_soup.find(["dl", "dt"]))
+        has_faq = bool(self.local_soup.find_all(class_=re.compile(r"faq", re.I)))
 
         structures = []
         if has_list:
@@ -210,6 +210,7 @@ class AIFriendlyChecker(BaseChecker):
             excellent="内页有面包屑导航，且有 BreadcrumbList 结构化数据标记，路径层级清晰准确",
             normal="有面包屑导航 DOM，但缺少 BreadcrumbList 结构化标记",
             failed="内页未检测到面包屑导航",
+            tier="bonus",
         )
         # 面包屑是内页专属，从抽样内页中检查
         check_page = self._pick_content_page()
@@ -233,14 +234,15 @@ class AIFriendlyChecker(BaseChecker):
 
         breadcrumb_dom = target_soup.find(class_=re.compile(r"breadcrumb", re.I))
 
+        _pg = self._pg(check_page)
         if has_breadcrumb_schema:
             return self._result(item, Status.PASS, "有 BreadcrumbList 结构化标记",
-                                detail=f"检查页面: {check_page.final_url}")
+                                detail=f"检查页面: {check_page.final_url}", pages=_pg)
         if breadcrumb_dom:
             return self._result(item, Status.WARN, "有面包屑 DOM 但缺少结构化标记",
-                                detail=f"检查页面: {check_page.final_url}")
+                                detail=f"检查页面: {check_page.final_url}", pages=_pg)
         return self._result(item, Status.WARN, "未检测到面包屑导航",
-                            detail=f"检查页面: {check_page.final_url}")
+                            detail=f"检查页面: {check_page.final_url}", pages=_pg)
 
     # 18. 多页面抽样
     def _check_multi_page(self) -> CheckResult:
@@ -258,7 +260,7 @@ class AIFriendlyChecker(BaseChecker):
         from urllib.parse import urlparse
         base_domain = urlparse(self.page.final_url).netloc
         internal_links = []
-        for a in self.page.soup.find_all("a", href=True):
+        for a in self.local_soup.find_all("a", href=True):
             href = a["href"]
             if href.startswith(("#", "javascript:", "mailto:", "tel:")):
                 continue
@@ -319,9 +321,10 @@ class AIFriendlyChecker(BaseChecker):
             return self._result(item, Status.SKIP,
                                 "NLP语义友好度为内容页检查项，首页不适用，且未抽样到内容页",
                                 detail="语义分析需在有主体正文的内容页上进行，首页是品牌导航页不适用")
-        status, summary, detail = self.ai_engine.check_nlp_friendly(content_page)
+        status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_nlp_friendly(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
-        return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}")
+        return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}",
+                            pages=self._pg(content_page))
 
     # AI-10 内容分块与逻辑组织
     def _check_content_chunking(self) -> CheckResult:
@@ -344,6 +347,7 @@ class AIFriendlyChecker(BaseChecker):
             return self._result(item, Status.SKIP,
                                 "内容分块为内容页检查项，首页不适用，且未抽样到内容页",
                                 detail="分块分析需在有标题和正文的内容页上进行，首页是品牌导航页不适用")
-        status, summary, detail = self.ai_engine.check_content_chunking(content_page)
+        status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_content_chunking(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
-        return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}")
+        return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}",
+                            pages=self._pg(content_page))
