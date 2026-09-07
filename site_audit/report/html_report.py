@@ -305,16 +305,25 @@ def _pick_problem_cards(report: AuditReport) -> list:
         if r.detail:
             snippet = re.sub(r"检查页面[:：][^。]+。", "", r.detail).strip()
             if snippet and snippet[:30] not in evidence:
-                evidence += "。" + snippet[:160]
+                # 卡面只放紧凑摘要（在完整分句边界收尾）；完整内容放进悬浮提示，不截断
+                if len(snippet) > 160:
+                    cut = snippet.rfind("；", 0, 160)
+                    if cut < 60:
+                        cut = snippet.rfind("，", 0, 160)
+                    snippet = (snippet[:cut if cut > 0 else 160]).rstrip("；，、") + "……"
+                evidence += "。" + snippet
+        ev_full = re.sub(r"检查页面[:：][^。]+。", "", (r.detail or "")).strip() or evidence
         if copy:
             cards.append({
                 "problem": copy["problem"], "evidence": evidence,
+                "evidence_full": ev_full,
                 "ev_pages": ev_pages, "biz": copy["biz"],
                 "before": evidence, "after": copy["after"],
             })
         else:
             cards.append({
                 "problem": r.item_name, "evidence": evidence,
+                "evidence_full": ev_full,
                 "ev_pages": ev_pages,
                 "biz": r.impact or "该项不达标会影响 AI 对您网站的评价。",
                 "before": "当前实际：" + (r.message or "未达标"),
@@ -389,11 +398,14 @@ def generate_html_report(report: AuditReport) -> str:
                     f"整体表现良好，仍有优化空间。")
     cards_html = ""
     for i, c in enumerate(cards, 1):
+        # 悬浮提示展示完整结果（不截断），分号处换行便于阅读
+        _ev_full_html = e(c["evidence_full"]).replace("；", "；<br>")
         _ev_chip = _overflow_chip(
             c["evidence"],
             "px-2.5 py-1 rounded-md text-xs font-medium "
             "bg-[var(--state-error-bg)] text-[var(--state-error-text)] border border-[var(--state-error)]/10",
-            maxw="max-w-[220px] sm:max-w-[300px]")
+            maxw="max-w-[220px] sm:max-w-[300px]",
+            full_html=_ev_full_html)
         _src_chip = _source_html(c["ev_pages"], report.final_url)
         cards_html += f'''
       <article class="relative bg-[var(--jl-card)] rounded-2xl p-5 sm:p-6 shadow-sm border border-[var(--jl-border)] overflow-visible">
@@ -484,14 +496,20 @@ def generate_html_report(report: AuditReport) -> str:
         }
         icon_svg = icons.get(icon_name, icons["check"])
 
-        # detail 区（剥离已上行的「检查页面」段 + 标点清洗）；超长单行截断，鼠标悬浮显示完整内容
+        # detail 区（剥离已上行的「检查页面」段 + 标点清洗）；超长单行截断，鼠标悬浮自制浮层显示完整内容
+        # （原生 title 提示对长文本会被浏览器截断，改用与来源标签同款浮层，完整不截断、可选中复制）
         _detail_clean = _clean_punct(_strip_page_ref(r.detail))
         if not _detail_clean:
             detail_html = ""
         elif len(_detail_clean) > 70:
+            _det_pop = e(_detail_clean).replace("；", "；<br>")
             detail_html = (
-                f'<div class="mt-1 text-xs text-[var(--jl-neutral-500)] truncate max-w-[560px] cursor-help" '
-                f'title="{e(_detail_clean)}">{e(_detail_clean)}</div>'
+                f'<div class="mt-1 relative group/det max-w-[560px]">'
+                f'<div class="text-xs text-[var(--jl-neutral-500)] truncate cursor-help">{e(_detail_clean)}</div>'
+                f'<div class="absolute left-0 top-full z-[80] hidden group-hover/det:block pt-1">'
+                f'<div class="w-[620px] max-w-[86vw] rounded-lg bg-neutral-800/95 text-white text-xs leading-relaxed p-3 '
+                f'shadow-xl whitespace-normal break-all select-text cursor-text">{_det_pop}</div>'
+                f'</div></div>'
             )
         else:
             detail_html = f'<div class="mt-1 text-xs text-[var(--jl-neutral-500)]">{e(_detail_clean)}</div>'
@@ -976,11 +994,18 @@ def generate_html_report(report: AuditReport) -> str:
   <!-- Brand Header -->
   <header style="display:flex;flex-direction:column;gap:16px;margin-bottom:24px;">
     <div style="display:flex;align-items:center;gap:12px;">
-      <img src="{_load_logo_base64()}" alt="极联LOGO" style="height:40px;width:auto;flex-shrink:0;" />
-      <div>
+      <img src="{_load_logo_base64()}" alt="飞柚GEO LOGO" style="height:40px;width:auto;flex-shrink:0;" />
+      <div style="flex:1;">
         <div style="font-size:16px;font-weight:700;color:var(--jl-neutral-900);">GEO 诊断中心</div>
         <div style="font-size:12px;color:var(--jl-neutral-500);">让 AI 搜索优先推荐你的品牌</div>
       </div>
+      <button type="button" onclick="downloadReport()" title="把本报告保存为本地 HTML 文件（离线可看，双击即开）"
+              style="display:flex;align-items:center;gap:6px;padding:8px 14px;font-size:13px;font-weight:600;color:var(--jl-neutral-700);background:var(--jl-card);border:1px solid var(--jl-border);border-radius:10px;cursor:pointer;transition:all .15s;"
+              onmouseover="this.style.borderColor='var(--jl-primary)';this.style.color='var(--jl-primary)'"
+              onmouseout="this.style.borderColor='var(--jl-border)';this.style.color='var(--jl-neutral-700)'">
+        <svg style="width:14px;height:14px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        导出报告
+      </button>
     </div>
   </header>
 
@@ -1168,6 +1193,19 @@ def generate_html_report(report: AuditReport) -> str:
 
 </div>
 <script>
+function downloadReport(){{
+  // 导出当前报告为本地 HTML：logo 已内嵌 base64、样式内联，单文件离线可看
+  const html = '<!DOCTYPE html>\\n' + document.documentElement.outerHTML;
+  const blob = new Blob([html], {{type: 'text/html;charset=utf-8'}});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  const title = (document.querySelector('title') || {{textContent: 'GEO诊断报告'}}).textContent.trim().replace(/[\\\\/:*?"<>|]/g, '_');
+  a.download = title + '.html';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}}
 function switchDetailTab(tab){{
   document.getElementById('detail-tab-seo').classList.toggle('active',tab==='seo');
   document.getElementById('detail-tab-geo').classList.toggle('active',tab==='geo');

@@ -472,6 +472,15 @@ class AuthorityChecker(BaseChecker):
                                 "未从名片/页脚/正文抽取到足够公司信息，无法做一致性交叉核对",
                                 detail="可能页面由JS渲染或未标注公司主体信息")
         detail_parts = hard + soft + lines
+        # 「隐形名片」是站内术语，首次出现必须交代查看路径与要改哪些页面（业务方反馈）
+        if any("隐形名片" in x for x in detail_parts):
+            detail_parts.append(
+                "【在哪看】隐形名片=写进网页源代码、给AI看的公司信息标签。打开出现不一致的那个页面→"
+                "空白处右键→「查看网页源代码」→Ctrl+F 搜索 ld+json，代码里 name/telephone/foundingDate 等就是名片内容；"
+                "完整不一致明细见本页下方「技术明细」该项说明区。"
+                "【改哪里】① 每个页面源代码里自己的 ld+json 标签（由建站后台/模板统一输出，通常改模板一处全站生效）；"
+                "② 页脚的公司主体与版权信息（模板页脚）；③ 正文里写错成立年份的关于我们/介绍页。"
+                "改前先定一份唯一的官方事实表（全称/成立年/电话/官网写法），所有地方照它改齐")
         detail = "；".join(detail_parts)
         auth_pages = [(urlparse(p.final_url).path or "/") for p in visible_pages]
         if hard:
