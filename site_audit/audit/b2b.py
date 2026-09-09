@@ -267,7 +267,7 @@ class B2BChecker(BaseChecker):
                 blob = f"{img.get('alt','')}{img.get('class','')}{img.get('src','')}".lower()
                 if re.search(r"qrcode|erweima|weixin|wechat|二维码", blob):
                     channels["二维码"] = True
-        if any(soup.find("form") for soup in soups) or re.search(r"留言|留下.{0,6}(电话|联系方式)|提交.{0,4}(需求|信息)", text):
+        if any(soup.find("form") for soup in soups) or re.search(r"留言|留下.{0,6}(电话|联系方式)|提交.{0,4}(需求|信息)|leave a message|send (?:us )?a message|inquiry|message us", text, re.I):
             channels["留言/表单"] = True
         if re.search(r"在线咨询|在线客服|即时沟通|商务通|商桥|53kf|kf5|智齿|美洽|live ?chat|intercom|zendesk|tawk|crisp|chat ?with (us|an expert)", text, re.I):
             channels["在线客服"] = True

@@ -397,15 +397,26 @@ class AuthorityChecker(BaseChecker):
         if not footer_text:
             footer_text = body_text
 
-        body_years = {int(y) for y in re.findall(r"成立(?:于|时间)?[^\d]{0,8}((?:19|20)\d{2})", body_text)}
-        # 员工规模：数字后紧跟（可间隔少量字）人/员工/人才/团队等
+        # 成立年份：中英双语（成立于2003 / Founded in 2003 / Established 1998 / Est. 2003）
+        body_years = {int(y) for y in re.findall(
+            r"(?:成立于|成立时间|成立|founded(?:\s+in)?|established(?:\s+in)?|est\.)[^\d]{0,8}((?:19|20)\d{2})",
+            body_text, re.I)}
+        # 员工规模：中英双语（120名员工 / 100+ employees / 50 team members）
         body_emp = {int(x) for x in re.findall(
             r"(\d{2,5})\s*\+?\s*(?:多名|余|多)?\s*(?:名|位)?\s*(?:员工|人才|技术人员|专业人才|技术人才|团队成员|人员|人技术团队|人团队|人专业团队)",
             body_text)}
+        body_emp |= {int(x) for x in re.findall(
+            r"(\d{2,5})\s*\+?\s*(?:employees?|staff members?|team members?|people|personnel)",
+            body_text, re.I)}
         body_tels = {_norm_tel(x) for x in re.findall(r"400[-\s]?\d{3}[-\s]?\d{4}|1[3-9]\d{9}", footer_text + body_text)}
+        # 公司主体：中文后缀 + 英文后缀（Ltd./Inc./LLC/Corp./GmbH 等）
         footer_companies = set(re.findall(
             r"[一-龥（）()]{2,28}?(?:有限责任公司|股份有限公司|集团有限公司|有限公司)", footer_text))
-        ld_company_names = {x for x in (ld_names | ld_legal) if re.search(r"(?:公司|集团)", x)}
+        footer_companies |= set(x.strip() for x in re.findall(
+            r"\b[A-Z][A-Za-z0-9 .&'\-]{1,50}?\s(?:Co\.,?\s?Ltd\.?|Ltd\.?|LLC|Inc\.?|Corp(?:oration)?\.?|GmbH|Limited|Company)\b",
+            footer_text))
+        ld_company_names = {x for x in (ld_names | ld_legal)
+                            if re.search(r"(?:公司|集团|Inc\.?|Ltd\.?|LLC|Corp|GmbH|Limited|Company)", x, re.I)}
 
         # ── 逐槽比对，hard=硬冲突，soft=写法不统一 ──
         hard, soft, lines = [], [], []
