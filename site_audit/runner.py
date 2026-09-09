@@ -136,8 +136,10 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
                                  if fetcher.used_browser_ua else "")
                               + "。请确认网址可公开访问，或联系网站管理员放行后再体检")}
 
-        # 多页面抽样爬取
+        # 多页面爬取：A2 决议——规则类检查全站爬取（护栏：深度≤5、2000 上限、黑名单）
         crawler = SiteCrawler(fetcher, max_pages=max_pages, max_workers=4)
+        crawler.full_crawl = True
+        crawler.hard_cap = 2000
         try:
             extra_pages = crawler.crawl(page)
         except Exception as e:
@@ -153,6 +155,8 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         all_results = []
         for checker_cls in PAGE_CHECKERS:
             checker = checker_cls(fetcher, page, extra_pages, ai_engine=ai_engine)
+            if checker_cls is TechnicalChecker:
+                checker.search_pages = list(getattr(crawler, "search_pages", []))
             all_results.extend(checker.run())
 
         # 跨页面检查（断链 / 重复元信息 / 关键词蚕食）
@@ -174,7 +178,8 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
                               sampled_pages=sampled,
                               prompt_version=PROMPT_VERSION if ai_engine else "",
                               token_usage=ai_engine.token_usage if ai_engine else None,
-                              site_brand=site_brand)
+                              site_brand=site_brand,
+                              crawl_stats=getattr(crawler, "crawl_stats", {}))
         # 按 DeepSeek 官方价格折算本次诊断费用（元）
         if report.token_usage:
             report.token_usage["cost_cny"] = estimate_cost_cny(report.token_usage)

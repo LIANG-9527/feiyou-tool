@@ -1,0 +1,39 @@
+# 优先级规则表（H1/L3）——规则全部明文，报告可展开"为什么是 P1"
+# 匹配逻辑：item_id 相等 + status 在列表内（可选）+ 明细/结论含任一关键词（可选）
+# 未命中任何规则的结论按状态兜底：不合格→P2，不足→P3，合格/未检查→无优先级
+# 新增规则只加条目，不改代码
+rules:
+  - id: nav_deadlink
+    priority: P1
+    why: "主导航出现死链——导航是AI爬虫和用户进入内容的主入口，死链直接中断抓取与转化"
+    match:
+      item_id: tech-13
+      any_text_contains: ["主导航", "导航位", "导航"]
+
+  - id: i18n_mirror
+    priority: P1
+    why: "中文版页面正文实为英文——语言版本形同虚设，中文用户与AI拿到的都是错语种内容"
+    match:
+      item_id: content-06
+      any_text_contains: ["语言不一致", "正文实为英文", "形同虚设", "镜像"]
+
+  - id: homepage_clone
+    priority: P1
+    why: "栏目/文章页实为首页副本——独立内容缺失，AI无法从中获得可引用的新信息"
+    match:
+      item_id: mp-07
+      any_text_contains: ["疑似首页内容副本", "重合"]
+
+  - id: title_batch_dup
+    priority: P1
+    why: "多页面标题批量重复——AI和搜索引擎无法区分页面主题，批量页面失去竞争能力"
+    match:
+      item_id: ai-11
+      any_status: ["fail", "warn"]
+
+  - id: demo_content_live
+    priority: P2
+    why: "CMS默认演示内容仍在线且被收录引导，稀释站点专业度"
+    match:
+      item_id: tech-03
+      any_text_contains: ["演示内容", "hello-world"]

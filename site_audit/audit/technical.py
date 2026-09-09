@@ -32,6 +32,8 @@ class TechnicalChecker(BaseChecker):
         results.append(self._check_host_canonicalization())
         results.append(self._check_cms_fingerprint())
         results.append(self._check_admin_exposure())
+        results.append(self._check_search_index())
+        results.append(self._check_pagination())
         return results
 
     # 1. HTTPS
@@ -174,16 +176,37 @@ class TechnicalChecker(BaseChecker):
         # 3) 站内可达的详情页是否被漏收（按路径比对）
         sm_paths = {path_of(u) for u in locs}
         missing = [path_of(p.final_url) for p in self.all_pages
-                   if SiteCrawler._is_detail(p.final_url) and path_of(p.final_url) not in sm_paths]
+                   if (SiteCrawler._is_detail(p.final_url)
+                       or SiteCrawler.classify(p.final_url, "") == "faq")
+                   and path_of(p.final_url) not in sm_paths]
         if missing:
-            hard.append(f"{len(missing)} 个站内可达的详情页没进站点地图（如 {missing[0]}），这类高价值页只能靠内链被偶然发现")
-        # 3.5) CMS 默认演示/示例内容仍在线（客户可直接执行的清理项）
+            hard.append(f"{len(missing)} 个站内可达的重要页面（详情页/FAQ页）没进站点地图（如 {missing[0]}），"
+                        "这类高价值页只能靠内链被偶然发现，FAQ 页为高发遗漏区")
+        # 3.5) CMS 默认演示/示例内容仍在线（C4/K3：口径="从 sitemap 移除，并删除或 noindex 二选一"）
         demo_paths = [path_of(u) for u in locs
                       if re.search(r"/(hello-world|sample-page|hello-world-2|test-page|uncategorized)/?$",
                                    path_of(u))]
         if demo_paths:
             soft.append(f"站点地图仍含 CMS 默认演示内容（如 {demo_paths[0]}），"
-                        "建议删除或设为 noindex——演示文章会稀释站点专业度并可能被 AI 检索到")
+                        "应先从 sitemap 移除，再将页面删除或设为 noindex（二选一）——演示文章会稀释专业度并可能被 AI 检索到")
+        # 3.6) C4：被 noindex 的页面不得留在 sitemap
+        noindexed_in_map = []
+        for p in self.all_pages:
+            if path_of(p.final_url) not in sm_paths:
+                continue
+            meta_robots = (p.soup.find("meta", attrs={"name": "robots"}) or {}).get("content", "") if p.soup else ""
+            x_robots = (p.headers or {}).get("X-Robots-Tag", "")
+            if "noindex" in (meta_robots + " " + x_robots).lower():
+                noindexed_in_map.append(path_of(p.final_url))
+        if noindexed_in_map:
+            hard.append(f"{len(noindexed_in_map)} 个被 noindex 的页面仍留在 sitemap 中（如 {noindexed_in_map[0]}），"
+                        "noindex 与 sitemap 互相矛盾，应从 sitemap 移除")
+        # F2：lastmod 等于检测当天 = 疑似抓取时间冒充更新时间
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        fake_lm = [e[0] for e in entries if e[1] == today]
+        if len(fake_lm) >= 3:
+            soft.append(f"{len(fake_lm)} 个网址的 lastmod 是检测当天（{today}），疑似用抓取时间冒充更新时间（会被搜索引擎忽略）")
 
         # 4) lastmod 异常集中（轻提示）
         lms = [e[1] for e in entries if e[1]]
@@ -300,11 +323,27 @@ class TechnicalChecker(BaseChecker):
             normal="首页有 canonical 标签，但内页可能缺失或指向不够精确",
             failed="未设置 canonical，或 canonical 指向错误页面（如全部指向首页）",
         )
+        # C2：全站自指校验——canonical 指向其他页面的页面逐个列出
+        mismatch = []
+        for p in self.all_pages:
+            c = p.soup.find("link", attrs={"rel": "canonical"}) if p.soup else None
+            if c and c.get("href"):
+                target = urljoin(p.final_url, c["href"])
+                if target.rstrip("/") != p.final_url.rstrip("/"):
+                    mismatch.append(f"{urlparse(p.final_url).path or '/'} → {target}")
+        if mismatch:
+            return self._result(item, Status.WARN,
+                                f"{len(mismatch)} 个页面 canonical 指向其他页面（需确认是否有意归一）",
+                                detail="；".join(mismatch[:6]),
+                                pages=[p.final_url for p in self.all_pages
+                                       if (urlparse(p.final_url).path or "/") in
+                                       {m.split(' → ')[0] for m in mismatch}])
         canonical = self.local_soup.find("link", attrs={"rel": "canonical"})
         if canonical and canonical.get("href"):
             href = canonical["href"]
             if href == self.page.final_url or href == self.page.url:
-                return self._result(item, Status.PASS, f"canonical 指向当前页: {href}")
+                return self._result(item, Status.PASS, f"canonical 指向当前页: {href}",
+                                    pages=[p.final_url for p in self.all_pages])
             return self._result(item, Status.WARN, f"canonical 指向其他页面: {href}")
         return self._result(item, Status.WARN, "未设置 canonical 标签")
 
@@ -1303,3 +1342,81 @@ class TechnicalChecker(BaseChecker):
         else:
             return self._result(item, Status.PASS, "未发现暴露的后台路径",
                                 detail=f"扫描了{len(admin_paths)}个常见路径，均为404或重定向")
+
+
+    # 24. 站内搜索页可索引性（A1 ④：noindex=合规不报；可索引=WARN 建议加 noindex；搜索页不进通用打分）
+    def _check_search_index(self) -> CheckResult:
+        item = self._item(
+            "tech-21", "站内搜索页可索引性", Priority.P2,
+            "站内搜索结果页是否被 noindex（搜索页被收录会产生大量低质重复页）",
+            "爬虫识别搜索结果页（/search、?s=、?q=、?keyword= 等特征），抽查其 noindex 状态",
+            "搜索结果页已 noindex 或站点无站内搜索",
+            manual_check="在站内搜索任意词，看结果页网址；右键源代码搜索 noindex，确认搜索页是否禁止收录",
+            purpose="搜索结果页内容随查询词无限变化，被收录会产生海量低质重复页，稀释整站质量信号",
+            excellent="搜索页已 noindex 或无站内搜索",
+            normal="未检测到站内搜索",
+            failed="搜索结果页可被索引",
+            tier="bonus",
+        )
+        pages = getattr(self, "search_pages", None) or []
+        if not pages:
+            return self._result(item, Status.SKIP, "未检测到站内搜索结果页", skip_kind="na")
+        indexable = [p.final_url for p in pages if not self._search_noindexed(p)]
+        if not indexable:
+            return self._result(item, Status.SKIP,
+                                f"{len(pages)} 个搜索结果页均已 noindex，合规",
+                                detail="；".join((urlparse(p.final_url).path or "/") for p in pages),
+                                skip_kind="na",
+                                pages=[p.final_url for p in pages])
+        return self._result(item, Status.WARN,
+                            f"{len(indexable)} 个搜索结果页可被索引，建议加 noindex",
+                            detail="；".join(indexable[:5]),
+                            pages=indexable)
+
+    @staticmethod
+    def _search_noindexed(p) -> bool:
+        meta_robots = ""
+        if p.soup:
+            tag = p.soup.find("meta", attrs={"name": "robots"})
+            meta_robots = (tag or {}).get("content", "") if tag else ""
+        x_robots = (p.headers or {}).get("X-Robots-Tag", "")
+        return "noindex" in (meta_robots + " " + x_robots).lower()
+
+    # 25. 分页可抓取性（B6 降级版：只查分页链接是否为静态 href，不引入无头浏览器）
+    def _check_pagination(self) -> CheckResult:
+        item = self._item(
+            "tech-22", "分页可抓取性", Priority.P2,
+            "列表分页链接是否为静态 href（源代码可直接看到），而非 JS 渲染后才出现",
+            "在抽样页面中查找分页特征（page/2、?page=2、?p=2 等）静态链接；发现分页 UI 但无静态链接时标注需人工复核",
+            "分页链接为静态 href，爬虫可沿链接到达后续页",
+            manual_check="打开列表页翻到第 2 页，复制网址；再右键源代码搜索该网址，能搜到即为静态链接",
+            purpose="分页只有 JS 能点出来时，爬虫无法到达第 2 页之后的商品/文章，大量内容对 AI 和搜索引擎不可见",
+            excellent="分页为静态 href 链接",
+            normal="未检测到分页（单页站点不适用）",
+            failed="存在分页 UI 但链接依赖 JS 渲染",
+            tier="bonus",
+        )
+        pag_static, js_ui = [], []
+        for p in self.all_pages:
+            has_static = False
+            for a in p.soup.find_all("a", href=True):
+                if re.search(r"(?:[?&]page=\d+|/page/\d+|[?&]p=\d+)", a["href"]):
+                    has_static = True
+                    break
+            if has_static:
+                pag_static.append(p.final_url)
+                continue
+            ui = p.soup.find(class_=re.compile(r"pagination|pager|page-numbers|page-nav", re.I))
+            if ui:
+                js_ui.append(p.final_url)
+        if js_ui:
+            return self._result(item, Status.WARN,
+                                f"{len(js_ui)} 个页面存在分页 UI 但未发现静态分页链接（JS 渲染分页，需人工复核）",
+                                detail="；".join((urlparse(u).path or "/") for u in js_ui[:5]),
+                                pages=js_ui)
+        if pag_static:
+            return self._result(item, Status.PASS,
+                                f"{len(pag_static)} 个页面存在静态分页链接，可正常抓取",
+                                pages=pag_static)
+        return self._result(item, Status.SKIP, "抽样页面未检测到分页", skip_kind="na")
+

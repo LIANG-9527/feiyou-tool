@@ -12,6 +12,8 @@ def report_to_dict(report: AuditReport) -> dict:
         "site_brand": report.site_brand or "",
         "timestamp": report.timestamp,
         "engine_version": ENGINE_VERSION,
+        "crawl_stats": getattr(report, "crawl_stats", {}) or {},
+        "stories": getattr(report, "stories", []) or [],
         "prompt_version": report.prompt_version,
         "token_usage": report.token_usage,
         "total_score": report.total_score,
@@ -34,6 +36,9 @@ def report_to_dict(report: AuditReport) -> dict:
         "results": [
             {
                 "id": r.item_id,
+                "priority_mark": getattr(r, "priority_mark", ""),
+                "priority_reason": getattr(r, "priority_reason", ""),
+                "root_cause": getattr(r, "root_cause", ""),
                 "name": r.item_name,
                 "category": r.category.value,
                 "priority": r.priority.value,

@@ -80,6 +80,11 @@ class SiteCrawler:
         self.extra_padding = 6
         self.hard_cap = 20
         self.max_workers = max_workers
+        # —— A2 全站爬取模式（规则类检查全量覆盖）——
+        self.full_crawl = False
+        self.max_depth = 5                    # 护栏1：抓取深度上限
+        self.crawl_stats = {}                 # 抓取统计（报告覆盖声明用）
+        self.search_pages: List[PageData] = []  # 站内搜索结果页归档（不进打分）
         # 最近一次选页的覆盖情况：{type: {required, found, selected:[url]}}
         self.last_coverage: Dict[str, dict] = {}
         # 最近一次累计发现的全部内链 {url: 锚文本}（供外层报告/调试取类型）
@@ -383,7 +388,95 @@ class SiteCrawler:
                     continue
         return out
 
+    # A2 黑名单：feed / 附件页 / 会话参数（决议原文口径，不扩大到全部查询参数）
+    _BLACKLIST_RE = re.compile(
+        r"(/feed(?:/|$)|/wp-content/uploads/|(?:\?|&)(?:sid|sessionid|phpsessid)=[^#]+)", re.I)
+    _SEARCH_RE = re.compile(r"(?:[?&]s=|[?&]q=|[?&]keyword=|/search(?:[/?]|$))", re.I)
+
+    def _blacklisted(self, url: str) -> bool:
+        return bool(self._BLACKLIST_RE.search(url))
+
+    def _is_search_page_url(self, url: str) -> bool:
+        return bool(self._SEARCH_RE.search(url))
+
+    def _crawl_full(self, home: PageData, progress=None) -> List[PageData]:
+        """A2 全站爬取：规则类检查需要全量页面。
+        护栏：深度≤max_depth(5)、累计网址≤hard_cap(2000) 超限截断、feed/附件/会话参数黑名单。"""
+        fetched: Dict[str, PageData] = {home.final_url: home}
+        truncated, blacklisted = False, 0
+        sitemap_links = {}
+        try:
+            sitemap_links = self._load_sitemap_links(home)
+        except Exception:
+            sitemap_links = {}
+        self._sitemap_links = sitemap_links
+        self._sitemap_article_urls |= set(sitemap_links)  # 全站模式下文章页天然在样本中
+        frontier = [home.final_url] + [u for u in sitemap_links if u not in fetched]
+        depth = 0
+        while frontier and depth <= self.max_depth:
+            todo = []
+            for u in frontier:
+                if u in fetched:
+                    continue
+                if len(fetched) >= self.hard_cap:
+                    truncated = True
+                    break
+                fetched[u] = None
+                todo.append(u)
+            if todo:
+                if progress:
+                    progress(f"全站爬取：深度{depth}，抓取 {len(todo)} 页（累计 {len(fetched)}）")
+                for req, pg in self._fetch_concurrent(todo):
+                    fetched[req] = pg
+            next_frontier = []
+            for u in todo:
+                pg = fetched.get(u)
+                if pg is None or pg.status_code != 200:
+                    continue
+                if self._is_search_page_url(u):
+                    if len(self.search_pages) < 3:
+                        self.search_pages.append(pg)
+                    continue
+                if depth >= self.max_depth:
+                    continue
+                for a in pg.soup.find_all("a", href=True):
+                    href = (a.get("href") or "").strip()
+                    if not href or href.startswith(("#", "javascript:", "mailto:", "tel:", "data:")):
+                        continue
+                    full = urljoin(pg.final_url, href)
+                    if self._blacklisted(full):
+                        blacklisted += 1
+                        continue
+                    if self._is_search_page_url(full):
+                        if len(self.search_pages) < 3 and full not in fetched:
+                            sp = self.fetcher.fetch(full)
+                            if sp is not None:
+                                self.search_pages.append(sp)
+                                fetched[full] = sp
+                        continue
+                    norm = self._normalize(full)
+                    if not norm or norm in fetched:
+                        continue
+                    if RESOURCE_EXT.search(urlparse(norm).path):
+                        continue
+                    next_frontier.append(norm)
+            frontier = next_frontier
+            depth += 1
+        self.crawl_stats = {
+            "mode": "全站爬取", "pages": sum(1 for v in fetched.values() if v is not None) - 1,
+            "max_depth": self.max_depth, "cap": self.hard_cap,
+            "truncated": truncated, "blacklisted": blacklisted,
+        }
+        home_url = home.final_url
+        return [p for u, p in fetched.items()
+                if p is not None and u != home_url and p.final_url != home_url]
+
     def crawl(self, home: PageData, progress=None, rounds: int = 2) -> List[PageData]:
+        if self.full_crawl:
+            extra = self._crawl_full(home, progress)
+            if not self.crawl_stats:
+                self.crawl_stats = {"mode": "分层抽样", "pages": len(extra) + 1}
+            return extra
         """两轮发现 + 必查保底抓取，确定性返回 PageData 列表。
 
         第 1 轮：只从首页取链选保底页；第 2 轮：连同已抓内页（其页脚/导航是全站链接，
@@ -415,6 +508,7 @@ class SiteCrawler:
 
         # 最终覆盖情况基于全部已知链接重算（found=候选数，selected=理想保底名单）
         final_sel, self.last_coverage = self._select_with_quota(known_links)
+        self.crawl_stats = {"mode": "分层抽样", "pages": len(final_sel) + 1}
 
         # sitemap 声明的文章页保底进抽样：署名/原创性/意图等深度检查需要真实文章页，
         # 不能只落在栏目列表页或模板页上（ZSTEK 教训：sitemap 声明的文章从未被抽查）。
@@ -445,7 +539,7 @@ class SiteCrawler:
         pages.sort(key=out_key)
         return pages
 
-    def check_internal_link_status(self, pages: List[PageData], limit: int = 60) -> tuple:
+    def check_internal_link_status(self, pages: List[PageData], limit: int = None) -> tuple:
         """检查首页及内页中所有同域链接的 HTTP 状态。
 
         返回 (broken, bad_schemes)：
@@ -454,8 +548,24 @@ class SiteCrawler:
           站内链接应视为死链，外链仅提示
         """
         home_domain = urlparse(pages[0].final_url).netloc
+
+        def _link_position(a) -> str:
+            """链接位置分级（B3）：导航/头部=主导航，页脚=页脚，其余=正文。"""
+            node = a
+            for _ in range(8):
+                if node is None:
+                    break
+                name = (node.name or "").lower()
+                cls = " ".join(node.get("class") or []) if isinstance(node.get("class"), list) else (node.get("class") or "")
+                if name in ("nav", "header") or re.search(r"nav|menu|header|topbar", str(cls), re.I):
+                    return "导航"
+                if name == "footer" or re.search(r"footer|copyright", str(cls), re.I):
+                    return "页脚"
+                node = node.parent
+            return "正文"
+
         checked = set()
-        targets = []
+        candidates = []
         bad_schemes = []
         for page in pages:
             for a in page.soup.find_all("a", href=True):
@@ -473,6 +583,8 @@ class SiteCrawler:
                         bad_schemes.append((href, is_internal, a.get_text(strip=True)[:20]))
                     continue
                 full = urljoin(page.final_url, href)
+                if self._blacklisted(full):
+                    continue
                 p = urlparse(full)
                 if p.netloc != home_domain:
                     continue
@@ -482,16 +594,26 @@ class SiteCrawler:
                 if RESOURCE_EXT.search(urlparse(norm).path):
                     continue
                 checked.add(norm)
-                targets.append((norm, a.get_text(strip=True)[:20]))
-                if len(targets) >= limit:
-                    break
+                candidates.append((norm, a.get_text(strip=True)[:20], _link_position(a)))
+
+        # B3 分档：页面数<500 的站最多扫 1000 条；≥500 页按内链总数 30% 抽样（报告注明）
+        total_links = len(candidates)
+        if limit is None:
+            limit = 1000 if total_links < 500 else max(300, int(total_links * 0.3))
+        sampled_note = ""
+        if total_links > limit:
+            stride = total_links / limit
+            candidates = [candidates[int(i * stride)] for i in range(limit)]
+            sampled_note = f"（内链共 {total_links} 条，按 {limit / total_links:.0%} 抽样 {limit} 条）"
         broken = []
-        for url, anchor in targets:
+        for url, anchor, pos in candidates:
             try:
                 resp = self.fetcher.fetch_raw(url)
                 code = resp.status_code if resp else 0
             except Exception:
                 code = 0
             if code == 0 or code >= 400:
-                broken.append((url, code, anchor))
-        return broken, bad_schemes
+                broken.append((url, code, anchor, pos))
+        stats = {"checked": len(candidates), "total": total_links, "sites_pages": len(pages),
+                 "sampled_note": sampled_note}
+        return broken, bad_schemes, stats

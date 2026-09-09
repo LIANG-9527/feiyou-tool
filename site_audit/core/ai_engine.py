@@ -179,9 +179,24 @@ class AIEngine:
         self.raw_log = []
         # Token 用量累计（每次成功调用 DeepSeek 都累加 usage 字段），用于报告成本展示
         self.token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
+        # AI 深度检查页数预算（A2 决议）：全站爬取后规则类检查覆盖全站，
+        # LLM 深度分析最多评估 8 个不同页面，防止成本随站点规模膨胀
+        self.max_ai_pages = 8
+        self._ai_pages_seen = set()
         # 外部数据通道原始响应留痕：[{check, channel, query, url, status_code, snippet, verdict}]，
         # 随快照落盘为 search_raw.json（对齐老周凭证链要求：外部判定必须可重放取证）
         self.search_raw = []
+
+    def _page_budget_ok(self, page) -> bool:
+        """A2 护栏：LLM 深度分析最多评估 max_ai_pages 个不同页面。
+        超出预算返回 False，调用方按 SKIP 处理（规则类检查已覆盖该页）。"""
+        key = getattr(page, "final_url", None) or str(page)
+        if key in self._ai_pages_seen:
+            return True
+        if len(self._ai_pages_seen) >= self.max_ai_pages:
+            return False
+        self._ai_pages_seen.add(key)
+        return True
 
     def _cache_key(self, system_prompt: str, user_prompt: str) -> str:
         import hashlib
@@ -340,6 +355,8 @@ class AIEngine:
         return consensus_status, sm, dt
 
     def check_nlp_friendly(self, page: PageData) -> tuple[Status, str, str]:
+        if not self._page_budget_ok(page):
+            return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")
         """ai-09: NLP/大模型语义友好度"""
         content = _extract_content(page)
         if content["word_count"] < 50:
@@ -370,6 +387,8 @@ class AIEngine:
         return status, summary, detail
 
     def check_content_chunking(self, page: PageData) -> tuple[Status, str, str]:
+        if not self._page_budget_ok(page):
+            return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")
         """ai-10: 内容分块与逻辑组织"""
         content = _extract_content(page)
         if not content["h2_list"] and not content["h3_list"]:
@@ -403,6 +422,8 @@ H3: {content['h3_list']}
         return status, summary, detail
 
     def check_search_intent(self, page: PageData) -> tuple[Status, str, str]:
+        if not self._page_budget_ok(page):
+            return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")
         """content-07: 搜索意图匹配"""
         content = _extract_content(page)
         if content["word_count"] < 50:
@@ -436,6 +457,8 @@ H1/H2标题: {content['h1_list'] + content['h2_list']}
         return status, summary, detail
 
     def check_originality(self, page: PageData) -> tuple[Status, str, str]:
+        if not self._page_budget_ok(page):
+            return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")
         """content-02原创性部分: 内容原创性AI判断"""
         content = _extract_content(page)
         if content["word_count"] < 50:
@@ -466,6 +489,8 @@ H1/H2标题: {content['h1_list'] + content['h2_list']}
         return status, summary, detail
 
     def check_eeat(self, page: PageData) -> tuple[Status, str, str]:
+        if not self._page_budget_ok(page):
+            return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")
         """auth-07: E-E-A-T内容可信度信号"""
         content = _extract_content(page)
         soup = page.soup
@@ -505,6 +530,8 @@ HTML中的作者标签: {author_signals or '未检测到'}
         return status, summary, detail
 
     def check_conversion_path(self, page: PageData) -> tuple[Status, str, str]:
+        if not self._page_budget_ok(page):
+            return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")
         """b2b-07: 转化引导与决策路径"""
         content = _extract_content(page)
         cta_list = content.get("cta_texts", [])

@@ -164,7 +164,7 @@ class ContentChecker(BaseChecker):
         import json
 
         def _page_faq_profile(soup):
-            """单页 FAQ 档案：(有FAQPage标记, 问答数)。全站扫描用，不依赖首页。"""
+            """单页 FAQ 档案：(有FAQPage标记, 问答数, 有FAQ板块, 问题集合, 是否页脚模板复制)。"""
             has_schema = False
             for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
                 try:
@@ -175,30 +175,52 @@ class ContentChecker(BaseChecker):
                             has_schema = True
                 except Exception:
                     pass
-            q_count = 0
-            faq_dom = soup.find(class_=re.compile(r"faq|question|accordion|collapse", re.I))
-            if soup.find_all(["dt", "dd"]):
-                q_count = max(q_count, len(soup.find_all(["dt", "dd"])) // 2)
-            q_count = max(q_count, len(soup.find_all("details")))
+            q_texts = []
+            for dt in soup.find_all("dt"):
+                t = dt.get_text(strip=True)
+                if t:
+                    q_texts.append(t)
+            q_texts += [d.get_text(strip=True) for d in soup.find_all("details")
+                        if d.find("summary") and d.find("summary").get_text(strip=True)]
             for tag in soup.find_all(["h3", "h4", "h5", "button"]):
                 t = tag.get_text(strip=True)
                 if 5 <= len(t) <= 80 and (t.endswith("?") or t.endswith("？")):
-                    q_count += 1
-            has_faq = bool(faq_dom) or q_count >= 2
-            return has_schema, q_count, has_faq
+                    q_texts.append(t)
+            q_set = frozenset(re.sub(r"\s+", "", t) for t in q_texts)
+            # 是否页脚/侧栏模板复制（J2：位于 footer/aside 的问答定性为 boilerplate）
+            faq_dom = soup.find(class_=re.compile(r"faq|question|accordion|collapse", re.I))
+            from_footer = bool(faq_dom and faq_dom.find_parent(["footer", "aside"]))
+            has_faq = bool(faq_dom) or len(q_texts) >= 2 or bool(soup.find_all("details"))
+            return has_schema, len(q_set), has_faq, q_set, from_footer
 
         # 全站扫描：允许多个地方写 FAQ，哪个页面有问题就报哪个页面（业务方口径）
         schema_pages, dom_only_pages = [], []
+        faq_pages, qset_groups = 0, {}
         for p in self.all_pages:
             label = (urlparse(p.final_url).path or "/")
-            has_schema, q_count, has_faq = _page_faq_profile(p.soup)
+            has_schema, q_count, has_faq, q_set, from_footer = _page_faq_profile(p.soup)
             if has_schema:
                 schema_pages.append((label, q_count))
             elif has_faq:
-                # 专职FAQ页（/faq/路径）排最前，其余按问答数降序——报告先看主战场
                 is_faq_path = bool(re.search(r"/(faq|cjwt|changjianwenti)", label, re.I))
                 dom_only_pages.append((label, q_count, is_faq_path))
-        dom_only_pages.sort(key=lambda x: (not x[2], -x[1]))
+            if has_faq and q_set:
+                faq_pages += 1
+                qset_groups.setdefault(q_set, []).append(label)
+        # E1/G5：跨页重复率硬指标——多少页挂着同一组一模一样的问答（页脚模板复制）
+        dup_note, dup_rate = "", 0.0
+        if faq_pages >= 2:
+            top_set = max(qset_groups.values(), key=len)
+            k = len(top_set)
+            dup_rate = k / faq_pages * 100
+            if k >= 2:
+                n_questions = len(next(iter(qset_groups)))
+                dup_note = (f"页脚FAQ跨页重复率 {dup_rate:.0f}%（{k}/{faq_pages} 页挂着同一组 {n_questions} 问，"
+                            f"如 {top_set[0]}）——属模板复制，建议收敛到独立 FAQ 单页再打 FAQPage 标记，勿逐页复制")
+                if from_footer_note := ("" if False else ""):
+                    pass
+        footer_copy = any(x[3] if False else False for x in [])
+        del footer_copy
 
         if schema_pages:
             note = ""
@@ -216,10 +238,15 @@ class ContentChecker(BaseChecker):
             labels = "、".join(f"{l}（{q or '若干'}问）" for l, q, _ in dom_only_pages[:5])
             # 来源按优先级排序输出：专职FAQ页→问答多的页→其余，与明细一致
             path_by = {urlparse(p.final_url).path or "/": p.final_url for p in self.all_pages}
+            # /faq/ 等专职 FAQ 路径排最前（与明细 is_faq_path 优先一致）
+            dom_only_pages.sort(key=lambda x: (not bool(re.search(r"/(faq|cjwt|changjianwenti)", x[0], re.I)), -x[1]))
             pages_sorted = [path_by[x[0]] for x in dom_only_pages if x[0] in path_by]
             return self._result(item, Status.WARN,
                                 f"有 FAQ 板块但缺少 FAQPage 结构化标记（{len(dom_only_pages)} 个页面）",
-                                detail=f"涉及页面: {labels}。加 FAQPage JSON-LD 后 AI 可稳定摘取问答",
+                                detail=f"涉及页面: {labels}。"
+                                       + (dup_note + "。" if dup_note else "")
+                                       + "加 FAQPage JSON-LD 后 AI 可稳定摘取问答"
+                                       + "（FAQ 富媒体自2023-08起仅政府/健康权威站展示；标记的价值在 Bing 与语义层理解）",
                                 pages=pages_sorted)
         return self._result(item, Status.WARN, "全站未检测到 FAQ 问答结构",
                             detail="用户问具体问题时 AI 没有现成答案可摘，建 FAQ 页是提升被引用率最直接的抓手",
@@ -394,66 +421,92 @@ class ContentChecker(BaseChecker):
         hreflang = self.local_soup.find_all("link", attrs={"rel": "alternate", "hreflang": True})
         lang_switch = self.local_soup.find(class_=re.compile(r"lang|language|i18n", re.I))
 
-        # 语言一致性：声称中文（/cn/ /zh/ 路径段或 lang=zh*）但正文几乎无中文 → 实质性缺陷
-        mismatch = []
-        menu_untranslated = {}
-        for p in self.all_pages:
+        # ── 语言一致性（D2 决议口径）──
+        # 第一步：识别语言切换器（语言菜单 / /cn//en/ 路径 / hreflang 声明）
+        def _claimed_lang(p):
             path = (urlparse(p.final_url).path or "").lower()
-            html_lang = ""
+            m = re.search(r"/(cn|zh|en)(?:[-/]|$)", path)
+            if m:
+                return "zh" if m.group(1) in ("cn", "zh") else "en"
             html_tag = p.soup.find("html")
-            if html_tag:
-                html_lang = (html_tag.get("lang") or "").lower()
-            claims_zh = re.search(r"/(cn|zh)(?:[-/]|$)", path) or html_lang.startswith("zh")
-            if not claims_zh:
-                continue
-            text = p.soup.get_text(" ", strip=True)
-            cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
-            latin = len(re.findall(r"[A-Za-z]", text))
-            if cjk + latin >= 200 and cjk / (cjk + latin) < 0.10:
-                mismatch.append(urlparse(p.final_url).path or "/")
-            # 导航/按钮未翻译：短链接文字里纯英文项（疑似菜单未汉化），仅作明细提示
+            html_lang = (html_tag.get("lang") or "").lower() if html_tag else ""
+            if html_lang.startswith("zh"):
+                return "zh"
+            if html_lang.startswith("en"):
+                return "en"
+            return ""
+
+        # 第二步：统计实际存在的语言版本内容（同一语言 ≥1 个页面才算一个版本）
+        lang_versions = {}
+        for p in self.all_pages:
+            lang_versions.setdefault(_claimed_lang(p) or "other", []).append(p)
+        content_versions = {k for k, v in lang_versions.items() if k in ("zh", "en") and v}
+        has_switcher = bool(lang_switch) or bool(hreflang) or len(content_versions) >= 2
+
+        # 第三步：无切换器且只有单语言版本 = 单语言站，尊重母语设置，镜像检查跳过、不扣分
+        if not has_switcher and len(content_versions) < 2:
+            return self._result(item, Status.SKIP,
+                                "站点为单语言，尊重母语设置，多语言镜像检查不适用",
+                                detail=f"未检测到语言切换器与多语言版本（识别语言: {', '.join(sorted(content_versions)) or '无'}）")
+
+        # 第四步：有切换器才逐版本查镜像——中文页与英文页正文相似度 ≥70% = 半成品镜像（高优先级）
+        def _sim(a, b):
+            # a/b 为 PageData，get_text 无分隔符参数
+            ta, tb = a.get_text(), b.get_text()
+            A = {ta[i:i + 2] for i in range(len(ta) - 1)}
+            B = {tb[i:i + 2] for i in range(len(tb) - 1)}
+            if not A or not B:
+                return 0.0
+            return len(A & B) / len(A | B)
+
+        mirrors = []
+        for zp in lang_versions.get("zh", []):
+            best = max((_sim(zp, ep) for ep in lang_versions.get("en", [])), default=0.0)
+            if best >= 0.70:
+                mirrors.append((urlparse(zp.final_url).path or "/", int(best * 100)))
+
+        # 导航/按钮未翻译（声称中文页面上的纯英文菜单项），仅作明细提示
+        menu_untranslated = {}
+        for zp in lang_versions.get("zh", []):
             en_menu = []
-            for a in p.soup.find_all("a", href=True):
+            for a in zp.soup.find_all("a", href=True):
                 t = a.get_text(" ", strip=True)
                 if 3 <= len(t) <= 30 and not re.search(r"[\u4e00-\u9fff]", t) \
                         and re.search(r"[A-Za-z]{3,}", t) and not re.match(r"^(EN|PDF)$", t.upper()):
                     en_menu.append(t)
             if len(en_menu) >= 4:
-                menu_untranslated[path or "/"] = en_menu
+                menu_untranslated[urlparse(zp.final_url).path or "/"] = en_menu
 
+        # 镜像判定：中文页与英文页正文相似度 ≥70% 即"半成品镜像"（高优先级）
+        zh_total = len(lang_versions.get("zh", []))
+        mirror_pages = [p for p in lang_versions.get("zh", [])
+                        if (urlparse(p.final_url).path or "/") in {m[0] for m in mirrors}]
+        menu_note = "；".join(f"{path} 存在未翻译的英文导航/按钮（如 {'、'.join(items[:3])}）"
+                          for path, items in list(menu_untranslated.items())[:3])
+        mirror_note = ""
+        if mirrors:
+            mirror_note = "镜像页面: " + "、".join(f"{path}（与英文版相似 {sim}%）" for path, sim in mirrors[:6])
+        hl_note = "" if hreflang else "缺少 hreflang 标记（各语言版本未互指，会互相竞争排名）"
+
+        if mirrors:
+            detail = "；".join(x for x in (mirror_note, hl_note, menu_note) if x)
+            return self._result(item, Status.FAIL,
+                                f"{len(mirrors)}/{zh_total} 个中文版页面实为英文镜像，多语言配置仅完成一半",
+                                detail=detail,
+                                pages=[p.final_url for p in mirror_pages])
+        # 无镜像：按 hreflang/切换器情况给结论
         if hreflang:
             langs = [l.get("hreflang") for l in hreflang if l.get("hreflang")]
-            note = ""
-            status, msg = Status.PASS, f"有 hreflang 标记（{len(set(langs))}种语言）"
-            if mismatch:
-                status = Status.WARN
-                msg += f"；{len(mismatch)} 个中文版页面正文实为英文"
-                note = f"语言不一致（正文中文占比过低）：{'、'.join(mismatch[:6])}"
-            mismatch_pages = [p.final_url for p in self.all_pages
-                              if urlparse(p.final_url).path in mismatch]
-            return self._result(item, status, msg,
-                                detail=f"语言: {', '.join(set(langs))}" + (f"。{note}" if note else ""),
-                                pages=mismatch_pages or None)
-        if lang_switch:
-            mismatch_pages = [p.final_url for p in self.all_pages
-                              if urlparse(p.final_url).path in mismatch]
-            if mismatch:
-                menu_note = "；".join(f"{path} 导航/按钮存在未翻译英文项（如 {'、'.join(items[:3])}）"
-                                  for path, items in list(menu_untranslated.items())[:3])
-                return self._result(item, Status.FAIL,
-                                    f"有语言切换但 {len(mismatch)} 个'中文版'页面正文实为英文，多语言形同虚设",
-                                    detail=(f"语言不一致页面: {'、'.join(mismatch[:6])}；"
-                                            + (menu_note + "；" if menu_note else "")
-                                            + "且缺少 hreflang 标记"),
-                                    pages=mismatch_pages)
-            return self._result(item, Status.WARN, "有语言切换但缺少 hreflang 标记",
+            msg = f"有 hreflang 标记（{len(set(langs))}种语言），中英版本内容独立，未发现镜像"
+            return self._result(item, Status.PASS, msg + ("；" + menu_note if menu_note else ""),
+                                detail=f"语言: {', '.join(set(langs))}" + (f"。{hl_note}" if hl_note else ""),
                                 pages=[p.final_url for p in self.all_pages])
-        if mismatch:
-            mismatch_pages = [p.final_url for p in self.all_pages
-                              if urlparse(p.final_url).path in mismatch]
-            return self._result(item, Status.WARN,
-                                f"{len(mismatch)} 个页面声称中文（/cn/ 路径或 lang=zh）但正文几乎全为英文",
-                                detail=f"语言不一致页面: {'、'.join(mismatch[:6])}",
-                                pages=mismatch_pages)
-        return self._result(item, Status.PASS, "单语言站点，无需多语言设置",
-                            detail="未检测到 hreflang 和语言切换，站点为单语言，符合预期")
+        if lang_switch:
+            msg = "有语言切换功能，各语言版本内容独立，未发现镜像"
+            return self._result(item, Status.WARN, msg + "，但缺少 hreflang 标记" + ("；" + menu_note if menu_note else ""),
+                                detail=(hl_note or "") + (f"。{menu_note}" if menu_note else "") or None,
+                                pages=[p.final_url for p in self.all_pages])
+        # 有 ≥2 语言版本内容但无切换器/hreflang（少见）：提示配置
+        return self._result(item, Status.WARN, "检测到多语言版本内容，但缺少语言切换器与 hreflang 标记",
+                            detail=(hl_note or "建议配置语言切换与 hreflang") + (f"。{menu_note}" if menu_note else ""),
+                            pages=[p.final_url for p in self.all_pages])

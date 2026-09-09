@@ -49,27 +49,33 @@ class CrossPageChecker(BaseChecker):
             return self._result(item, Status.SKIP,
                                 "未检查（需多页面抽样，当前仅抓取首页）")
         crawler = SiteCrawler(self.fetcher)
-        broken, bad_schemes = crawler.check_internal_link_status(self.all_pages)
+        broken, bad_schemes, link_stats = crawler.check_internal_link_status(self.all_pages)
         sampled = [p.final_url for p in self.all_pages]
         # 站内非法协议链接（如 htts:// 漏写字母）等同死链；外链只在明细提示、不改判级
         for href, is_internal, anchor in bad_schemes:
             if is_internal:
                 broken.append((href, "非法协议", anchor))
         ext_bad = [h for h, internal, _ in bad_schemes if not internal]
+        # 位置分级（B3）：主导航死链优先级最高
+        POS_RANK = {"导航": 0, "正文": 1, "页脚": 2}
+        broken.sort(key=lambda x: POS_RANK.get(x[3], 1))
         if not broken:
-            msg = (f"抽样检查的站内链接均可访问（覆盖 {len(self.all_pages)} 个页面）"
+            checked_n = link_stats.get("checked", 0)
+            msg = (f"抽样检查的站内链接均可访问（检查 {checked_n} 条内链，覆盖 {len(self.all_pages)} 个页面）"
                    + (f"；发现 {len(ext_bad)} 个外链协议拼写疑似笔误（如 htts://），点击即失效，建议修正"
                       if ext_bad else ""))
             return self._result(item, Status.PASS, msg,
                                 detail="；".join(ext_bad[:5]) if ext_bad else None,
                                 pages=sampled)
-        detail = "；".join(f"{url} → {code or '无响应'}" for url, code, _ in broken[:8])
+        detail = "；".join(f"{b[0]}（{b[3]}）→ {b[1] or '无响应'}" for b in broken[:8])
         if ext_bad:
             detail += "；外链协议笔误：" + "、".join(ext_bad[:5])
+        if link_stats.get("sampled_note"):
+            detail += "；" + link_stats["sampled_note"]
         status = Status.FAIL if len(broken) >= 3 else Status.WARN
         return self._result(item, status, f"发现 {len(broken)} 个失效内部链接",
                             detail=detail,
-                            pages=sampled + [u for u, _, _ in broken if u not in sampled])
+                            pages=sampled + [u for u, _, _, _ in broken if u not in sampled])
 
     # AI-11 重复 Title/Description
     def _check_duplicate_meta(self) -> CheckResult:

@@ -9,7 +9,7 @@ from site_audit.core.scorer import grade_from_score
 
 # 引擎版本：检查逻辑或报告模板每次改动必须 +1（日期.当日序号），
 # 以隐藏方式写入每份报告（查看源代码可见），排查问题时区分报告由哪个版本生成。
-ENGINE_VERSION = "2026.09.09.10"
+ENGINE_VERSION = "2026.09.09.11"
 
 
 # 报告出具方：默认本公司品牌「飞柚GEO」，可用环境变量 GEO_REPORT_PROVIDER 覆盖。
@@ -282,8 +282,10 @@ def _calc_set_category_scores(results, item_ids):
 
 def _pick_problem_cards(report: AuditReport) -> list:
     """从失败项里按「影响大 × 容易改」选最多 3 张客户版问题卡。"""
+    # H3：候选池 = 全部不合格项 + P1 级"不足"项（高优先级 WARN 也可能上首屏，如全站镜像/导航死链）
     fails = [r for r in report.results
-             if r.status == Status.FAIL and r.item_id not in ("tech-14", "tech-15")
+             if (r.status == Status.FAIL or (r.status == Status.WARN and getattr(r, "priority_mark", "") == "P1"))
+             and r.item_id not in ("tech-14", "tech-15")
              and getattr(r, 'tier', 'core') != 'bonus']
 
     # 优先修复排序：先按问题严重档（P0>P1>P2），同档再按"好不好改"；
@@ -386,6 +388,30 @@ def generate_html_report(report: AuditReport) -> str:
         parts = domain.split(".")
         if parts:
             brand_name = parts[0]
+
+    # ── L1 根因聚合（整改故事）区块 ──
+    stories_html = ""
+    if getattr(report, "stories", []):
+        items = ""
+        for st in report.stories:
+            ev = "；".join(st["evidence"][:6])
+            items += (f'<div style="margin-bottom:14px;padding:14px 16px;border:1px solid var(--jl-border);'
+                      f'border-radius:12px;background:var(--jl-card);">'
+                      f'<div style="font-weight:700;font-size:14px;color:var(--jl-neutral-900);">'
+                      f'<span style="color:var(--state-error);">[{st["severity"]}]</span> {e(st["title"])}</div>'
+                      f'<div style="font-size:12px;color:var(--jl-neutral-600);margin-top:6px;">依据：{e(ev)}</div></div>')
+        stories_html = (f'<section style="margin-top:24px;padding:20px;border:1px solid var(--jl-border);'
+                        f'border-radius:16px;background:var(--jl-card);">'
+                        f'<h2 style="font-size:16px;font-weight:700;margin:0 0 12px;">根因聚合 · 整改故事</h2>'
+                        f'<p style="font-size:12px;color:var(--jl-neutral-500);margin:0 0 12px;">'
+                        f'多个检查项指向同一根因时合并为一条整改主线，便于按主线分配工作</p>{items}</section>')
+
+    # ── A4/L5 覆盖声明数据 ──
+    cs = getattr(report, "crawl_stats", {}) or {}
+    crawl_mode = cs.get("mode", "分层抽样")
+    crawl_pages = cs.get("pages", len(report.sampled_pages) + 1)
+    check_n = len(report.results)
+    trunc_note = "；网址超出上限已截断" if cs.get("truncated") else ""
 
     # ── 客户版首屏：30秒看懂 + 问题卡（核心项口径：锦上添花项不计分）──
     fail_n = sum(1 for r in report.results
@@ -490,6 +516,15 @@ def generate_html_report(report: AuditReport) -> str:
         _row_counter[0] += 1
         row_idx = _row_counter[0]
         label, color_var, bg_var, text_var, icon_name = _status_style(r.status)
+        # H1：优先级徽章（P1/P2/P3），悬浮显示触发规则（"为什么是 Px"）
+        prio_badge = ""
+        if getattr(r, "priority_mark", ""):
+            pr_color = {"P1": "var(--state-error)", "P2": "var(--state-warning)"}.get(
+                r.priority_mark, "var(--jl-neutral-500)")
+            _why = e(r.priority_reason or "")
+            prio_badge = (f'<span title="为什么是 {r.priority_mark}：{_why}" '
+                          f'style="margin-left:4px;padding:1px 6px;border-radius:999px;font-size:10px;font-weight:700;'
+                          f'color:{pr_color};border:1px solid {pr_color};cursor:help;">{r.priority_mark}</span>')
 
         # 图标 SVG
         icons = {
@@ -613,6 +648,7 @@ def generate_html_report(report: AuditReport) -> str:
                   <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--{bg_var})] text-[var(--{text_var})] border border-[var(--{color_var})]/10 whitespace-nowrap">
                     {icon_svg}{label}
                   </span>
+                  {prio_badge}
                 </td>
                 <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)] text-sm">
                   {e(_clean_punct(r.message))}
@@ -997,6 +1033,15 @@ def generate_html_report(report: AuditReport) -> str:
 <!-- 引擎版本: {ENGINE_VERSION} ｜ 生成时间: {report.timestamp} ｜ 隐藏标识：仅查看源代码可见，用于排查问题区分生成版本 -->
 <div class="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
+  <!-- L1 根因聚合（整改故事） -->
+  {stories_html}
+
+  <!-- 覆盖声明（A4/L5） -->
+  <div style="font-size:11px;color:var(--jl-neutral-500);margin-bottom:12px;line-height:1.7;">
+    评估范围声明：{crawl_mode}，共评估 {crawl_pages} 个页面（首页+抽样内页）；覆盖 技术可抓取性/AI友好度/内容质量/权威信任/商业转化 5 维度 {check_n} 项检查。
+    未覆盖：登录后页面、需 JS 交互才能呈现的内容{trunc_note}。规则外问题反馈渠道：项目工作日志。
+  </div>
+
   <!-- Brand Header -->
   <header style="display:flex;flex-direction:column;gap:16px;margin-bottom:24px;">
     <div style="display:flex;align-items:center;gap:12px;">
@@ -1191,6 +1236,12 @@ def generate_html_report(report: AuditReport) -> str:
 
     </div>
   </details>
+
+  <!-- L5 尾部覆盖声明 -->
+  <div style="font-size:11px;color:var(--jl-neutral-400);border-top:1px solid var(--jl-border);padding-top:16px;margin-top:24px;line-height:1.7;">
+    覆盖声明：本次为{crawl_mode}，共评估 {crawl_pages} 个页面、{check_n} 项检查。检查结论均附来源页面与判定标准，
+    原始页面与 AI 响应已快照留痕。未覆盖范围：登录后页面、需 JS 交互呈现的内容{trunc_note}。规则未覆盖的问题，欢迎通过项目渠道反馈。
+  </div>
 
   <!-- Footer -->
   <footer style="margin-top:32px;padding-top:24px;text-align:center;font-size:12px;color:var(--jl-neutral-400);">

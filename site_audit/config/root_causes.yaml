@@ -1,0 +1,39 @@
+# 根因归组表（L1 根因聚合）——同组结论攒够 threshold 条"不足/不合格"即合并为一条整改故事
+# 新增根因只加一组配置，不改代码
+# members 填检查项编码（编码仅用于内部归组，报告展示一律用 title 业务语言）
+groups:
+  - id: i18n_half_done
+    title: "多语言配置仅完成一半：中文版为英文镜像"
+    threshold: 3
+    severity: P1
+    members: [content-06, ai-11, content-03]
+
+  - id: nav_health
+    title: "导航与链接可达性受损"
+    threshold: 1
+    severity: P1
+    members: [tech-13, tech-16]
+
+  - id: cms_demo_leftover
+    title: "CMS 模板演示内容未清理"
+    threshold: 1
+    severity: P2
+    members: [tech-03]
+
+  - id: thin_unique_content
+    title: "独立内容不足，页面间高度相似"
+    threshold: 2
+    severity: P2
+    members: [mp-07, content-02, content-07]
+
+  - id: faq_structure_gap
+    title: "FAQ 问答结构缺失或被重复铺设"
+    threshold: 1
+    severity: P2
+    members: [content-03]
+
+  - id: schema_missing
+    title: "AI 可读的结构化标记缺失"
+    threshold: 2
+    severity: P2
+    members: [ai-04, ai-06]

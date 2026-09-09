@@ -107,11 +107,17 @@ def build_report(url: str, final_url: str, timestamp: str,
                  results: List[CheckResult], sampled_pages: list = None,
                  prompt_version: str = "",
                  token_usage: dict = None,
-                 site_brand: str = "") -> AuditReport:
+                 site_brand: str = "",
+                 crawl_stats: dict = None) -> AuditReport:
     """构建完整报告"""
     category_scores = calculate_category_scores(results)
     total_score = calculate_total_score(category_scores)
     grade = grade_from_score(total_score)
+
+    # H1/L3/L1：优先级计算 + 根因标签 + 根因聚合（规则全部来自 config yaml，透明可展开）
+    from site_audit.core import aggregator
+    aggregator.annotate(results)
+    stories = aggregator.aggregate_stories(results)
 
     return AuditReport(
         url=url,
@@ -125,4 +131,6 @@ def build_report(url: str, final_url: str, timestamp: str,
         prompt_version=prompt_version,
         token_usage=token_usage or {},
         site_brand=site_brand,
+        crawl_stats=crawl_stats or {},
+        stories=stories,
     )

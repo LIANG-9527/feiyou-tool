@@ -78,6 +78,14 @@ class CheckResult:
     skip_kind: str = "na"
     # 该结论具体涉及哪些页面（URL 或路径），用于报告"来源"精确到页面；为空时报告再从文案抽取/回退
     pages: list = None
+    # 优先级标记（P1=影响抓取与收录 / P2=影响引用与呈现 / P3=体验与合规），由 priority_rules.yaml 规则计算
+    priority_mark: str = ""
+    # 命中的优先级规则说明（报告可展开"为什么是 P1"）
+    priority_reason: str = ""
+    # 根因标签（root_causes.yaml 归组用，按检查项自动映射；也可由检查器显式指定）
+    root_cause: str = ""
+    # 审计信息：报告头部/尾部的覆盖声明数据（本次爬取页数、模式、截断情况），由 runner 填写
+    audit_meta: dict = None
 
 
 @dataclass
@@ -111,6 +119,10 @@ class AuditReport:
     token_usage: dict = field(default_factory=dict)
     # 从首页直接提取的对外品牌名（标题尾段/og:site_name/结构化名片），避免依赖会跳过的检查项
     site_brand: str = ""
+    # 抓取统计与覆盖声明（模式：全站/分层抽样；页数；深度上限；截断情况；黑名单拦截数）——报告头尾展示
+    crawl_stats: dict = field(default_factory=dict)
+    # 根因聚合出的整改故事（L1：[{root, title, severity, evidence:[检查项名]}]），由聚合器生成
+    stories: list = field(default_factory=list)
 
     @property
     def summary(self) -> dict:
