@@ -77,7 +77,7 @@ class SiteCrawler:
         self.fetcher = fetcher
         self.max_pages = max_pages            # 基准下限：至少抓这么多
         # 必查保底占满后，再多抓多少个多样化补充页；以及总数硬上限（防抓取爆炸）
-        self.extra_padding = 4
+        self.extra_padding = 6
         self.hard_cap = 20
         self.max_workers = max_workers
         # 最近一次选页的覆盖情况：{type: {required, found, selected:[url]}}
@@ -86,6 +86,8 @@ class SiteCrawler:
         self.last_links: dict = {}
         # 站点地图发现的链接缓存（一轮抓取只拉一次 sitemap）
         self._sitemap_links: Optional[dict] = None
+        # sitemap posts 型子地图声明的文章页（保底进抽样，供署名/原创性等深度检查）
+        self._sitemap_article_urls: set = set()
 
     @staticmethod
     def _normalize(url: str) -> Optional[str]:
@@ -343,6 +345,7 @@ class SiteCrawler:
                     continue
                 text = getattr(resp, "text", "") or ""
                 is_index = "<sitemapindex" in text.lower()
+                is_posts = bool(re.search(r"posts?-post-\d+", sm))  # posts-post=N文章清单（posts-page=N是独立页面，不算文章）
                 for raw in re.findall(r"<loc[^>]*>(.*?)</loc>", text, re.I | re.S):
                     loc = raw.strip()
                     p = urlparse(loc)
@@ -356,6 +359,8 @@ class SiteCrawler:
                     norm = self._normalize(rewritten)
                     if norm and not self._is_home_alias(norm, hp.path):
                         result.setdefault(norm, "")  # sitemap 无锚文本，交给网址段分类
+                        if is_posts:
+                            self._sitemap_article_urls.add(norm)
             if not next_maps:
                 break
             sub_maps = next_maps
@@ -410,6 +415,17 @@ class SiteCrawler:
 
         # 最终覆盖情况基于全部已知链接重算（found=候选数，selected=理想保底名单）
         final_sel, self.last_coverage = self._select_with_quota(known_links)
+
+        # sitemap 声明的文章页保底进抽样：署名/原创性/意图等深度检查需要真实文章页，
+        # 不能只落在栏目列表页或模板页上（ZSTEK 教训：sitemap 声明的文章从未被抽查）。
+        # 注意放在覆盖重算之后，避免被重算覆盖。
+        if self._sitemap_article_urls and not any(
+                u in final_sel for u in self._sitemap_article_urls):
+            pick = sorted(self._sitemap_article_urls, key=len, reverse=True)[0]
+            if fetched.get(pick) is None:
+                fetched[pick] = self.fetcher.fetch(pick)
+            if fetched.get(pick) is not None:
+                final_sel.append(pick)
         self.last_links = dict(known_links)
         # 输出严格对齐最终保底名单，名单外多抓的不返回
         pages, seen = [], set()

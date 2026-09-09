@@ -174,29 +174,38 @@ class AIFriendlyChecker(BaseChecker):
             normal="有1-2种结构化元素（如只有列表），但缺少表格或FAQ等其他格式",
             failed="内容全是大段文字，缺少列表、表格、FAQ等任何 AI 易摘取结构",
         )
-        has_list = bool(self.local_soup.find(["ol", "ul"]))
-        has_table = bool(self.local_soup.find("table"))
-        has_definition = bool(self.local_soup.find(["dl", "dt"]))
-        has_faq = bool(self.local_soup.find_all(class_=re.compile(r"faq", re.I)))
+        # 首页之外，把独立 FAQ 页/内容页一并纳入结构统计（ZSTEK教训：FAQ是独立页面，
+        # 只查首页会把FAQ区块的问-答结构整个漏掉）
+        eval_pages = [("首页", self.local_soup)]
+        content_page = self._pick_content_page()
+        if content_page is not None:
+            from urllib.parse import urlparse as _up
+            eval_pages.append((_up(content_page.final_url).path or "/", content_page.soup))
+        structures, checked_labels = set(), []
+        for label, soup in eval_pages:
+            if soup.find(["ol", "ul"]):
+                structures.add("列表")
+            if soup.find("table"):
+                structures.add("表格")
+            if soup.find(["dl", "dt"]):
+                structures.add("定义列表")
+            if soup.find_all(class_=re.compile(r"faq", re.I)):
+                structures.add("FAQ")
+            checked_labels.append(label)
 
-        structures = []
-        if has_list:
-            structures.append("列表")
-        if has_table:
-            structures.append("表格")
-        if has_definition:
-            structures.append("定义列表")
-        if has_faq:
-            structures.append("FAQ")
-
+        pages = [self.page.final_url] + ([content_page.final_url] if content_page is not None else [])
         if len(structures) >= 2:
             return self._result(item, Status.PASS,
-                                f"内容包含多种 AI 友好结构: {', '.join(structures)}")
+                                f"内容包含多种 AI 友好结构: {', '.join(sorted(structures))}",
+                                pages=pages)
         if len(structures) == 1:
             return self._result(item, Status.WARN,
-                                f"仅包含 1 种结构: {structures[0]}，建议增加列表/表格/FAQ")
+                                f"仅包含 1 种结构: {sorted(structures)[0]}，建议增加列表/表格/FAQ",
+                                pages=pages)
         return self._result(item, Status.FAIL,
-                            "内容缺少列表、表格、FAQ 等 AI 易摘取结构")
+                            "内容缺少列表、表格、FAQ 等 AI 易摘取结构",
+                            detail=f"检查范围: {'、'.join(checked_labels)}",
+                            pages=pages)
 
     # 17. 面包屑导航（全站级：检查内页是否有面包屑）
     def _check_breadcrumb(self) -> CheckResult:

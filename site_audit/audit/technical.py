@@ -177,6 +177,14 @@ class TechnicalChecker(BaseChecker):
                    if SiteCrawler._is_detail(p.final_url) and path_of(p.final_url) not in sm_paths]
         if missing:
             hard.append(f"{len(missing)} 个站内可达的详情页没进站点地图（如 {missing[0]}），这类高价值页只能靠内链被偶然发现")
+        # 3.5) CMS 默认演示/示例内容仍在线（客户可直接执行的清理项）
+        demo_paths = [path_of(u) for u in locs
+                      if re.search(r"/(hello-world|sample-page|hello-world-2|test-page|uncategorized)/?$",
+                                   path_of(u))]
+        if demo_paths:
+            soft.append(f"站点地图仍含 CMS 默认演示内容（如 {demo_paths[0]}），"
+                        "建议删除或设为 noindex——演示文章会稀释站点专业度并可能被 AI 检索到")
+
         # 4) lastmod 异常集中（轻提示）
         lms = [e[1] for e in entries if e[1]]
         if len(lms) > 10:

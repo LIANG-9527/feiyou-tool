@@ -532,7 +532,7 @@ async def api_audit(req: AuditRequest):
     audit_dir = BASE_DIR / "output" / "audit"
     # 传入LLM配置以启用AI语义检查
     llm_config = load_config().get("llm", {})
-    result = await asyncio.to_thread(run_site_audit, url, audit_dir, 12, llm_config)
+    result = await asyncio.to_thread(run_site_audit, url, audit_dir, 15, llm_config)
     if not result.get("ok"):
         return JSONResponse(result, status_code=422)
     return JSONResponse(result)
