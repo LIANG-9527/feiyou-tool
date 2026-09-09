@@ -120,10 +120,30 @@ class Fetcher:
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
 
+    # 浏览器身份：部分主机 WAF（如 SiteGround）会拦截一切非浏览器 UA，
+    # 遇到 403 类拦截时用它重试（实测 jianyongl6.sg-host.com 自主UA 403、浏览器UA 200）
+    BROWSER_UA = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    )
+    _BLOCK_CODES = (401, 403, 406, 429, 503)
+
     def __init__(self, timeout: int = 15):
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update(self.DEFAULT_HEADERS)
+        # 本次体检是否用过浏览器身份兜底（供报告披露抓取方式）
+        self.used_browser_ua = False
+
+    def _request(self, method: str, url: str, **kwargs):
+        """统一请求入口：自主 UA 被主机 WAF 拦截（403 类）时，整个会话切换为浏览器身份重试，
+        并对后续所有请求生效（sitemap/跳转探测/HEAD 检查同享，避免每处各自重试）。"""
+        resp = self.session.request(method, url, timeout=self.timeout, **kwargs)
+        if resp.status_code in self._BLOCK_CODES and not self.used_browser_ua:
+            self.session.headers["User-Agent"] = self.BROWSER_UA
+            self.used_browser_ua = True
+            resp = self.session.request(method, url, timeout=self.timeout, **kwargs)
+        return resp
 
     def fetch(self, url: str) -> Optional[PageData]:
         """抓取页面，返回 PageData 或 None"""
@@ -132,7 +152,7 @@ class Fetcher:
         try:
             import time
             start = time.time()
-            resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
+            resp = self._request("GET", url, allow_redirects=True)
             elapsed = time.time() - start
             html = decode_html(resp.content)
             soup = BeautifulSoup(html, "lxml")
@@ -155,8 +175,7 @@ class Fetcher:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         try:
-            resp = self.session.get(url, timeout=self.timeout, allow_redirects=True)
-            return resp
+            return self._request("GET", url, allow_redirects=True)
         except Exception:
             return None
 
@@ -170,8 +189,7 @@ class Fetcher:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         try:
-            resp = self.session.head(url, timeout=self.timeout, allow_redirects=True)
-            return resp.status_code
+            return self._request("HEAD", url, allow_redirects=True).status_code
         except Exception:
             return None
 
@@ -180,8 +198,7 @@ class Fetcher:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         try:
-            resp = self.session.get(url, timeout=self.timeout,
-                                    allow_redirects=False, stream=True)
+            resp = self._request("GET", url, allow_redirects=False, stream=True)
             code = resp.status_code
             loc = resp.headers.get("Location", "") or ""
             resp.close()

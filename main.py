@@ -6,6 +6,8 @@ import json
 import os
 import sys
 import time
+import threading
+import uuid
 import argparse
 import logging
 from pathlib import Path
@@ -476,6 +478,48 @@ chat_sessions: dict = {}
 
 class AuditRequest(PydanticModel):
     url: str = Field(..., description="要诊断的官网网址")
+
+
+AUDIT_JOBS: dict = {}  # job_id -> {"status": running/done/error, "result":..., "started": ts}
+
+
+@app.post("/api/audit/start")
+async def api_audit_start(req: AuditRequest):
+    """提交诊断任务立即返回 job_id（诊断在后台线程执行）。
+
+    诊断耗时 1~3 分钟，走同步接口时会被链路上的代理/nginx 掐断返回 HTML 错误页，
+    前端按 JSON 解析就报 "Unexpected token '<'"——改成提交+轮询彻底避开长连接。"""
+    url = (req.url or "").strip()
+    if not url:
+        return JSONResponse({"ok": False, "error": "请输入要诊断的网址"}, status_code=400)
+    job_id = uuid.uuid4().hex[:12]
+    AUDIT_JOBS[job_id] = {"status": "running", "started": time.time()}
+    llm_config = load_config().get("llm", {})
+    audit_dir = BASE_DIR / "output" / "audit"
+
+    def _run():
+        try:
+            AUDIT_JOBS[job_id]["result"] = run_site_audit(url, audit_dir, 12, llm_config)
+            AUDIT_JOBS[job_id]["status"] = "done"
+        except Exception as e:
+            AUDIT_JOBS[job_id]["status"] = "error"
+            AUDIT_JOBS[job_id]["result"] = {"ok": False, "error": f"诊断过程异常：{e}"}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return JSONResponse({"ok": True, "job_id": job_id})
+
+
+@app.get("/api/audit/job/{job_id}")
+async def api_audit_job(job_id: str):
+    job = AUDIT_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False,
+                             "error": "任务不存在（可能服务刚重启过），请重新发起诊断"}, status_code=404)
+    if job["status"] == "running":
+        return JSONResponse({"ok": True, "status": "running",
+                             "elapsed": int(time.time() - job["started"])})
+    return JSONResponse({"ok": True, "status": job["status"],
+                         "result": job.get("result") or {"ok": False, "error": "未知错误"}})
 
 
 @app.post("/api/audit")
@@ -2772,12 +2816,29 @@ async function startAudit(){
   loading.style.display='block';
   document.getElementById('loadingStep').textContent='正在抓取首页、抽样内页并逐项检查（约1～2分钟）…';
   try{
-    const resp = await fetch('/api/audit',{
+    const j = async (r)=>{ const ct=(r.headers.get('content-type')||'');
+      if(!ct.includes('application/json')){throw new Error('服务返回异常页面（可能网络代理超时或服务未就绪），请稍后重试');}
+      return r.json(); };
+    // 提交任务立即返回，轮询进度——避免 1~3 分钟长连接被链路代理掐断
+    const sr = await fetch('/api/audit/start',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({url:url})
     });
-    const data = await resp.json();
-    if(!resp.ok || data.ok===false){throw new Error(data.error||'诊断失败');}
+    const startData = await j(sr);
+    if(!sr.ok || startData.ok===false){throw new Error(startData.error||'无法启动诊断');}
+    let data = null;
+    for(;;){
+      await new Promise(r=>setTimeout(r,3000));
+      const pr = await fetch('/api/audit/job/'+startData.job_id);
+      const jd = await j(pr);
+      if(!pr.ok || jd.ok===false){throw new Error(jd.error||'查询诊断进度失败');}
+      if(jd.status==='running'){
+        document.getElementById('loadingStep').textContent='正在抓取首页、抽样内页并逐项检查（已进行 '+jd.elapsed+' 秒）…';
+        continue;
+      }
+      data = jd.result; break;
+    }
+    if(!data || data.ok===false){throw new Error((data&&data.error)||'诊断失败');}
     renderResult(data);
   }catch(e){
     loading.style.display='none';

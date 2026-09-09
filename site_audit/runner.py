@@ -127,6 +127,14 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         page = fetcher.fetch(url)
         if page is None:
             return {"ok": False, "error": f"无法访问 {url}，请检查网址是否正确或网络是否正常"}
+        # 首页本身就是错误页（如被主机 WAF 拦成 403 Forbidden）时绝不出报告：
+        # 否则全部检查都在给错误页打分，产出误导客户的垃圾报告
+        if page.status_code >= 400:
+            return {"ok": False,
+                    "error": (f"{url} 返回 {page.status_code}，首页内容无法获取"
+                              + ("（疑似主机防火墙拦截了检测程序，已尝试浏览器身份仍被拒绝）"
+                                 if fetcher.used_browser_ua else "")
+                              + "。请确认网址可公开访问，或联系网站管理员放行后再体检")}
 
         # 多页面抽样爬取
         crawler = SiteCrawler(fetcher, max_pages=max_pages, max_workers=4)
