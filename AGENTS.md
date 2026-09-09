@@ -71,6 +71,17 @@
 - 改完代码涉及报告/检查逻辑时：**必须真正重启 8777 服务再复测**——先 `kill` 旧进程并清端口，
   重启后用 `ps -o lstart` 核对进程启动时间（只看 curl 返回 200 不算数，旧进程也能返回 200）。
 
+## 服务器部署（Docker + 宝塔面板）
+
+- 部署目录 `/opt/geo-query-agent`，业务方通过宝塔面板丢文件 + 三条命令更新：
+  `cd /opt/geo-query-agent && docker compose down && docker compose up -d --build`。
+- **`docker-compose.yml` 必须保留 `./output:/app/output` 挂载**——没有它，每次重建容器都会
+  清空全部报告与快照（服务器数据在容器外，git 拉取/丢文件都不会碰它）。
+- **时区已强制 `TZ=Asia/Shanghai`**——容器默认 UTC，曾导致报告检测时间差 8 小时。
+- 推荐 `git pull` 更新（最不易污染数据）；宝塔手动丢文件时**严禁把本地 `output/` 传上服务器**。
+- 更新是否生效的确认：诊断页标题显示当前 `ENGINE_VERSION`（如 V2026.09.09.3）；
+  报告源代码含 `engine-version` meta、检测时间为北京时间。
+
 ## 运行环境
 
 - Python 解释器：`/Users/lmz/Library/Application Support/TRAE SOLO CN/ModularData/ai-agent/vm/tools/bin/python3`
