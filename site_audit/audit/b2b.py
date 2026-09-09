@@ -144,7 +144,7 @@ class B2BChecker(BaseChecker):
             failed="没有任何对比/选型类内容",
             tier="bonus",
         )
-        comparison_keywords = ["对比", "哪个好", "选型", "区别", "vs", "比较", "选购"]
+        comparison_keywords = ["对比", "哪个好", "选型", "区别", "vs", "versus", "comparison", "比较", "选购", "difference"]
         found = []
 
         for a in self.local_soup.find_all("a", href=True):
@@ -269,7 +269,7 @@ class B2BChecker(BaseChecker):
                     channels["二维码"] = True
         if any(soup.find("form") for soup in soups) or re.search(r"留言|留下.{0,6}(电话|联系方式)|提交.{0,4}(需求|信息)", text):
             channels["留言/表单"] = True
-        if re.search(r"在线咨询|在线客服|即时沟通|商务通|商桥|53kf|kf5|智齿|美洽", text, re.I):
+        if re.search(r"在线咨询|在线客服|即时沟通|商务通|商桥|53kf|kf5|智齿|美洽|live ?chat|intercom|zendesk|tawk|crisp|chat ?with (us|an expert)", text, re.I):
             channels["在线客服"] = True
         k = len(channels)
         if k >= 2:
@@ -337,12 +337,19 @@ class B2BChecker(BaseChecker):
             suggestion="补齐价格或获取报价入口、购买/合作流程、使用或服务流程、售后承诺、服务范围/配送/门店等信息",
         )
         text = self._all_text()
+        # 中英双语词根：英文站（外贸/出海企业）的决策信息用英文表述，纯中文词会误报 0/5
         groups = {
-            "价格/费用": r"价格|费用|收费|多少钱|报价|价目|套餐|price",
-            "怎么买/怎么合作": r"怎么买|如何购买|购买流程|下单|订购|合作流程|怎么合作|办理方式|咨询后",
-            "服务/使用流程": r"服务流程|使用流程|办理流程|流程步骤|第[一二三四五]步|几步骤|服务步骤",
-            "售后/保障": r"售后|保修|质保|退换|包退|服务承诺|服务保障|无忧",
-            "覆盖/配送/地点": r"配送|发货|包邮|服务范围|覆盖|上门|全国|门店|到店|线下|所在城市",
+            "价格/费用": r"价格|费用|收费|多少钱|报价|价目|套餐"
+                     r"|price|pricing|cost|quotation|request a quote|get a quote",
+            "怎么买/怎么合作": r"怎么买|如何购买|购买流程|下单|订购|合作流程|怎么合作|办理方式|咨询后"
+                          r"|how to (buy|order|cooperat\w*|partner|become)|purchase|partnership"
+                          r"|distributor|dealer|reseller|oem|odm|private label",
+            "服务/使用流程": r"服务流程|使用流程|办理流程|流程步骤|第[一二三四五]步|几步骤|服务步骤"
+                        r"|(?:work|service|production|ordering) process|how it works|step[- ]by[- ]step|workflow",
+            "售后/保障": r"售后|保修|质保|退换|包退|服务承诺|服务保障|无忧"
+                     r"|after-?sales|warranty|guarantee|refund|return policy|quality assurance",
+            "覆盖/配送/地点": r"配送|发货|包邮|服务范围|覆盖|上门|全国|门店|到店|线下|所在城市"
+                         r"|shipping|delivery|worldwide|global|coverage|countries|locat\w+|factory visit",
         }
         hit, lack = [], []
         for name, pat in groups.items():
