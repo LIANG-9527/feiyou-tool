@@ -196,7 +196,8 @@ class SiteCrawler:
         """
         home_p = urlparse(home.final_url)
         home_domain = home_p.netloc
-        sources = [home] + (extra_pages or [])
+        # 抓取失败的内页以 None 占位存于 fetched，这里必须过滤，否则 page.soup 直接崩溃
+        sources = [home] + [p for p in (extra_pages or []) if p is not None]
         links: dict = {}
         for page in sources:
             for a in page.soup.find_all("a", href=True):

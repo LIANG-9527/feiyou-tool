@@ -140,7 +140,11 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         crawler = SiteCrawler(fetcher, max_pages=max_pages, max_workers=4)
         try:
             extra_pages = crawler.crawl(page)
-        except Exception:
+        except Exception as e:
+            # 爬取崩溃绝不能静默吞掉——否则表现为"0 内页"，多页检查全部跳过还查不到原因
+            print(f"[爬取异常] 多页面抽样失败，仅按首页体检: {e}")
+            import traceback
+            traceback.print_exc()
             extra_pages = []
         # 必查类型覆盖情况（关于/联系/产品服务/案例/资讯/FAQ/隐私 各发现/选中多少）
         page_coverage = getattr(crawler, "last_coverage", {})
