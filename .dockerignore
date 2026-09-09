@@ -1,0 +1,8 @@
+output/
+archive/
+.git/
+.zcode/
+__pycache__/
+*.pyc
+.DS_Store
+server*.log

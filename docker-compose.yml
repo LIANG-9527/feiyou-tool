@@ -1,0 +1,10 @@
+services:
+  geo-audit:
+    build: .
+    container_name: geo-audit
+    ports:
+      - "8777:8777"
+    volumes:
+      # 关键：报告与快照必须留在宿主机，否则每次 down/up --build 都会清空全部数据
+      - ./output:/app/output
+    restart: unless-stopped
