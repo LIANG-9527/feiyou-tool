@@ -7,6 +7,10 @@ from urllib.parse import urlparse
 from site_audit.core.models import AuditReport, Status, Category, Priority
 from site_audit.core.scorer import grade_from_score
 
+# 引擎版本：检查逻辑或报告模板每次改动必须 +1（日期.当日序号），
+# 以隐藏方式写入每份报告（查看源代码可见），排查问题时区分报告由哪个版本生成。
+ENGINE_VERSION = "2026.09.09.3"
+
 
 # 报告出具方：默认本公司品牌「飞柚GEO」，可用环境变量 GEO_REPORT_PROVIDER 覆盖。
 # 注意：feiyougeo.cn 是我们自己的官网（常被用作体检测试对象），不要把它误当成客户。
@@ -873,6 +877,7 @@ def generate_html_report(report: AuditReport) -> str:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="engine-version" content="{ENGINE_VERSION}">
   <title>GEO 诊断报告 - {e(brand_name)}</title>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
   <style>
@@ -989,6 +994,7 @@ def generate_html_report(report: AuditReport) -> str:
   </style>
 </head>
 <body class="min-h-screen font-sans antialiased bg-background text-foreground">
+<!-- 引擎版本: {ENGINE_VERSION} ｜ 生成时间: {report.timestamp} ｜ 隐藏标识：仅查看源代码可见，用于排查问题区分生成版本 -->
 <div class="max-w-[1280px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
   <!-- Brand Header -->

@@ -1,5 +1,6 @@
 """JSON 报告生成"""
 import json
+from site_audit.report.html_report import ENGINE_VERSION
 from site_audit.core.models import AuditReport, Status
 
 
@@ -10,6 +11,7 @@ def report_to_dict(report: AuditReport) -> dict:
         "final_url": report.final_url,
         "site_brand": report.site_brand or "",
         "timestamp": report.timestamp,
+        "engine_version": ENGINE_VERSION,
         "prompt_version": report.prompt_version,
         "token_usage": report.token_usage,
         "total_score": report.total_score,
