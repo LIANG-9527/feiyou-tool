@@ -142,6 +142,45 @@ class SiteCrawler:
                 return most_specific(anchor_hits)
         return "other"
 
+    @classmethod
+    def homepage_section_types(cls, home) -> set:
+        """单页站兜底：从首页自身的区块证据识别页面类型。
+
+        很多官网（尤其外贸单页站）把 关于我们/FAQ/联系 等做成首页锚点区块而非独立页面，
+        只按 URL 分类会把它们误报成"缺页"。证据源限定在结构化位置（避免误判正文闲聊）：
+        ①页内锚点链接（#about、#faq 及其文字）②区块元素 id ③H1-H3 标题 ④页脚链接文字。
+        返回类型集合，供必备页完备性等检查把"首页区块"计入覆盖。"""
+        try:
+            soup = home.soup
+        except Exception:
+            return set()
+        texts = []
+        for a in soup.find_all("a", href=True):
+            h = (a.get("href") or "").strip()
+            if h.startswith("#") and len(h) > 1:
+                texts.append(h[1:].replace("-", " ").replace("_", " "))
+            t = a.get_text(strip=True)
+            if t:
+                texts.append(t[:60])
+        for el in soup.find_all(id=True):
+            i = (el.get("id") or "").strip()
+            if i and len(i) <= 40:
+                texts.append(i.replace("-", " ").replace("_", " "))
+        for h in soup.find_all(["h1", "h2", "h3"]):
+            t = h.get_text(strip=True)
+            if t:
+                texts.append(t[:80])
+        footer = soup.find("footer") or soup.find(class_=re.compile(r"footer", re.I))
+        if footer:
+            for a in footer.find_all("a"):
+                t = a.get_text(strip=True)
+                if t:
+                    texts.append(t[:60])
+        hits = set()
+        for t in texts:
+            hits |= {key for key, rx in _TYPE_RES if rx.search(t)}
+        return hits
+
     @staticmethod
     def _legacy_type_score(url: str) -> int:
         for score, pat in _LEGACY_PATTERNS:

@@ -265,7 +265,11 @@ class MultiPageChecker(BaseChecker):
         )
         item.category = Category.CONTENT
         all_urls = [p.final_url for p in self.all_pages]
-        types = {SiteCrawler.classify(u, "") for u in all_urls}
+        url_types = {SiteCrawler.classify(u, "") for u in all_urls}
+        # 单页站兜底：关于/FAQ/联系 常以首页锚点区块存在，计入覆盖（并注明形式）
+        section_types = SiteCrawler.homepage_section_types(self.page)
+        types = url_types | section_types
+        section_only = section_types - url_types
         # 强必备（全行业，缺了计入状态）
         required = [("about", "关于我们"), ("offer", "产品/服务"),
                     ("faq", "FAQ常见问题"), ("privacy", "隐私政策")]
@@ -276,7 +280,8 @@ class MultiPageChecker(BaseChecker):
         missing_optional = [name for key, name in optional if key not in types]
 
         if not all_urls:
-            return self._result(item, Status.SKIP, "无页面可核对")
+            return self._result(item, Status.SKIP, "无页面可核对",
+                                pages=all_urls)
         detail = []
         if missing_strong:
             note = "、".join(missing_strong)
@@ -285,6 +290,8 @@ class MultiPageChecker(BaseChecker):
             detail.append("缺少：" + note)
         if missing_optional:
             detail.append("以下非强制、建议补充：" + "、".join(missing_optional))
+        if section_only:
+            detail.append("关于/FAQ 等以首页区块（锚点）形式呈现，AI 可识别但独立成页更利于定位与引用")
         detail.append(f"本次可达范围（首页+两层内链+站点地图）共识别到页面类型：{('、'.join(sorted(types))) or '无'}")
 
         if not missing_strong:
