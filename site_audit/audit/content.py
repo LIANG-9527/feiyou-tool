@@ -1,6 +1,7 @@
 """内容质量检查（6项）"""
 import re
 from typing import List
+from urllib.parse import urlparse
 from .checker import BaseChecker
 from site_audit.core.models import CheckResult, Status, Priority, Category
 
@@ -375,25 +376,65 @@ class ContentChecker(BaseChecker):
     def _check_multilingual(self) -> CheckResult:
         item = self._item(
             "content-06", "多语言/多地区设置", Priority.P2,
-            "是否有 hreflang 或语言切换",
-            "检查 link rel=alternate hreflang 和语言切换按钮",
-            "如有多语言，使用 hreflang 标注",
-            manual_check="看页面是否有语言切换按钮；右键查看源代码搜索 hreflang，看是否标注了各语言版本",
-            purpose="hreflang 告诉 AI 每个语言版本对应哪个地区的用户，避免不同语言版本互相竞争排名，提升海外用户的 AI 搜索可见性",
-            excellent="有多语言站点，每个页面都有正确的 hreflang 标记（含 x-default），语言切换功能正常，各语言内容完整",
+            "是否有 hreflang 或语言切换；各语言版本内容语言是否与定位一致",
+            "检查 link rel=alternate hreflang 和语言切换按钮；对声称中文/英文的页面核对正文实际语言",
+            "如有多语言，使用 hreflang 标注，且各语言版本内容语言与定位一致",
+            manual_check="看页面是否有语言切换按钮；右键查看源代码搜索 hreflang；点开'中文版'页面确认正文真是中文而不是英文镜像",
+            purpose="hreflang 告诉 AI 每个语言版本对应哪个地区的用户；若'中文版'页面正文实际是英文，中文用户和 AI 拿到的都是错语种内容，多语言形同虚设还互相竞争排名",
+            excellent="有多语言站点，每个页面都有正确的 hreflang 标记（含 x-default），语言切换功能正常，各语言内容完整且语言一致",
             normal="有语言切换功能，但缺少 hreflang 标记，或 hreflang 标注不完整",
-            failed="单语言站点（不适用），或有多语言但完全没有 hreflang 且语言切换混乱",
+            failed="单语言站点（不适用），或有多语言但完全没有 hreflang 且语言切换混乱，或语言版本正文与定位语言不符",
             tier="bonus",
         )
         hreflang = self.local_soup.find_all("link", attrs={"rel": "alternate", "hreflang": True})
         lang_switch = self.local_soup.find(class_=re.compile(r"lang|language|i18n", re.I))
 
+        # 语言一致性：声称中文（/cn/ /zh/ 路径段或 lang=zh*）但正文几乎无中文 → 实质性缺陷
+        mismatch = []
+        for p in self.all_pages:
+            path = (urlparse(p.final_url).path or "").lower()
+            html_lang = ""
+            html_tag = p.soup.find("html")
+            if html_tag:
+                html_lang = (html_tag.get("lang") or "").lower()
+            claims_zh = re.search(r"/(cn|zh)(?:[-/]|$)", path) or html_lang.startswith("zh")
+            if not claims_zh:
+                continue
+            text = p.soup.get_text(" ", strip=True)
+            cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
+            latin = len(re.findall(r"[A-Za-z]", text))
+            if cjk + latin >= 200 and cjk / (cjk + latin) < 0.10:
+                mismatch.append(urlparse(p.final_url).path or "/")
+
         if hreflang:
             langs = [l.get("hreflang") for l in hreflang if l.get("hreflang")]
-            return self._result(item, Status.PASS,
-                                f"有 hreflang 标记（{len(set(langs))}种语言）",
-                                detail=f"语言: {', '.join(set(langs))}")
+            note = ""
+            status, msg = Status.PASS, f"有 hreflang 标记（{len(set(langs))}种语言）"
+            if mismatch:
+                status = Status.WARN
+                msg += f"；{len(mismatch)} 个中文版页面正文实为英文"
+                note = f"语言不一致（正文中文占比过低）：{'、'.join(mismatch[:6])}"
+            mismatch_pages = [p.final_url for p in self.all_pages
+                              if urlparse(p.final_url).path in mismatch]
+            return self._result(item, status, msg,
+                                detail=f"语言: {', '.join(set(langs))}" + (f"。{note}" if note else ""),
+                                pages=mismatch_pages or None)
         if lang_switch:
-            return self._result(item, Status.WARN, "有语言切换但缺少 hreflang 标记")
+            mismatch_pages = [p.final_url for p in self.all_pages
+                              if urlparse(p.final_url).path in mismatch]
+            if mismatch:
+                return self._result(item, Status.FAIL,
+                                    f"有语言切换但 {len(mismatch)} 个'中文版'页面正文实为英文，多语言形同虚设",
+                                    detail=f"语言不一致页面: {'、'.join(mismatch[:6])}；且缺少 hreflang 标记",
+                                    pages=mismatch_pages)
+            return self._result(item, Status.WARN, "有语言切换但缺少 hreflang 标记",
+                                pages=[p.final_url for p in self.all_pages])
+        if mismatch:
+            mismatch_pages = [p.final_url for p in self.all_pages
+                              if urlparse(p.final_url).path in mismatch]
+            return self._result(item, Status.WARN,
+                                f"{len(mismatch)} 个页面声称中文（/cn/ 路径或 lang=zh）但正文几乎全为英文",
+                                detail=f"语言不一致页面: {'、'.join(mismatch[:6])}",
+                                pages=mismatch_pages)
         return self._result(item, Status.PASS, "单语言站点，无需多语言设置",
                             detail="未检测到 hreflang 和语言切换，站点为单语言，符合预期")
