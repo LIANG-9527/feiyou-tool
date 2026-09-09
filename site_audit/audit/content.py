@@ -391,6 +391,7 @@ class ContentChecker(BaseChecker):
 
         # 语言一致性：声称中文（/cn/ /zh/ 路径段或 lang=zh*）但正文几乎无中文 → 实质性缺陷
         mismatch = []
+        menu_untranslated = {}
         for p in self.all_pages:
             path = (urlparse(p.final_url).path or "").lower()
             html_lang = ""
@@ -405,6 +406,15 @@ class ContentChecker(BaseChecker):
             latin = len(re.findall(r"[A-Za-z]", text))
             if cjk + latin >= 200 and cjk / (cjk + latin) < 0.10:
                 mismatch.append(urlparse(p.final_url).path or "/")
+            # 导航/按钮未翻译：短链接文字里纯英文项（疑似菜单未汉化），仅作明细提示
+            en_menu = []
+            for a in p.soup.find_all("a", href=True):
+                t = a.get_text(" ", strip=True)
+                if 3 <= len(t) <= 30 and not re.search(r"[\u4e00-\u9fff]", t) \
+                        and re.search(r"[A-Za-z]{3,}", t) and not re.match(r"^(EN|PDF)$", t.upper()):
+                    en_menu.append(t)
+            if len(en_menu) >= 4:
+                menu_untranslated[path or "/"] = en_menu
 
         if hreflang:
             langs = [l.get("hreflang") for l in hreflang if l.get("hreflang")]
@@ -423,9 +433,13 @@ class ContentChecker(BaseChecker):
             mismatch_pages = [p.final_url for p in self.all_pages
                               if urlparse(p.final_url).path in mismatch]
             if mismatch:
+                menu_note = "；".join(f"{path} 导航/按钮存在未翻译英文项（如 {'、'.join(items[:3])}）"
+                                  for path, items in list(menu_untranslated.items())[:3])
                 return self._result(item, Status.FAIL,
                                     f"有语言切换但 {len(mismatch)} 个'中文版'页面正文实为英文，多语言形同虚设",
-                                    detail=f"语言不一致页面: {'、'.join(mismatch[:6])}；且缺少 hreflang 标记",
+                                    detail=(f"语言不一致页面: {'、'.join(mismatch[:6])}；"
+                                            + (menu_note + "；" if menu_note else "")
+                                            + "且缺少 hreflang 标记"),
                                     pages=mismatch_pages)
             return self._result(item, Status.WARN, "有语言切换但缺少 hreflang 标记",
                                 pages=[p.final_url for p in self.all_pages])

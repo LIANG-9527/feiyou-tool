@@ -9,7 +9,7 @@ from site_audit.core.scorer import grade_from_score
 
 # 引擎版本：检查逻辑或报告模板每次改动必须 +1（日期.当日序号），
 # 以隐藏方式写入每份报告（查看源代码可见），排查问题时区分报告由哪个版本生成。
-ENGINE_VERSION = "2026.09.09.5"
+ENGINE_VERSION = "2026.09.09.6"
 
 
 # 报告出具方：默认本公司品牌「飞柚GEO」，可用环境变量 GEO_REPORT_PROVIDER 覆盖。
