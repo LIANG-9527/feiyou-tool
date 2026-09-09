@@ -44,7 +44,7 @@ TYPE_SPECS = [
     ("offer",   r"product|chanpin|service|fuwu|solution|fangan|jiejue|yewu|/cp/|/fw/|产品|服务|解决方案|业务", "always", 2, True),
     ("case",    r"case|anli|customer|kehu|client|story|gushi|chenggong|案例|客户案例|成功案例|客户", "always", 2, True),
     ("news",    r"news|zixun|xinwen|blog|article|dongtai|ganhuo|资讯|新闻|文章|动态|干货|博客|百科", "always", 2, True),
-    ("faq",     r"faq|/qa|question|wenti|cjwt|changjian|常见问题|问答|有问必答|疑问|帮助中心问答", "always", 1, False),
+    ("faq",     r"faq|q&a|\bqa\b|question|wenti|cjwt|changjian|常见问题|问答|有问必答|疑问|帮助中心问答", "always", 1, False),
     ("privacy", r"privacy|yinsi|agreement|xieyi|terms|zhengce|隐私|服务协议|用户协议|条款|政策", "always", 1, False),
     ("help",    r"help|docs|document|manual|guide|support|wiki|apidoc|jiaocheng|shouce|shuoming|帮助|教程|手册|文档|使用说明", "conditional", 1, False),
     ("honor",   r"zizhi|rongyu|honor|cert|qualification|zhengshu|资质|荣誉|证书|专利|软著|实力", "conditional", 1, False),
