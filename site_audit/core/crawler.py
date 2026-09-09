@@ -93,6 +93,9 @@ class SiteCrawler:
         self._sitemap_links: Optional[dict] = None
         # sitemap posts 型子地图声明的文章页（保底进抽样，供署名/原创性等深度检查）
         self._sitemap_article_urls: set = set()
+        # —— 参数归一化（轻量全站爬取护栏）——
+        self._url_param_cfg = self._load_url_param_cfg()
+        self._seen_path_variants: dict = {}   # 路径 -> 已见的 query 变体数
 
     @staticmethod
     def _normalize(url: str) -> Optional[str]:
@@ -398,6 +401,133 @@ class SiteCrawler:
 
     def _is_search_page_url(self, url: str) -> bool:
         return bool(self._SEARCH_RE.search(url))
+
+    @staticmethod
+    def _load_url_param_cfg():
+        import yaml as _y
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "config" / "url_param_rules.yaml"
+        try:
+            with open(p, encoding="utf-8") as f:
+                return _y.safe_load(f) or {}
+        except Exception:
+            return {"skip_params": [], "max_variants": 2}
+
+    def _should_skip_param_page(self, url: str) -> bool:
+        """参数归一化：同路径带筛选参数(query)的变体，跳过或限量。
+        
+        返回 True = 该 URL 应跳过（命中筛选参数黑名单，或同路径变体已超上限）。
+        """
+        pu = urlparse(url)
+        path = pu.path or "/"
+        query = pu.query
+        if not query:
+            # 无 query 的页面不受参数归一化影响（本身是独立页）
+            self._seen_path_variants.setdefault(path, 0)  # 占位，让"无参"版本始终保留
+            return False
+        # 逐个参数判断是否有已知筛选参数命中
+        params = [kv.split("=", 1)[0] for kv in query.split("&") if "=" in kv]
+        skip_params = self._url_param_cfg.get("skip_params", []) or []
+        if any(prm in skip_params for prm in params):
+            return True   # 筛选参数变体直接跳过（如 ?zstek_product_family=x）
+        # 非筛选参数（路径参数、分页等）：同路径限量 max_variants
+        max_v = int(self._url_param_cfg.get("max_variants", 2))
+        cur = self._seen_path_variants.get(path, 0)
+        if cur >= max_v:
+            return True
+        self._seen_path_variants[path] = cur + 1
+        return False
+
+    def collect_all_urls(self, home: PageData, max_urls: int = 2000) -> list:
+        """轻量全站层：收集去重后的 URL 清单（sitemap + 内链），应用参数归一化。
+        
+        返回规范化后的 URL 列表，供并发抓取元数据。不抓页面内容，只列 URL。
+        """
+        known = {}
+        # sitemap 声明（站长认为重要的页面，优先）
+        try:
+            for u in self._load_sitemap_links(home):
+                known.setdefault(u, "")
+        except Exception:
+            pass
+        # 首页内链（含已抓内页，发现"孤岛"页）
+        try:
+            self._sitemap_links = dict(known)
+            links = self.extract_internal_links(home, [])
+            known.update(links)
+        except Exception:
+            pass
+        result = []
+        path_variants = {}
+        for u in sorted(known):
+            if len(result) >= max_urls:
+                break
+            norm = self._normalize(u)
+            if not norm:
+                continue
+            pu = urlparse(norm)
+            if RESOURCE_EXT.search(pu.path):
+                continue
+            if self._blacklisted(norm):
+                continue
+            if self._should_skip_param_page(norm):
+                continue
+            result.append(norm)
+        self.last_links = known
+        return result
+
+    def fetch_metadata_concurrent(self, urls: list, max_workers: int = 12) -> list:
+        """轻量全站层：并发抓取每页元数据（状态码/标题/字数/H1数/图片数/JSON-LD类型）。
+        
+        返回 [{url,statusCode,title,wordCount,h1Count,imagesTotal,imagesMissingAlt,responseTimeMs,jsonld_types}]
+        """
+        out = []
+        if not urls:
+            return out
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futs = {pool.submit(self.fetcher.fetch, u): u for u in urls}
+            for fut in as_completed(futs):
+                u = futs[fut]
+                try:
+                    p = fut.result()
+                except Exception:
+                    p = None
+                if p is None:
+                    out.append({"url": u, "statusCode": None, "title": "", "wordCount": 0,
+                                "h1Count": 0, "imagesTotal": 0, "imagesMissingAlt": 0,
+                                "responseTimeMs": 0, "jsonld_types": []})
+                    continue
+                meta = {
+                    "url": p.final_url,
+                    "statusCode": p.status_code,
+                    "title": (p.soup.title.get_text(strip=True) if p.soup and p.soup.title else ""),
+                    "wordCount": p.word_count(),
+                    "h1Count": len(p.soup.find_all("h1")) if p.soup else 0,
+                    "imagesTotal": len(p.soup.find_all("img")) if p.soup else 0,
+                    "imagesMissingAlt": sum(1 for img in p.soup.find_all("img")
+                                            if not (img.get("alt") or "").strip()) if p.soup else 0,
+                    "responseTimeMs": round(p.response_time * 1000),
+                    "jsonld_types": self._jsonld_types(p),
+                }
+                out.append(meta)
+        return out
+
+    @staticmethod
+    def _jsonld_types(p) -> list:
+        if not p.soup:
+            return []
+        types = []
+        import json as _j
+        for sc in p.soup.find_all("script", attrs={"type": "application/ld+json"}):
+            try:
+                data = _j.loads(sc.string)
+                items = data if isinstance(data, list) else [data]
+                for d in items:
+                    if isinstance(d, dict) and d.get("@type"):
+                        types.append(str(d["@type"]))
+            except Exception:
+                pass
+        return types
 
     def _crawl_full(self, home: PageData, progress=None) -> List[PageData]:
         """A2 全站爬取：规则类检查需要全量页面。

@@ -9,7 +9,7 @@ from site_audit.core.scorer import grade_from_score
 
 # 引擎版本：检查逻辑或报告模板每次改动必须 +1（日期.当日序号），
 # 以隐藏方式写入每份报告（查看源代码可见），排查问题时区分报告由哪个版本生成。
-ENGINE_VERSION = "2026.09.09.11"
+ENGINE_VERSION = "2026.09.09.13"
 
 
 # 报告出具方：默认本公司品牌「飞柚GEO」，可用环境变量 GEO_REPORT_PROVIDER 覆盖。
@@ -280,6 +280,71 @@ def _calc_set_category_scores(results, item_ids):
     return calculate_category_scores(filtered)
 
 
+def _light_scan_panel(report: AuditReport) -> str:
+    """生成「全站扫描明细」可折叠面板（B方案附件，不改变报告主体习惯）。
+
+    轻量全站扫描把全站元数据（状态码/标题/字数/H1/图片/JSON-LD）铺开，
+    客户需要时可点开看全站概况；不需要时不影响原有"哪些项目有问题"的浏览。
+    无数据（如轻量层异常）时返回空串，不占版面。
+    """
+    meta = getattr(report, "light_scan_meta", None) or []
+    if not meta:
+        return ""
+    # 汇总
+    bad_status = [m for m in meta if (m.get("statusCode") or 200) >= 400]
+    dup = {}
+    for m in meta:
+        t = (m.get("title") or "").strip()
+        if t and t != "403 - Forbidden":
+            dup.setdefault(t, []).append(m)
+    dup_lines = [f"「{t[:28]}」×{len(us)}" for t, us in dup.items() if len(us) >= 2]
+    h1_bad = [m for m in meta if m.get("h1Count") not in (0, 1)]
+    img_bad = [m for m in meta if m.get("imagesTotal", 0) > 0 and m.get("imagesMissingAlt", 0) == m.get("imagesTotal", 0)]
+    summary_open = (
+        f"本次对全站 {len(meta)} 个页面做了轻量扫描。"
+        f"{len(bad_status)} 个页面返回错误状态码"
+        + (f"；{len(dup_lines)} 组标题被多个页面共用" if dup_lines else "")
+        + (f"；{len(h1_bad)} 个页面主标题数量异常" if h1_bad else "")
+        + (f"；{len(img_bad)} 个页面图片全部缺少文字说明" if img_bad else "")
+        + "。以下为全站明细，供核对："
+    )
+
+    rows = ""
+    for m in meta:
+        sc = m.get("statusCode")
+        sc_style = "" if (sc or 200) < 400 else "color:var(--state-error);font-weight:700;"
+        url = m.get("url", "")
+        title = m.get("title") or "(无标题)"
+        note = ""
+        if (sc or 200) >= 400:
+            note = " ⚠️ 无法访问"
+        elif m.get("h1Count") not in (0, 1):
+            note = " ⚠️ 主标题异常"
+        elif m.get("imagesTotal", 0) > 0 and m.get("imagesMissingAlt") == m.get("imagesTotal"):
+            note = " ⚠️ 图片全缺说明"
+        rows += (f'<div style="padding:6px 0;border-bottom:1px solid var(--jl-neutral-100);font-size:12px;">'
+                 f'<span style="{sc_style}min-width:34px;display:inline-block;">{sc}</span>'
+                 f'<span style="color:var(--jl-neutral-700);margin-right:6px;">{e(title[:36])}</span>'
+                 f'<span style="color:var(--jl-neutral-400);">字数{m.get("wordCount", 0)} · 图{m.get("imagesTotal", 0)} · '
+                 f'H1:{m.get("h1Count", 0)}</span>'
+                 f'<span style="color:var(--state-error);">{note}</span>'
+                 f'<div style="color:var(--jl-neutral-400);font-size:11px;word-break:break-all;">{e(url)}</div></div>')
+
+    return (
+        f'<details style="margin-top:16px;border:1px solid var(--jl-border);border-radius:12px;'
+        f'background:var(--jl-card);overflow:hidden;">'
+        f'<summary style="cursor:pointer;padding:12px 16px;font-size:13px;font-weight:600;'
+        f'color:var(--jl-neutral-700);list-style:none;display:flex;align-items:center;">'
+        f'<span style="margin-right:6px;">🔍</span>全站扫描明细'
+        f'<span style="color:var(--jl-neutral-400);font-weight:400;margin-left:8px;font-size:12px;">('
+        f'{len(meta)} 页 · {len(bad_status)} 个异常 · 点击展开)</span></summary>'
+        f'<div style="padding:12px 16px;font-size:12px;color:var(--jl-neutral-500);'
+        f'line-height:1.7;border-top:1px solid var(--jl-neutral-100);">{e(summary_open)}</div>'
+        f'<div style="padding:0 16px 16px;max-height:420px;overflow:auto;">{rows}</div>'
+        f'</details>'
+    )
+
+
 def _pick_problem_cards(report: AuditReport) -> list:
     """从失败项里按「影响大 × 容易改」选最多 3 张客户版问题卡。"""
     # H3：候选池 = 全部不合格项 + P1 级"不足"项（高优先级 WARN 也可能上首屏，如全站镜像/导航死链）
@@ -406,6 +471,9 @@ def generate_html_report(report: AuditReport) -> str:
                         f'<p style="font-size:12px;color:var(--jl-neutral-500);margin:0 0 12px;">'
                         f'多个检查项指向同一根因时合并为一条整改主线，便于按主线分配工作</p>{items}</section>')
 
+    # ── B方案：全站扫描明细面板（可折叠附件，不改变报告主体习惯）──
+    light_scan_panel_html = _light_scan_panel(report)
+
     # ── A4/L5 覆盖声明数据 ──
     cs = getattr(report, "crawl_stats", {}) or {}
     crawl_mode = cs.get("mode", "分层抽样")
@@ -419,13 +487,17 @@ def generate_html_report(report: AuditReport) -> str:
                  and getattr(r, 'tier', 'core') != 'bonus')
     cards = _pick_problem_cards(report)
     card_n = len(cards)
+    # 全站扫描覆盖声明（B方案：总结话术里提及，不塞进正文受检项）
+    ls_n = len(getattr(report, "light_scan_meta", []) or [])
+    ls_note = (f"另对全站 {ls_n} 个页面做了轻量扫描（含状态码/重复标题/模板副本/图片说明），"
+               f"明细见报告上方『全站扫描明细』按钮。" if ls_n else "")
     if card_n > 0:
         headline = (f"本次体检 {summary['core_total']} 项计分检查，{fail_n} 项未达标——"
                     f"这些环节正在影响 AI 搜索引擎对您网站内容的理解与引用。"
-                    f"优先修复以下 {card_n} 个关键问题，可快速提升 AI 可见度：")
+                    f"优先修复以下 {card_n} 个关键问题，可快速提升 AI 可见度。{ls_note}")
     else:
         headline = (f"本次体检 {summary['core_total']} 项计分检查，{fail_n} 项未达标，"
-                    f"整体表现良好，仍有优化空间。")
+                    f"整体表现良好，仍有优化空间。{ls_note}")
     cards_html = ""
     for i, c in enumerate(cards, 1):
         # 悬浮提示展示完整结果（不截断），分号处换行便于阅读
@@ -1059,6 +1131,8 @@ def generate_html_report(report: AuditReport) -> str:
       </button>
     </div>
   </header>
+
+  {light_scan_panel_html}
 
   <!-- Hero -->
   <section style="position:relative;overflow:hidden;border-radius:16px;background:linear-gradient(135deg,var(--jl-blue-800) 0%,var(--jl-blue-600) 100%);padding:32px 28px;color:#fff;margin-bottom:24px;box-shadow:0 4px 6px -1px rgba(15,23,42,0.05);">

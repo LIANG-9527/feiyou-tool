@@ -264,7 +264,9 @@ class MultiPageChecker(BaseChecker):
             suggestion="补齐缺失的必备页；尤其建立 FAQ 页（客户高频问答），这是被 AI 摘取引用率最高的内容形式",
         )
         item.category = Category.CONTENT
-        all_urls = [p.final_url for p in self.all_pages]
+        # 优先用轻量层产出全站 URL 清单（否则回退到抽样页），保证"全站"判断是真的全站
+        probe_urls = (self.all_site_urls or [p.final_url for p in self.all_pages])
+        all_urls = [u.rstrip("/") for u in probe_urls]
         url_types = {SiteCrawler.classify(u, "") for u in all_urls}
         # 单页站兜底：关于/FAQ/联系 常以首页锚点区块存在，计入覆盖（并注明形式）
         section_types = SiteCrawler.homepage_section_types(self.page)

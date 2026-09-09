@@ -218,12 +218,15 @@ class BaseChecker(ABC):
     category: Category = Category.TECHNICAL
 
     def __init__(self, fetcher: Fetcher, page: PageData, extra_pages=None,
-                 ai_engine=None):
+                 ai_engine=None, all_site_urls=None):
         self.fetcher = fetcher
         self.page = page
         # 多页面抽样：除首页外抓取到的内页 PageData 列表（跨页面检查用）
         self.extra_pages = extra_pages or []
         self.all_pages = [page] + self.extra_pages
+        # 全站 URL 清单（轻量层 collect_all_urls 产出，含整站可达页面，
+        # 供"必备页面完备性"等需要全站清单的检查用；未传入时为 None 则回退 all_pages）
+        self.all_site_urls = all_site_urls or []
         self.base_url = self._get_base_url()
         # AI语义引擎（可选，用于AI层检查）
         self.ai_engine = ai_engine

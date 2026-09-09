@@ -14,6 +14,7 @@ def report_to_dict(report: AuditReport) -> dict:
         "engine_version": ENGINE_VERSION,
         "crawl_stats": getattr(report, "crawl_stats", {}) or {},
         "stories": getattr(report, "stories", []) or [],
+        "light_scan_meta": getattr(report, "light_scan_meta", []) or [],
         "prompt_version": report.prompt_version,
         "token_usage": report.token_usage,
         "total_score": report.total_score,

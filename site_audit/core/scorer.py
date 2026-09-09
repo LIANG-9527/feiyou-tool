@@ -108,7 +108,8 @@ def build_report(url: str, final_url: str, timestamp: str,
                  prompt_version: str = "",
                  token_usage: dict = None,
                  site_brand: str = "",
-                 crawl_stats: dict = None) -> AuditReport:
+                 crawl_stats: dict = None,
+                 light_scan_meta: list = None) -> AuditReport:
     """构建完整报告"""
     category_scores = calculate_category_scores(results)
     total_score = calculate_total_score(category_scores)
@@ -133,4 +134,5 @@ def build_report(url: str, final_url: str, timestamp: str,
         site_brand=site_brand,
         crawl_stats=crawl_stats or {},
         stories=stories,
+        light_scan_meta=light_scan_meta or [],
     )

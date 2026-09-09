@@ -52,6 +52,8 @@ def rebuild(json_path: str, output_dir: str = None):
         sampled_pages=data.get("sampled_pages", []),
         prompt_version=data.get("prompt_version", ""),
         token_usage=data.get("token_usage") or None,
+        crawl_stats=data.get("crawl_stats", {}) or {},
+        light_scan_meta=data.get("light_scan_meta", []) or [],
     )
     out = Path(output_dir) if output_dir else Path(json_path).parent
     out.mkdir(parents=True, exist_ok=True)

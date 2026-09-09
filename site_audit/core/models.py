@@ -123,6 +123,8 @@ class AuditReport:
     crawl_stats: dict = field(default_factory=dict)
     # 根因聚合出的整改故事（L1：[{root, title, severity, evidence:[检查项名]}]），由聚合器生成
     stories: list = field(default_factory=list)
+    # 轻量全站扫描元数据（B方案附件）：[{url,statusCode,title,wordCount,h1Count,imagesTotal,imagesMissingAlt,responseTimeMs,jsonld_types}]
+    light_scan_meta: list = field(default_factory=list)
 
     @property
     def summary(self) -> dict:

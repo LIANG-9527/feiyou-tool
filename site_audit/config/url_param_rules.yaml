@@ -1,0 +1,21 @@
+# URL 参数归一化规则 —— 轻量全站爬取的护栏（防参数爆炸/防重复页）
+# 作用：同一路径带不同 query，最多抓 max_variants 个变体，其余跳过；已知筛选参数直接跳过。
+# 新增站点类型只加配置，不改代码。
+
+# 已知筛选/过滤参数（这类参数只是"页面内容的筛选视图"，不是独立页面，直接跳过）
+skip_params:
+  - zstek_hierarchy
+  - zstek_product_family
+  - zstek_application
+  - category
+  - news_category
+  - solution
+  - sort
+  - order
+  - filter
+  - tag
+  - page
+  - p
+
+# 同一路径最多保留多少个 query 变体（超过的跳过）
+max_variants: 2

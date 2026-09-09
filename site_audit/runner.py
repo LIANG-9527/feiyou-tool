@@ -1,6 +1,7 @@
 """GEO 官网诊断封装：供 FastAPI 调用，静默运行并返回报告摘要与文件路径"""
 from __future__ import annotations
 import io
+import os
 import re
 import json
 import contextlib
@@ -136,9 +137,10 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
                                  if fetcher.used_browser_ua else "")
                               + "。请确认网址可公开访问，或联系网站管理员放行后再体检")}
 
-        # 多页面爬取：A2 决议——规则类检查全站爬取（护栏：深度≤5、2000 上限、黑名单）
+        # 多页面爬取：默认分层抽样（快，1-2 分钟）；全站爬取为可选（经 env 开启，慢）
+        # 任何站点都不应因全站 BFS 20 分钟而阻塞——参数爆炸已由轻量层参数归一化防护
         crawler = SiteCrawler(fetcher, max_pages=max_pages, max_workers=4)
-        crawler.full_crawl = True
+        crawler.full_crawl = os.environ.get("GEO_FULL_CRAWL", "") == "1"
         crawler.hard_cap = 2000
         try:
             extra_pages = crawler.crawl(page)
@@ -151,16 +153,34 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         # 必查类型覆盖情况（关于/联系/产品服务/案例/资讯/FAQ/隐私 各发现/选中多少）
         page_coverage = getattr(crawler, "last_coverage", {})
 
+        # 轻量层：收集全站 URL 清单（供"必备页面完备性"等需要全站的检查用）
+        # 参数归一化已应用，避免筛选参数爆炸；collect_all_urls 只列 URL 不抓内容，很快
+        try:
+            all_site_urls = crawler.collect_all_urls(page, max_urls=500)
+        except Exception as e:
+            print(f"[轻量层] 全站 URL 清单收集失败，回退抽样页: {e}")
+            all_site_urls = []
+
+        # 轻量全站扫描：元数据并发抓取（几秒出全站概况），作为报告附件数据
+        # B 方案：不改变报告主体习惯，作为头部可点开的"全站扫描明细"，总结话术里提一句
+        try:
+            light_scan_meta = crawler.fetch_metadata_concurrent(all_site_urls, max_workers=12)
+        except Exception as e:
+            print(f"[轻量层] 元数据抓取失败，跳过附件: {e}")
+            light_scan_meta = []
+
         # 单页面检查（首页），传入 extra_pages 和 ai_engine
         all_results = []
         for checker_cls in PAGE_CHECKERS:
-            checker = checker_cls(fetcher, page, extra_pages, ai_engine=ai_engine)
+            checker = checker_cls(fetcher, page, extra_pages, ai_engine=ai_engine,
+                                  all_site_urls=all_site_urls)
             if checker_cls is TechnicalChecker:
                 checker.search_pages = list(getattr(crawler, "search_pages", []))
             all_results.extend(checker.run())
 
         # 跨页面检查（断链 / 重复元信息 / 关键词蚕食）
-        cross = CrossPageChecker(fetcher, page, extra_pages, ai_engine=ai_engine)
+        cross = CrossPageChecker(fetcher, page, extra_pages, ai_engine=ai_engine,
+                                all_site_urls=all_site_urls)
         all_results.extend(cross.run())
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -179,7 +199,8 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
                               prompt_version=PROMPT_VERSION if ai_engine else "",
                               token_usage=ai_engine.token_usage if ai_engine else None,
                               site_brand=site_brand,
-                              crawl_stats=getattr(crawler, "crawl_stats", {}))
+                              crawl_stats=getattr(crawler, "crawl_stats", {}),
+                              light_scan_meta=light_scan_meta)
         # 按 DeepSeek 官方价格折算本次诊断费用（元）
         if report.token_usage:
             report.token_usage["cost_cny"] = estimate_cost_cny(report.token_usage)
