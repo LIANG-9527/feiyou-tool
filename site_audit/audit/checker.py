@@ -316,24 +316,37 @@ class BaseChecker(ABC):
         return None
 
     def _pick_content_page(self):
-        """从抽样内页中挑选最适合做内容检查的页面（文章/案例/产品页）"""
+        """从抽样内页中挑选最适合做内容检查的页面（文章/案例/产品页）。
+
+        排除与首页正文高度雷同的克隆页（ZSTEK教训：/adventure-news/ 实为首页模板副本，
+        曾被当文章页做署名检查，得出对克隆页无意义的结论）；排除后无候选则返回 None，
+        由调用方如实跳过。"""
         if not self.extra_pages:
             return None
         import re
+        home_text = self.page.get_text()
+
+        def _is_home_clone(p) -> bool:
+            a = {home_text[i:i + 2] for i in range(len(home_text) - 1)}
+            b = {p.get_text()[i:i + 2] for i in range(len(p.get_text()) - 1)}
+            if not a or not b:
+                return False
+            return len(a & b) / len(a | b) > 0.85
+
+        candidates = [p for p in self.extra_pages
+                      if p.word_count() > 100 and not _is_home_clone(p)]
+        if not candidates:
+            return None
         priority_patterns = [
             r"article|blog|news|post|文章|新闻|资讯",
             r"case|customer|story|案例|客户",
             r"product|service|solution|产品|服务|方案",
         ]
         for pattern in priority_patterns:
-            for p in self.extra_pages:
+            for p in candidates:
                 if re.search(pattern, p.final_url, re.I):
-                    if p.word_count() > 100:
-                        return p
-        best = max(self.extra_pages, key=lambda p: p.word_count(), default=None)
-        if best and best.word_count() > 100:
-            return best
-        return None
+                    return p
+        return max(candidates, key=lambda p: p.word_count(), default=None)
 
     @staticmethod
     def _pg(page) -> list:

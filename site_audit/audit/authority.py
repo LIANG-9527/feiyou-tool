@@ -320,7 +320,8 @@ class AuthorityChecker(BaseChecker):
         if not content_page:
             return self._result(item, Status.SKIP,
                                 "E-E-A-T为内容页检查项，首页不适用，且未抽样到内容页",
-                                detail="E-E-A-T评估对象是文章/案例/产品详情页等有主体内容的页面，首页是品牌导航页不适用")
+                                detail="E-E-A-T评估对象是文章/案例/产品详情页等有主体内容的页面；"
+                                       "首页是品牌导航页不适用，与首页高度重复的克隆页也不能作为评估对象")
         status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_eeat(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
         return self._result(item, status, summary,
