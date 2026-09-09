@@ -22,6 +22,7 @@ from llm_client import LLMClient
 from agent import Agent, ChatAgent
 from site_audit.runner import run_site_audit
 from site_audit.core.ai_engine import estimate_cost_cny
+from site_audit.report.html_report import ENGINE_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -2771,9 +2772,9 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
   <a href="/skills">Skill管理</a>
   <a href="/annotations">标注汇总</a>
 </nav>
-<div class="wrap">
+  <div class="wrap">
   <header>
-    <h1>GEO 官网诊断</h1>
+    <h1>GEO 官网诊断 <span style="font-size:14px;font-weight:600;color:#86868b;vertical-align:middle;">（V{{engine_version}}）</span></h1>
     <p>输入官网网址，自动抽样抓取内页，从技术可抓取性、AI友好度、内容质量、权威信任、商业转化与决策内容 5 个维度执行数十项检查（含断链、重复元信息、关键词蚕食等跨页面检测）并生成诊断报告</p>
   </header>
 
@@ -2969,7 +2970,7 @@ function handleDelete(btn){
 loadReportList();
 </script>
 </body>
-</html>'''
+</html>'''.replace('{{engine_version}}', ENGINE_VERSION)
 
 
 @app.get("/audit", response_class=HTMLResponse)
