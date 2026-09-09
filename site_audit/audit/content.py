@@ -162,63 +162,68 @@ class ContentChecker(BaseChecker):
             failed="未检测到任何 FAQ 问答结构",
         )
         import json
-        json_ld = self.local_soup.find_all("script", attrs={"type": "application/ld+json"})
-        has_faq_schema = False
-        for script in json_ld:
-            try:
-                data = json.loads(script.string)
-                items = data if isinstance(data, list) else [data]
-                for d in items:
-                    if isinstance(d, dict) and d.get("@type") == "FAQPage":
-                        has_faq_schema = True
-            except Exception:
-                pass
 
-        # 方式1：class 含 faq/question/accordion/collapse
-        faq_dom = self.local_soup.find(class_=re.compile(r"faq|question|accordion|collapse", re.I))
-        # 方式2：dt/dd 标签
-        has_qa_pattern = bool(self.local_soup.find_all(["dt", "dd"]))
-        # 方式3：details/summary 折叠面板
-        has_details = bool(self.local_soup.find_all("details"))
-        # 方式4：通过"常见问题/FAQ/常见问答"关键词定位标题，统计所在区块的问答数
-        faq_question_count = 0
-        faq_heading = None
-        for tag in self.local_soup.find_all(["h1", "h2", "h3", "h4"]):
-            text = tag.get_text(strip=True)
-            if re.search(r"常见问题|常见问答|FAQ|Q&A|问与答|帮助中心", text, re.I):
-                faq_heading = tag
-                break
-        if faq_heading:
-            # 向上找到 section/div 容器
-            container = faq_heading.parent
-            for _ in range(4):
-                if container and container.name not in ["section", "div"]:
-                    container = container.parent
-                else:
-                    break
-            if container:
-                # 统计容器内以问号结尾的短句（问题特征）
-                for el in container.find_all(["h3", "h4", "h5", "button", "a", "p", "div", "span"]):
-                    t = el.get_text(strip=True)
-                    if 5 <= len(t) <= 80 and (t.endswith("?") or t.endswith("？")):
-                        faq_question_count += 1
-        # 方式5：全局统计以问号结尾的短标题
-        global_questions = 0
-        for tag in self.local_soup.find_all(["h3", "h4", "h5", "button"]):
-            t = tag.get_text(strip=True)
-            if 5 <= len(t) <= 80 and (t.endswith("?") or t.endswith("？")):
-                global_questions += 1
+        def _page_faq_profile(soup):
+            """单页 FAQ 档案：(有FAQPage标记, 问答数)。全站扫描用，不依赖首页。"""
+            has_schema = False
+            for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+                try:
+                    data = json.loads(script.string)
+                    items = data if isinstance(data, list) else [data]
+                    for d in items:
+                        if isinstance(d, dict) and d.get("@type") == "FAQPage":
+                            has_schema = True
+                except Exception:
+                    pass
+            q_count = 0
+            faq_dom = soup.find(class_=re.compile(r"faq|question|accordion|collapse", re.I))
+            if soup.find_all(["dt", "dd"]):
+                q_count = max(q_count, len(soup.find_all(["dt", "dd"])) // 2)
+            q_count = max(q_count, len(soup.find_all("details")))
+            for tag in soup.find_all(["h3", "h4", "h5", "button"]):
+                t = tag.get_text(strip=True)
+                if 5 <= len(t) <= 80 and (t.endswith("?") or t.endswith("？")):
+                    q_count += 1
+            has_faq = bool(faq_dom) or q_count >= 2
+            return has_schema, q_count, has_faq
 
-        has_faq_dom = bool(faq_dom) or has_qa_pattern or has_details or faq_question_count >= 2 or global_questions >= 3
-        question_count = max(faq_question_count, global_questions)
+        # 全站扫描：允许多个地方写 FAQ，哪个页面有问题就报哪个页面（业务方口径）
+        schema_pages, dom_only_pages = [], []
+        for p in self.all_pages:
+            label = (urlparse(p.final_url).path or "/")
+            has_schema, q_count, has_faq = _page_faq_profile(p.soup)
+            if has_schema:
+                schema_pages.append((label, q_count))
+            elif has_faq:
+                # 专职FAQ页（/faq/路径）排最前，其余按问答数降序——报告先看主战场
+                is_faq_path = bool(re.search(r"/(faq|cjwt|changjianwenti)", label, re.I))
+                dom_only_pages.append((label, q_count, is_faq_path))
+        dom_only_pages.sort(key=lambda x: (not x[2], -x[1]))
 
-        if has_faq_schema:
-            return self._result(item, Status.PASS, f"有 FAQPage 结构化标记（{question_count or '若干'}个问答）")
-        if has_faq_dom:
-            detail = f"检测到约 {question_count} 个问题" if question_count else "检测到FAQ板块结构"
-            return self._result(item, Status.WARN, "有 FAQ 板块但缺少 FAQPage 结构化标记",
-                                detail=detail)
-        return self._result(item, Status.WARN, "未检测到 FAQ 问答结构")
+        if schema_pages:
+            note = ""
+            if dom_only_pages:
+                note = f"；另有 {len(dom_only_pages)} 页有 FAQ 板块但无结构化标记：{'、'.join(x[0] for x in dom_only_pages[:4])}"
+            best = max(schema_pages, key=lambda x: x[1])
+            dom_labels = {x[0] for x in dom_only_pages}
+            return self._result(item, Status.PASS,
+                                f"有 FAQPage 结构化标记（{best[1] or '若干'}个问答，{best[0]}）" + note,
+                                detail=note.lstrip("；") or None,
+                                pages=[self.page.final_url] +
+                                      [p.final_url for p in self.all_pages
+                                       if (urlparse(p.final_url).path or "/") in dom_labels])
+        if dom_only_pages:
+            labels = "、".join(f"{l}（{q or '若干'}问）" for l, q, _ in dom_only_pages[:5])
+            # 来源按优先级排序输出：专职FAQ页→问答多的页→其余，与明细一致
+            path_by = {urlparse(p.final_url).path or "/": p.final_url for p in self.all_pages}
+            pages_sorted = [path_by[x[0]] for x in dom_only_pages if x[0] in path_by]
+            return self._result(item, Status.WARN,
+                                f"有 FAQ 板块但缺少 FAQPage 结构化标记（{len(dom_only_pages)} 个页面）",
+                                detail=f"涉及页面: {labels}。加 FAQPage JSON-LD 后 AI 可稳定摘取问答",
+                                pages=pages_sorted)
+        return self._result(item, Status.WARN, "全站未检测到 FAQ 问答结构",
+                            detail="用户问具体问题时 AI 没有现成答案可摘，建 FAQ 页是提升被引用率最直接的抓手",
+                            pages=[p.final_url for p in self.all_pages])
 
     # 23. 图片优化
     def _check_image_optimization(self) -> CheckResult:
