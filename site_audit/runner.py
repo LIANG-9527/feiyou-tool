@@ -18,15 +18,48 @@ _BRAND_SLOGAN = re.compile(r"领先|专业|专注|一站式|解决方案|服务�
 _BRAND_STOP = {"首页", "主页", "网站首页", "官网首页", "home", "index", "website", "welcome", "默认首页"}
 
 
+_EN_LEGAL_TOKEN = re.compile(
+    r"[,，\s]*(?:co\.|corp\.|inc\.?|ltd\.?|llc|llp|corporation|company|gmbh|limited)$", re.I)
+
+
 def _clean_brand(name: str) -> str:
     name = re.sub(r"[【\[\(（][^】\]\)）]*[】\]\)）]\s*$", "", name or "").strip()
     name = re.sub(rf"^{_BRAND_CITY}+", "", name).strip()
     name = re.sub(rf"{_BRAND_SUFFIX}$", "", name).strip()
+    # 2026-09-10 V6：剥离英文公司法律后缀（Co., LTD / Inc. / LLC 等），循环剥到稳定
+    while True:
+        new = _EN_LEGAL_TOKEN.sub("", name).strip().rstrip(",，").strip()
+        if new == name or not new:
+            break
+        name = new
+    return name
+
+
+def _align_brand_to_domain(name: str, final_url: str) -> str:
+    """多词品牌名时，取与域名匹配的词作品牌（英文站：地域在前、品牌在后）。"""
+    import re as _re
+    from urllib.parse import urlparse as _up
+    if not name or " " not in name:
+        return name
+    host = _up(final_url or "").netloc.lower().replace("www.", "")
+    if not host:
+        return name
+    words = [w for w in _re.findall(r"[A-Za-z][A-Za-z0-9]+", name) if len(w) >= 2]
+    for w in reversed(words):  # 品牌词通常靠后（深圳 ZSTEK…）
+        if w.lower() in host:
+            return w
     return name
 
 
 def extract_site_brand(page) -> str:
-    """从首页直接识别对外品牌名：og:site_name > 标题里的品牌段 > 结构化名片 name；识别不出返回空。"""
+    """从首页直接识别对外品牌名：og:site_name > 标题里的品牌段 > 结构化名片 name；识别不出返回空。
+    2026-09-10 V6：英文站品牌剥离法律后缀，并按域名对齐取品牌词（如 ZSTEK）。"""
+    brand = _extract_site_brand_raw(page)
+    return _align_brand_to_domain(brand, getattr(page, "final_url", "")) if brand else brand
+
+
+def _extract_site_brand_raw(page) -> str:
+    """原提取逻辑。"""
     soup = getattr(page, "soup", None)
     if soup is None:
         return ""
@@ -45,7 +78,8 @@ def extract_site_brand(page) -> str:
                     return c
         for s in reversed(segs):  # 否则取尾段，跳过口号式描述与通用页面名
             c = _clean_brand(s)
-            if (c and 1 < len(c) <= 14 and c.lower() not in _BRAND_STOP
+            # 2026-09-10 V6：英文公司全名较长（>14），清洗+域名对齐可收敛出品牌词
+            if (c and 1 < len(c) <= 60 and c.lower() not in _BRAND_STOP
                     and not _BRAND_SLOGAN.search(c)):
                 return c
     for sc in soup.find_all("script", attrs={"type": "application/ld+json"}):

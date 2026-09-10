@@ -634,14 +634,33 @@ HTML中的作者标签: {author_signals or '未检测到'}
                         candidates.append(core)
                     break
 
-        # 从title提取品牌名
+        # 2026-09-10 V6：英文站品牌在标题尾段（… – ZSTEK），剥英文法律后缀
+        _en_legal = re.compile(r"[,，\s]*(co\.)?\s*(ltd|limited|inc|llc|llp|corp|corporation|company|gmbh)\.?$", re.I)
+
+        def _en_strip(nm):
+            nm = (nm or "").strip()
+            while True:
+                new = _en_legal.sub("", nm).strip().rstrip(",，").strip()
+                if new == nm or not new:
+                    return nm
+                nm = new
+
         title = page.soup.title.get_text(strip=True) if page.soup.title else ""
-        for sep in [" - ", " _ ", "丨", "｜", "—"]:
+        for sep in [" - ", " – ", " _ ", "丨", "｜", "—"]:
             if sep in title:
-                brand = title.split(sep)[0].strip()
-                if brand and brand not in candidates:
-                    candidates.append(brand)
+                brand = _en_strip(title.split(sep)[0].strip())
+                tail = _en_strip(title.split(sep)[-1].strip())
+                for cand in (brand, tail):
+                    if cand and cand not in candidates:
+                        candidates.append(cand)
                 break
+        # 2026-09-10 V6：英文站——标题里与域名匹配的词根是品牌候选（zstek.com → ZSTEK），放最前
+        from urllib.parse import urlparse as _up
+        _host = _up(page.final_url or "").netloc.lower().replace("www.", "")
+        if _host:
+            for w in re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", title):
+                if len(w) >= 3 and w.lower() in _host and w not in candidates:
+                    candidates.insert(0, w)
 
         # 从logo/alt提取
         logo = page.soup.find("img", class_=re.compile(r"logo", re.I))
