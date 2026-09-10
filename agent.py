@@ -194,18 +194,20 @@ class Agent:
             result.append({"item": label, "status": "pass" if has_data else "fail"})
         return result
 
-    async def _llm_call(self, prompt: str) -> Any:
+    async def _llm_call(self, prompt: str, expect_json: bool = True) -> Any:
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": prompt},
         ]
         async with self.semaphore:
-            return await self.llm.chat(messages, expect_json=True)
+            return await self.llm.chat(messages, expect_json=expect_json)
 
     async def _exec_single(self, skill: dict, ctx: dict) -> Any:
         context = self._build_context(skill, ctx)
         prompt = self._render(skill["prompt"], context)
-        return await self._llm_call(prompt)
+        # format: markdown 的 skill（如市场调研）需返回纯文本，不做 JSON 解析
+        as_text = skill.get("format") == "markdown"
+        return await self._llm_call(prompt, expect_json=not as_text)
 
     async def _exec_parallel(self, skill: dict, ctx: dict,
                              on_progress, t0) -> Any:
