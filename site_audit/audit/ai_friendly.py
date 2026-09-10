@@ -5,6 +5,49 @@ from typing import List
 from .checker import BaseChecker
 from site_audit.core.models import CheckResult, Status, Priority, Category
 
+# ── 2026-09-10 V6定版：标题/描述双轴判定，首页与内页共用同一函数 ──
+# 轴1（长度/显示）：长度永不单独判不合格，超长只出截断/改写提示；
+# 轴2（堆砌作弊，唯一判不合格的形状）：分隔槽过多且多为裸关键词、同一关键词重复≥3次。
+_TITLE_SPLIT_RE = re.compile(r"[_|、,，/\\\-–—·:：;；\s]+")
+_PURE_EN_SITE = False  # 纯英文站可切 60/160（预留配置）
+
+
+def judge_title_text(t):
+    """返回 (status, message, title, hint)。"""
+    t = (t or "").strip()
+    limit, hard = (60, 120) if _PURE_EN_SITE else (30, 60)
+    if not t:
+        return Status.FAIL, "缺少 <title> 标签", t, ""
+    n = len(t)
+    parts = [p for p in _TITLE_SPLIT_RE.split(t) if p]
+    bare = sum(1 for p in parts if len(p) <= 4)
+    if len(parts) >= 6 and bare >= 5:
+        return Status.FAIL, f"标题疑似关键词堆砌（{len(parts)} 个分隔槽中 {bare} 个为裸关键词），按搜索引擎堆砌作弊形状处理", t, ""
+    for p in parts:
+        if parts.count(p) >= 3:
+            return Status.FAIL, f"标题同一关键词重复 ≥3 次（{p}）", t, ""
+    if n < 15:
+        return Status.WARN, f"标题过短（{n}字符），建议加入核心关键词", t, ""
+    hint = ""
+    if n > hard:
+        hint = f"标题 {n} 字符，远超约{limit}字符的显示位，大概率被搜索引擎改写，建议重写并把重要信息前置"
+    elif n > limit:
+        hint = f"超出约{limit}字符的显示位将被截断，重要信息前置"
+    return Status.PASS, f"标题合理（{n}字符）", t, hint
+
+
+def judge_description_text(d):
+    """返回 (status, message, hint)。"""
+    d = (d or "").strip()
+    limit = 160 if _PURE_EN_SITE else 80
+    if not d:
+        return Status.WARN, "缺少 meta description（百度将自动截取正文片段）", ""
+    n = len(d)
+    if n < 50:
+        return Status.WARN, f"描述过短（{n}字符），建议补充", d
+    hint = f"超出约{limit}字符的显示位将被截断" if n > limit else ""
+    return Status.PASS, f"描述长度合理（{n}字符）", hint
+
 
 class AIFriendlyChecker(BaseChecker):
     category = Category.AI_FRIENDLY
@@ -26,7 +69,7 @@ class AIFriendlyChecker(BaseChecker):
     # 12. Meta Title
     def _check_title(self) -> CheckResult:
         item = self._item(
-            "ai-01", "Meta Title", Priority.P0,
+            "ai-01", "首页标题检查（Meta Title）", Priority.P1,  # 2026-09-10 V6：定级降为重要档（长度问题不阻断收录）
             "页面标题是否存在、长度是否合理、是否含核心关键词",
             "检查 <title> 标签内容、长度和关键词",
             "唯一，含品牌+关键词，30-60字符",
@@ -37,24 +80,17 @@ class AIFriendlyChecker(BaseChecker):
             failed="缺少 title，或标题只有品牌名无业务关键词，或标题过短/过长",
         )
         title_tag = self.local_soup.find("title")
-        if not title_tag or not title_tag.text.strip():
-            return self._result(item, Status.FAIL, "缺少 <title> 标签")
-
-        title = title_tag.text.strip()
-        length = len(title)
-        if length < 15:
-            return self._result(item, Status.WARN, f"标题过短（{length}字符），建议加入核心关键词",
-                                detail=f"标题: {title}")
-        if length > 80:
-            return self._result(item, Status.WARN, f"标题过长（{length}字符），搜索结果会被截断",
-                                detail=f"标题: {title[:60]}...")
-        return self._result(item, Status.PASS, f"标题合理（{length}字符）",
-                            detail=f"标题: {title}")
+        status, message, title, hint = judge_title_text(
+            title_tag.text if title_tag else "")
+        detail = f"标题: {title}" if title else None
+        if hint:
+            detail = (detail + "。" if detail else "") + hint
+        return self._result(item, status, message, detail=detail)
 
     # 13. Meta Description
     def _check_description(self) -> CheckResult:
         item = self._item(
-            "ai-02", "Meta Description-描述标签质量", Priority.P0,
+            "ai-02", "Meta Description-描述标签质量", Priority.P1,  # 2026-09-10 V6：定级降为重要档
             "页面描述是否存在、长度是否合理、是否有行动号召",
             "检查 meta name=description 的内容、长度和CTA",
             "唯一，自然语言概括，80-160字符，含行动号召",
@@ -65,23 +101,11 @@ class AIFriendlyChecker(BaseChecker):
             failed="缺少 description，或描述过短（<50字符）无信息量",
         )
         desc = self.page.meta("description")
-        if not desc:
-            return self._result(item, Status.FAIL, "缺少 meta description")
-
-        length = len(desc)
-        has_cta = any(kw in desc for kw in ["了解", "咨询", "联系", "免费", "立即",
-                                             "体验", "试用", "learn", "contact", "free"])
-        if length < 50:
-            return self._result(item, Status.WARN, f"描述偏短（{length}字符），建议补充",
-                                detail=f"描述: {desc}")
-        if length > 200:
-            return self._result(item, Status.WARN, f"描述过长（{length}字符）",
-                                detail=f"描述: {desc[:80]}...")
-        if has_cta:
-            return self._result(item, Status.PASS, f"描述含行动号召，长度合理（{length}字符）",
-                                detail=f"描述: {desc}")
-        return self._result(item, Status.WARN, f"描述长度合理（{length}字符）但缺少行动号召",
-                            detail=f"描述: {desc}")
+        status, message, hint = judge_description_text(desc)  # 2026-09-10 V6：删除行动号召词自创规则
+        detail = f"描述: {desc}" if desc else None
+        if hint:
+            detail = (detail + "。" if detail else "") + hint
+        return self._result(item, status, message, detail=detail)
 
     # 14. 标题层级
     def _check_heading_structure(self) -> CheckResult:
@@ -95,6 +119,7 @@ class AIFriendlyChecker(BaseChecker):
             excellent="仅1个H1（含核心关键词），H2按主题分块，H3在H2下细分，层级递进不跳级，每个标题都有实质内容",
             normal="有H1且数量≤2，有H2子标题，基本结构合理，但可能存在跳级或标题空泛",
             failed="缺少H1，或有多个H1（>3个），或完全没有H2/H3结构",
+            tier="bonus",  # 2026-09-10 V6定版：引擎明示H1非排名因素，转只提醒
         )
         h1 = self.local_soup.find_all("h1")
         h2 = self.local_soup.find_all("h2")
@@ -117,7 +142,7 @@ class AIFriendlyChecker(BaseChecker):
     # 15. 结构化数据
     def _check_structured_data(self) -> CheckResult:
         item = self._item(
-            "ai-04", "结构化数据", Priority.P1,
+            "ai-04", "首页结构化数据", Priority.P1,
             "是否有 Schema.org 结构化标记，是否含富结果类型",
             "检查 JSON-LD 和 Microdata，识别 Product/FAQ/Review 等富结果类型",
             "核心页面有 Organization/Product/Article/FAQPage 等标记",
@@ -126,13 +151,14 @@ class AIFriendlyChecker(BaseChecker):
             excellent="有 Organization + Product/Article + FAQPage + BreadcrumbList 等多种结构化数据，含 Review/Product 等高价值富结果类型，字段完整无报错",
             normal="有至少1种结构化数据（如 Organization 或 Article），但缺少 Product/Review/FAQ 等高价值富结果类型，或字段不完整",
             failed="未检测到任何 JSON-LD 或 Microdata 结构化数据标记",
+            tier="bonus",  # 2026-09-10 V6定版：转只提醒
         )
         json_ld = self.local_soup.find_all("script", attrs={"type": "application/ld+json"})
         microdata = self.local_soup.find_all(attrs={"itemscope": True})
 
         schemas = []
-        rich_types = ["Product", "Review", "FAQPage", "Article", "Organization",
-                      "LocalBusiness", "Event", "Recipe", "BreadcrumbList", "Service"]
+        rich_types = ["Product", "Review", "Article", "Organization",
+                      "LocalBusiness", "Event", "Recipe", "BreadcrumbList", "Service"]  # 2026-09-10 V6：FAQPage富媒体已停显，移出高价值清单
         found_rich = []
         for script in json_ld:
             try:
@@ -159,7 +185,7 @@ class AIFriendlyChecker(BaseChecker):
         if microdata:
             return self._result(item, Status.PASS,
                                 f"检测到 {len(microdata)} 处 Microdata 标记")
-        return self._result(item, Status.FAIL, "未检测到任何结构化数据标记")
+        return self._result(item, Status.WARN, "未检测到任何结构化数据标记")  # 2026-09-10 V6：删除"全无=不合格"
 
     # 16. AI 答案格式优化
     def _check_answer_format(self) -> CheckResult:
@@ -168,7 +194,7 @@ class AIFriendlyChecker(BaseChecker):
             "内容是否包含 AI 易摘取的结构（列表、表格、定义、FAQ）",
             "检查页面是否有 ol/ul/table/definition 等结构",
             "有明确的是什么/为什么/怎么做结构",
-            manual_check="浏览页面内容，看是否有编号列表、表格、定义列表、FAQ问答等 AI 容易直接摘取成答案的格式",
+            manual_check="最多查两个页面：首页 + 1 个内容详情页。内容页的挑选顺序是：① 站点地图「文章清单」声明的文章页（最高优先）；② 网址含 article/blog/news/post/文章/新闻 等关键词的抽样页；③ 案例类、产品/服务类页面；④ 兜底：正文最长的抽样内页",
             purpose="AI 生成答案时偏好结构化内容。列表、表格、定义、FAQ 这些格式能被 AI 直接摘取，比大段文字更容易成为搜索答案",
             excellent="同时包含列表+表格+定义/FAQ等多种结构，每个核心知识点都有清晰的结构化呈现，可直接被AI摘取",
             normal="有1-2种结构化元素（如只有列表），但缺少表格或FAQ等其他格式",
@@ -224,8 +250,10 @@ class AIFriendlyChecker(BaseChecker):
         # 面包屑是内页专属，从抽样内页中检查
         check_page = self._pick_content_page()
         if not check_page:
-            return self._result(item, Status.SKIP, "未抓取到内容页，无法检查面包屑导航",
-                                detail="需抓取内页才能检测面包屑")
+            return self._result(item, Status.SKIP,
+                                "未抓取到内容详情页（栏目/列表页不作为检查对象），无法检查面包屑导航，需人工复核",
+                                detail="面包屑需在文章/产品等详情页上检测；仅抓到栏目列表页时本项不判分",
+                                skip_kind="missing")
         target_soup = check_page.soup
         json_ld = target_soup.find_all("script", attrs={"type": "application/ld+json"})
         has_breadcrumb_schema = False
@@ -265,6 +293,7 @@ class AIFriendlyChecker(BaseChecker):
             excellent="有大量（≥10个）描述性内部链接，形成产品-案例-文章的互联网络，锚文本包含关键词",
             normal="有一定数量（5-10个）的内部链接，基本覆盖主要页面，但锚文本可能不够描述性",
             failed="站内链接极少（<5个），或几乎没有指向其他内容页面的链接",
+            tier="bonus",  # 2026-09-10 V6定版：转只提醒
         )
         from urllib.parse import urlparse
         base_domain = urlparse(self.page.final_url).netloc
@@ -287,7 +316,7 @@ class AIFriendlyChecker(BaseChecker):
     # 19. AI 平台收录
     def _check_ai_indexing(self) -> CheckResult:
         item = self._item(
-            "ai-08", "搜索引擎/AI 平台验证", Priority.P2,
+            "ai-08", "搜索引擎/AI 平台验证", Priority.P1,
             "是否有搜索引擎站长平台验证标签",
             "检查 google-site-verification、baidu-site-verification 等 meta",
             "已提交 sitemap，在主流平台可检索",
@@ -305,9 +334,11 @@ class AIFriendlyChecker(BaseChecker):
 
         if verifications:
             return self._result(item, Status.PASS,
-                                f"已验证平台: {', '.join(verifications)}")
+                                f"已验证平台: {', '.join(verifications)}",
+                                detail="验证标签≠已提交 sitemap；建议在百度资源平台完成验证并主动提交")
         return self._result(item, Status.WARN,
-                            "未检测到搜索引擎站长平台验证标签")
+                            "未检测到搜索引擎站长平台验证标签",
+                            detail="验证标签≠已提交 sitemap；建议在百度资源平台完成验证并主动提交")
 
     # AI-09 NLP/大模型语义友好度
     def _check_nlp_friendly(self) -> CheckResult:
@@ -328,8 +359,9 @@ class AIFriendlyChecker(BaseChecker):
         content_page = self._pick_content_page()
         if not content_page:
             return self._result(item, Status.SKIP,
-                                "NLP语义友好度为内容页检查项，首页不适用，且未抽样到内容页",
-                                detail="语义分析需在有主体正文的内容页上进行，首页是品牌导航页不适用")
+                                "未抓取到内容详情页（栏目/列表页不作为检查对象），无法检查NLP语义友好度，需人工复核",
+                                detail="语义分析需在有主体正文的文章/产品详情页上进行；仅抓到栏目列表页时本项不判分",
+                                skip_kind="missing")
         status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_nlp_friendly(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
         return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}",
@@ -354,8 +386,9 @@ class AIFriendlyChecker(BaseChecker):
         content_page = self._pick_content_page()
         if not content_page:
             return self._result(item, Status.SKIP,
-                                "内容分块为内容页检查项，首页不适用，且未抽样到内容页",
-                                detail="分块分析需在有标题和正文的内容页上进行，首页是品牌导航页不适用")
+                                "未抓取到内容详情页（栏目/列表页不作为检查对象），无法检查内容分块，需人工复核",
+                                detail="分块分析需在有标题和正文的文章/产品详情页上进行；仅抓到栏目列表页时本项不判分",
+                                skip_kind="missing")
         status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_content_chunking(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
         return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}",

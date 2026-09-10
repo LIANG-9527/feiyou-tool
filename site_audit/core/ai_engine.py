@@ -456,6 +456,44 @@ H1/H2标题: {content['h1_list'] + content['h2_list']}
         detail = summary + (f"（意图类型: {intent}）" if intent else "") + ("。问题: " + "；".join(issues) if issues else "")
         return status, summary, detail
 
+    def check_pair_duplicate(self, page_a: PageData, page_b: PageData) -> tuple[Status, str, str]:
+        """跨页比对终审（C 方案核心）：问 AI 两页是不是'同一份内容换标题/换皮'。
+
+        机器粗筛只标"疑似"；此方法对疑似对做终审，判定"真重复 / 不算重复 / 存疑"。
+        结果只用于报告提示，绝不静默删页。
+        """
+        ca = _extract_content(page_a)
+        cb = _extract_content(page_b)
+        if ca.get("word_count", 0) < 50 or cb.get("word_count", 0) < 50:
+            return Status.SKIP, "页面内容过少，无法比对", "两页中至少一页正文不足50字"
+
+        system = ("你是一名内容审核专家。判断两页内容是否是'同一份内容换标题/换皮'（正文核心信息一致，"
+                  "只是标题/头尾/排版换了一下）。只输出JSON："
+                  '{"verdict":"duplicate|not_duplicate|uncertain","confidence":"high|medium|low","reason":"一句话理由"}')
+        user = f"""对比以下两页正文的核心内容是否实质相同：
+
+【页 A】标题: {ca['title']}
+正文片段: {ca['body_text'][:1500]}
+
+【页 B】标题: {cb['title']}
+正文片段: {cb['body_text'][:1500]}
+
+判定：
+- duplicate: 两页正文核心信息一致，明显是同一份内容换标题/换皮（重复）
+- not_duplicate: 两页内容主题相关但信息不同，是正常的不同内容页
+- uncertain: 信息部分重叠但无法确定，或正文太少/模糊（存疑）
+
+只输出JSON。"""
+        result = self._call_llm(system, user)
+        if not result:
+            return Status.SKIP, "AI比对超时，暂存疑", "LLM调用失败"
+        verdict = result.get("verdict", "uncertain")
+        if verdict == "duplicate":
+            return Status.WARN, f"AI判定两页为重复内容（{result.get('confidence','')}置信度）", result.get("reason", "")
+        if verdict == "not_duplicate":
+            return Status.PASS, "AI判定两页为不同内容", result.get("reason", "")
+        return Status.SKIP, "AI判定存疑，需人工复核", result.get("reason", "")
+
     def check_originality(self, page: PageData) -> tuple[Status, str, str]:
         if not self._page_budget_ok(page):
             return (Status.SKIP, "已达AI深度检查页数预算上限（8页），本页未做深度分析（规则类检查已覆盖）", "")

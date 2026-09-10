@@ -4,6 +4,74 @@ from site_audit.report.html_report import ENGINE_VERSION
 from site_audit.core.models import AuditReport, Status
 
 
+def report_from_dict(data: dict) -> AuditReport:
+    """从 save_json_report 保存的字典重建报告对象。
+
+    用于优先级配置变更后重算历史报告的计分与排序并重新渲染；
+    说明类字段 description/check_method/standard 未落盘，重建后为空，
+    报告侧本就有"缺省回退 purpose"的展示逻辑，不影响阅读。
+    """
+    from site_audit.core.models import Category, CategoryScore, CheckResult, Priority
+
+    results = [
+        CheckResult(
+            item_id=r.get("id", ""),
+            item_name=r.get("name", ""),
+            category=Category(r.get("category", "技术可抓取性")),
+            priority=Priority(r.get("priority", "P1")),
+            status=Status(r.get("status", "skip")),
+            message=r.get("message", ""),
+            detail=r.get("detail"),
+            score=r.get("score", 0.0),
+            manual_check=r.get("manual_check", ""),
+            purpose=r.get("purpose", ""),
+            impact=r.get("impact", ""),
+            scope=r.get("scope", ""),
+            applicable_pages=r.get("applicable_pages", ""),
+            suggestion=r.get("suggestion", ""),
+            excellent=r.get("excellent", ""),
+            normal=r.get("normal", ""),
+            failed=r.get("failed", ""),
+            tier=r.get("tier", "core"),
+            skip_kind=r.get("skip_kind", "na"),
+            pages=r.get("pages") or [],
+            priority_mark=r.get("priority_mark", ""),
+            priority_reason=r.get("priority_reason", ""),
+            root_cause=r.get("root_cause", ""),
+        )
+        for r in data.get("results", [])
+    ]
+    categories = [
+        CategoryScore(
+            category=Category(c.get("name", "技术可抓取性")),
+            total=c.get("total", 0),
+            passed=c.get("pass", 0),
+            warned=c.get("warn", 0),
+            failed=c.get("fail", 0),
+            skipped=c.get("skip", 0),
+            score=c.get("score", 0.0),
+            weight=c.get("weight", 0.0),
+        )
+        for c in data.get("categories", [])
+    ]
+    return AuditReport(
+        url=data.get("url", ""),
+        final_url=data.get("final_url", ""),
+        timestamp=data.get("timestamp", ""),
+        total_score=data.get("total_score", 0.0),
+        grade=data.get("grade", ""),
+        categories=categories,
+        results=results,
+        sampled_pages=data.get("sampled_pages", []) or [],
+        prompt_version=data.get("prompt_version", ""),
+        token_usage=data.get("token_usage", {}) or {},
+        site_brand=data.get("site_brand", ""),
+        crawl_stats=data.get("crawl_stats", {}) or {},
+        stories=data.get("stories", []) or [],
+        light_scan_meta=data.get("light_scan_meta", []) or [],
+    )
+
+
 def report_to_dict(report: AuditReport) -> dict:
     """将报告转为字典"""
     return {

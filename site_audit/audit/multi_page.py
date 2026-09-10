@@ -13,6 +13,7 @@ from typing import List
 from urllib.parse import urlparse
 
 from .checker import BaseChecker
+from .ai_friendly import judge_title_text, judge_description_text
 from site_audit.core.models import CheckResult, Status, Priority, Category
 from site_audit.core.crawler import SiteCrawler
 
@@ -51,22 +52,35 @@ class MultiPageChecker(BaseChecker):
         ]
 
     # 通用聚合：problems=[(路径, 说明)]，按问题页占比定状态
+    # 2026-09-10 V6 全局规则：有效样本 <6 页时占比再高也只判"不足"（最小样本保护）
     @staticmethod
-    def _verdict(problem_pages: int, total: int, fail_ratio: float = 0.5):
+    def _verdict(problem_pages: int, total: int, fail_ratio: float = 0.5,
+                 min_sample: int = 6):
         if total == 0:
             return Status.SKIP
         if problem_pages == 0:
             return Status.PASS
+        if total < min_sample:
+            return Status.WARN
         return Status.FAIL if problem_pages / total >= fail_ratio else Status.WARN
 
     def _inner_pages(self):
         """只扫抽样内页（首页由原有各项负责，避免重复）。"""
         return self.extra_pages or []
 
+    def _detail_pages(self):
+        """抽样内页中的详情页：网址分类命中，或站点地图「文章清单」声明的文章页
+        （ZSTEK教训：根路径博客_slug 如 /10-tips-for-adventure-travel/ 是真文章，
+        但网址分类器认不出，导致详情页检查项漏检）。"""
+        arts = {u.rstrip("/") for u in (self.sitemap_article_urls or set())}
+        return [p for p in self._inner_pages()
+                if SiteCrawler._is_detail(p.final_url)
+                or p.final_url.rstrip("/") in arts]
+
     # mp-01 内页标题与描述
     def _check_inner_title_desc(self) -> CheckResult:
         item = self._item(
-            "mp-01", "内页标题与描述规范", Priority.P0,
+            "mp-01", "内页标题与描述规范检查", Priority.P0,
             "抽样内页是否都有独立、长度合理的标题和描述",
             "逐页检查 <title> 与 meta description 是否存在、长度是否合理、是否套用首页",
             "每个内页都有独立标题(15-80字)和描述(50-200字)",
@@ -87,16 +101,15 @@ class MultiPageChecker(BaseChecker):
             t = p.soup.title.get_text(strip=True) if p.soup.title else ""
             d = p.meta("description") or ""
             why = []
-            if not t:
-                why.append("缺标题")
-            elif len(t) < 15:
-                why.append(f"标题过短({len(t)})")
-            elif len(t) > 80:
-                why.append(f"标题过长({len(t)})")
-            if not d:
-                why.append("缺描述")
-            elif len(d) < 50:
-                why.append(f"描述过短({len(d)})")
+            # 2026-09-10 V6：与首页同一套双轴函数（含堆砌形状判不合格）
+            t_status, t_msg, _, _ = judge_title_text(t)
+            if t_status == Status.FAIL:
+                why.append("标题堆砌/缺失")
+            elif t_status == Status.WARN:
+                why.append("标题" + t_msg)
+            d_status, d_msg, _ = judge_description_text(d)
+            if d_status == Status.WARN:
+                why.append("描述" + d_msg.replace("描述", "", 1) if d_msg.startswith("描述") else "描述" + d_msg)
             if why:
                 problems.append(f"{_short(p.final_url)}：{'、'.join(why)}")
         status = self._verdict(len(problems), len(pages))
@@ -122,6 +135,7 @@ class MultiPageChecker(BaseChecker):
             failed="多个内页缺 H1 或 H1 泛滥（如一篇文章多个 H1）",
             scope="全站", applicable_pages="全站",
             suggestion="每页只保留 1 个 H1，把正文里误用的 H1 降为 H2/H3；详情页按内容分节加 H2/H3 小标题",
+            tier="bonus",  # 2026-09-10 V6定版：同首页H1项，转只提醒
         )
         pages = self._inner_pages()
         if not pages:
@@ -160,8 +174,9 @@ class MultiPageChecker(BaseChecker):
             failed="所有详情页都没有结构化标记",
             scope="全站", applicable_pages="全站",
             suggestion="文章页加 Article、产品页加 Product、案例页加 Article/Service 结构化标记",
+            tier="bonus",  # 2026-09-10 V6定版：随结构化数据主项，转只提醒
         )
-        detail_pages = [p for p in self._inner_pages() if SiteCrawler._is_detail(p.final_url)]
+        detail_pages = self._detail_pages()
         if not detail_pages:
             return self._result(item, Status.SKIP, "未抽样到文章/产品/案例详情页")
         missing = []
@@ -223,6 +238,8 @@ class MultiPageChecker(BaseChecker):
         pages = self._inner_pages()
         if not pages:
             return self._result(item, Status.SKIP, "未抽样到内页", skip_kind="missing")
+        _tpl = re.compile(r"\{\{|\{\$|\{%|eyou:|volist|think\.")
+        _wordless = {"图片", "图像", "image", "img", "photo", "pic", "照片"}
         bad = []
         checked = 0
         checked_pages = []
@@ -232,18 +249,28 @@ class MultiPageChecker(BaseChecker):
                 continue
             checked += 1
             checked_pages.append(p.final_url)
-            with_alt = [i for i in imgs if (i.get("alt") or "").strip()]
-            ratio = len(with_alt) / len(imgs)
-            if ratio < 0.5:
-                bad.append(f"{_short(p.final_url)}：覆盖率{int(ratio * 100)}%（{len(with_alt)}/{len(imgs)}）")
+            # 三态：留空剔除分母；错=无属性/占位词/模板残留
+            scored = [i for i in imgs
+                      if not (i.get("alt") is not None and not str(i.get("alt")).strip())]
+            blank = len(imgs) - len(scored)
+            errs = [i for i in scored
+                    if i.get("alt") is None
+                    or len((i.get("alt") or "").strip()) <= 2
+                    or (i.get("alt") or "").strip().lower() in _wordless
+                    or _tpl.search((i.get("alt") or ""))]
+            valid = len(scored) - len(errs)
+            ratio = valid / len(scored) if scored else 1.0
+            if ratio < 0.8:
+                grade = "低于50%" if ratio < 0.5 else "50~80%"
+                bad.append(f"{_short(p.final_url)}：有效说明{int(ratio * 100)}%（{grade}，{blank}张装饰图留空已剔除）")
         if checked == 0:
-            return self._result(item, Status.SKIP, "抽样内页均无图片")
+            return self._result(item, Status.SKIP, "抽样内页均无图片（或全部留空）")
         status = self._verdict(len(bad), checked)
         if not bad:
-            return self._result(item, Status.PASS, f"{checked} 个含图内页图片说明覆盖率均达标",
+            return self._result(item, Status.PASS, f"{checked} 个含图内页图片说明覆盖率均达标（≥80%）",
                                 pages=checked_pages)
         return self._result(item, status,
-                            f"{len(bad)}/{checked} 个内页图片说明覆盖率低于50%",
+                            f"{len(bad)}/{checked} 个内页图片说明覆盖率低于80%",
                             detail="；".join(bad[:8]) + ("…" if len(bad) > 8 else ""),
                             pages=[x.split("：")[0] for x in bad])
 
@@ -272,13 +299,13 @@ class MultiPageChecker(BaseChecker):
         section_types = SiteCrawler.homepage_section_types(self.page)
         types = url_types | section_types
         section_only = section_types - url_types
-        # 强必备（全行业，缺了计入状态）
+        # 强必备（全行业，缺了计入状态）；隐私政策转只提醒（V6：单页站/早期企业缺页正常，最高判不足）
         required = [("about", "关于我们"), ("offer", "产品/服务"),
-                    ("faq", "FAQ常见问题"), ("privacy", "隐私政策")]
+                    ("faq", "FAQ常见问题")]
         missing_strong = [name for key, name in required if key not in types]
         # 提示性（行业差异/条件型：站内本应有这类业务才要求，只在 detail 提示，不决定状态、不判丢分）
-        optional = [("case", "客户案例"), ("news", "资讯/文章"), ("contact", "独立联系页"),
-                    ("help", "帮助文档"), ("honor", "资质荣誉")]
+        optional = [("privacy", "隐私政策"), ("case", "客户案例"), ("news", "资讯/文章"),
+                    ("contact", "独立联系页"), ("help", "帮助文档"), ("honor", "资质荣誉")]
         missing_optional = [name for key, name in optional if key not in types]
 
         if not all_urls:
@@ -297,10 +324,10 @@ class MultiPageChecker(BaseChecker):
         detail.append(f"本次可达范围（首页+两层内链+站点地图）共识别到页面类型：{('、'.join(sorted(types))) or '无'}")
 
         if not missing_strong:
-            return self._result(item, Status.PASS, "关于、产品/服务、FAQ、隐私政策均在可达范围内",
+            return self._result(item, Status.PASS, "关于、产品/服务、FAQ 均在可达范围内（隐私政策为提醒项）",
                                 detail="；".join(detail[1:]), pages=all_urls)
         n = len(missing_strong)
-        status = Status.FAIL if n >= 3 else Status.WARN
+        status = Status.WARN  # 2026-09-10 V6：缺必备页最高判"不足"，不再不合格
         return self._result(item, status, f"缺少 {n} 类必备页：{'、'.join(missing_strong)}",
                             detail="；".join(detail), pages=all_urls)
 
@@ -309,7 +336,7 @@ class MultiPageChecker(BaseChecker):
         item = self._item(
             "mp-07", "页面与首页正文雷同", Priority.P1,
             "关于我们等内页是否只是首页内容的复制副本、缺少独立信息增量",
-            "逐页计算内页正文与首页正文的字符重合度，超过 85% 判为高度雷同",
+            "机器粗筛：去模板(导航/页脚/侧栏)后只比正文主体，近重复即标'疑似'；最终算不算重复由 AI 跨页比对终审，机器只标注、不删页",
             "内页与首页正文重合度 <70%，关于/介绍类页面有独立信息",
             purpose="关于、介绍这类页面本该讲清主体、沿革、团队等增量信息；若只是把首页换个链接再放一遍，属于重复内容，搜索引擎不重复收录、AI 也得不到可引用的新事实",
             manual_check="并排打开首页与关于我们页，对比正文是否大段相同",
@@ -321,24 +348,93 @@ class MultiPageChecker(BaseChecker):
         )
         item.category = Category.CONTENT
         pages = self._inner_pages()
-        home_text = self.page.get_text()
-        if not pages or len(home_text) < 200:
-            return self._result(item, Status.SKIP, "缺少可对比的内页或首页正文", skip_kind="missing")
-        clones = []
-        for p in pages:
-            txt = p.get_text()
-            if len(txt) < 200:
+        if not pages:
+            return self._result(item, Status.SKIP, "未抽样到内页", skip_kind="missing")
+
+        # 机器粗筛：去模板后只比正文主体（复用 _extract_content 的剥离逻辑），不拿整页/结构比
+        def body_text(p):
+            from site_audit.core.ai_engine import _extract_content
+            try:
+                d = _extract_content(p)
+                return d.get("body_text") or ""
+            except Exception:
+                for t in p.soup.find_all(["script","style","nav","footer","header","aside"]):
+                    t.decompose()
+                return p.soup.get_text(separator=" ", strip=True)
+
+        home_body = body_text(self.page)
+        if len(home_body) < 200:
+            return self._result(item, Status.SKIP, "首页正文不足，无法对比", skip_kind="missing")
+
+        clones = []   # 机器粗筛命中"疑似"，元素为 (相似度, 路径A, 路径B)
+        suspicious = []  # 低置信（正文太短/疑似列表页），绿色地带交给 AI
+        # 参与比对的对象：首页 + 所有内页（覆盖"内页 vs 首页"和"内页 vs 内页"两页换皮")
+        compare = [(self.page, "首页")] + [(p, _short(p.final_url)) for p in pages]
+        valid = []
+        for p, label in compare:
+            txt = body_text(p)
+            if len(txt) < 300:
+                if label != "首页":
+                    suspicious.append(label)
                 continue
-            sim = _text_jaccard(home_text, txt)
-            if sim > 0.85:
-                clones.append((sim, _short(p.final_url)))
+            valid.append((p, label, txt))
+
+        # 两两互比（首页 + 内页），命中即记"疑似对"
+        seen_pairs = set()
+        for i in range(len(valid)):
+            for j in range(i + 1, len(valid)):
+                _, la, ta = valid[i]
+                _, lb, tb = valid[j]
+                k = tuple(sorted([la, lb]))
+                if k in seen_pairs:
+                    continue
+                sim = _text_jaccard(ta, tb)
+                if sim > 0.85:
+                    seen_pairs.add(k)
+                    clones.append((sim, la, lb))
+
+        # 机器只标"疑似"，写在报告里给人看，绝不静默删页；最终算不算重复由 AI 比对说了算
+        note = ("机器粗筛只作'疑似'提示，不会把页面从检查中删掉；"
+                "最终是否判为重复内容，由 AI 跨页比对终审。")
         if not clones:
-            return self._result(item, Status.PASS, f"{len(pages)} 个内页均未与首页正文高度雷同",
-                                pages=[p.final_url for p in pages])
+            if suspicious:
+                return self._result(item, Status.PASS,
+                                    "首页与内页正文均未发现高度雷同",
+                                    detail="部分页面正文过短或疑似列表页，已跳过比对：" + "、".join(suspicious[:5])
+                                          + "。" + note,
+                                    pages=[p.final_url for p in pages])
+            return self._result(item, Status.PASS, "首页与内页正文均未发现高度雷同",
+                                detail=note, pages=[p.final_url for p in pages])
         clones.sort(reverse=True)
-        status = Status.FAIL if len(clones) >= 3 else Status.WARN
-        detail = "；".join(f"{path} 重合{int(s * 100)}%" for s, path in clones[:8])
+
+        # 机器粗筛只标"疑似"；若配置了 AI 引擎，对候选对逐对做终审判定（不静默删页）
+        final_pairs = []   # [(pathA, pathB, verdict, reason)]
+        if getattr(self, "ai_engine", None) is not None:
+            for sim, la, lb in clones:
+                pa = next((p for p, lbl, _ in valid if lbl == la), None)
+                pb = next((p for p, lbl, _ in valid if lbl == lb), None)
+                if pa is None or pb is None:
+                    continue
+                verdict, summary, reason = self.ai_engine.check_pair_duplicate(pa, pb)
+                final_pairs.append((la, lb, verdict.value if hasattr(verdict, 'value') else str(verdict), reason))
+            if final_pairs:
+                dup_n = sum(1 for _, _, v, _ in final_pairs if v == "warn")
+                detail = "；".join(f"{la} ↔ {lb}：AI终审『{v}』{('——'+r) if r else ''}"
+                                   for la, lb, v, r in final_pairs[:6])
+                note2 = ""
+                if dup_n:
+                    return self._result(item, Status.WARN,
+                                        f"{dup_n} 对页面经 AI 终审确认为重复内容",
+                                        detail=detail,
+                                        pages=sorted({x for la, lb, _, _ in final_pairs for x in (la, lb)}))
+                return self._result(item, Status.PASS,
+                                    "首页与内页经 AI 终审均为不同内容",
+                                    detail=detail,
+                                    pages=[p.final_url for p in pages])
+
+        status = Status.WARN  # 2026-09-10 V6：无AI时的机械判定统一降一档（纯字符相似度误判风险高）
+        detail = "；".join(f"{la} ↔ {lb} 重合{int(s * 100)}%（疑似）" for s, la, lb in clones[:8])
         return self._result(item, status,
-                            f"{len(clones)} 个内页疑似首页内容副本",
-                            detail=detail + "（关于/介绍类页面应提供独立信息，不应整页复制首页）",
-                            pages=[path for _, path in clones])
+                            f"{len(clones)} 对页面疑似重复内容（机器粗筛，待 AI 终审）",
+                            detail=detail + "。" + note,
+                            pages=sorted({x for s, la, lb in clones for x in (la, lb)}))

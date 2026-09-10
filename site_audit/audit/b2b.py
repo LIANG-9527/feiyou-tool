@@ -48,6 +48,7 @@ class B2BChecker(BaseChecker):
             excellent="有清晰的产品矩阵页，每个产品有独立详情页（含功能/参数/场景/价格或询价/FAQ），URL 结构规范",
             normal="有产品/解决方案入口，但详情页内容较简单（缺少参数或场景），或部分产品没有独立页",
             failed="没有产品/解决方案页面入口，或所有产品信息都挤在首页没有独立详情页",
+            tier="bonus",  # 2026-09-10 V6定版：转化引导项，转只提醒
         )
         from urllib.parse import urlparse
         base_domain = urlparse(self.page.final_url).netloc
@@ -81,6 +82,7 @@ class B2BChecker(BaseChecker):
             excellent="有 ≥5 个详细客户案例（独立页面），每个案例含客户背景/挑战/方案/成果数据（量化），有客户 Logo 和证言",
             normal="有案例入口和案例列表，但案例详情较简单（缺少成果数据或挑战分析），或案例数量 <5",
             failed="没有客户案例页面，或只有客户 Logo 没有案例详情",
+            tier="bonus",  # 2026-09-10 V6定版：发展阶段问题非故障，转只提醒
         )
         case_keywords = ["案例", "客户", "成功故事", "case", "customer", "story", "客户案例"]
         case_links = []
@@ -98,7 +100,7 @@ class B2BChecker(BaseChecker):
                                 detail=f"包含: {', '.join(list(set(case_links))[:3])}")
         if customer_logos:
             return self._result(item, Status.WARN, "有客户 Logo 但缺少案例详情页入口")
-        return self._result(item, Status.FAIL, "未检测到客户案例或客户展示")
+        return self._result(item, Status.WARN, "未检测到客户案例或客户展示")  # 2026-09-10 V6：标红降为不足
 
     # 39. 行业解决方案覆盖
     def _check_solution_pages(self) -> CheckResult:
@@ -112,6 +114,7 @@ class B2BChecker(BaseChecker):
             excellent="覆盖 ≥5 个目标行业，每个行业有独立页面，针对行业痛点定制内容（含场景/方案/案例/数据）",
             normal="覆盖 2-3 个行业，有行业页面但内容较通用，未针对行业痛点深度定制",
             failed="没有按行业/场景拆分，所有内容都在通用页面，或行业覆盖 <2 个",
+            tier="bonus",  # 2026-09-10 V6定版：垂直单行业站天然为0，转只提醒
         )
         industry_keywords = ["行业", "场景", "零售", "金融", "教育", "医疗", "制造",
                             "电商", "政务", "企业", "industry", "retail", "finance"]
@@ -250,6 +253,7 @@ class B2BChecker(BaseChecker):
             excellent="≥2 种有效通道（如电话+微信、表单+在线客服），页眉页脚固定可见",
             normal="只有 1 种联系通道，或位置隐蔽",
             failed="全站找不到任何有效联系方式，获客链路断开",
+            tier="bonus",  # 2026-09-10 V6定版：只用留资表单的合规站不该被标红，转只提醒（最高"不足"）
             scope="全站", applicable_pages="全站",
             suggestion="在页脚固定电话/微信/二维码，关键页面放咨询表单或在线客服，且确保链接真实可点",
         )
@@ -278,8 +282,8 @@ class B2BChecker(BaseChecker):
         if k == 1:
             return self._result(item, Status.WARN, f"仅检测到 1 种联系通道（{'、'.join(channels)}），建议再补一种",
                                 detail="通道单一会漏掉不习惯该方式的客户，也缺少备用路径", pages=[p.final_url for p in self.all_pages])
-        return self._result(item, Status.FAIL, "全站未识别到有效联系方式（电话/微信/邮箱/表单/在线客服均无）",
-                            pages=[p.final_url for p in self.all_pages])
+        return self._result(item, Status.WARN, "全站未识别到有效联系方式（电话/微信/邮箱/表单/在线客服均无）",
+                            pages=[p.final_url for p in self.all_pages])  # 2026-09-10 V6：标红降为不足
 
     # b2b-09 行动号召 CTA（全行业：下一步按钮是否清晰可用）
     def _check_cta(self) -> CheckResult:
@@ -295,6 +299,7 @@ class B2BChecker(BaseChecker):
             failed="全站没有可点的行动号召，或按钮都是空链接",
             scope="全站", applicable_pages="全站",
             suggestion="在首屏、产品/服务、案例页各放一个明确按钮（如免费咨询/预约到店/立即购买），链接指向真实表单或联系方式",
+            tier="bonus",  # 2026-09-10 V6定版：引导项，转只提醒
         )
         cta_re = re.compile(
             r"咨询|预约|报名|领取|试用|报价|下单|购买|抢购|到店|联系(我们|客服)|拨打|获取.{0,4}(方案|报价)|"
@@ -333,6 +338,7 @@ class B2BChecker(BaseChecker):
             excellent="价格/购买方式/流程/售后/覆盖五类信息齐全且易找",
             normal="讲清 2-3 类，仍有客户高频疑问没回答",
             failed="决策信息严重缺失（0-1 类），客户无从下决心",
+            tier="bonus",  # 2026-09-10 V6定版：报价制企业不公开价格是销售策略，转只提醒
             scope="全站", applicable_pages="全站",
             suggestion="补齐价格或获取报价入口、购买/合作流程、使用或服务流程、售后承诺、服务范围/配送/门店等信息",
         )
@@ -359,4 +365,4 @@ class B2BChecker(BaseChecker):
                                 detail=("可补充：" + "、".join(lack)) if lack else None, pages=[p.final_url for p in self.all_pages])
         if len(hit) >= 2:
             return self._result(item, Status.WARN, f"决策信息不全（{len(hit)}/5），缺：{'、'.join(lack)}", pages=[p.final_url for p in self.all_pages])
-        return self._result(item, Status.FAIL, f"决策信息严重缺失（仅 {len(hit)}/5），缺：{'、'.join(lack)}", pages=[p.final_url for p in self.all_pages])
+        return self._result(item, Status.WARN, f"决策信息缺失（仅 {len(hit)}/5），缺：{'、'.join(lack)}", pages=[p.final_url for p in self.all_pages])  # 2026-09-10 V6：转只提醒

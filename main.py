@@ -552,6 +552,77 @@ async def get_audit_result(filename: str):
     return FileResponse(file_path)
 
 
+def _apply_priority_config_to_reports() -> int:
+    """优先级配置变更后重算全部历史报告：按新优先级重算计分/排序并重写 HTML+JSON。
+
+    历史报告的 JSON 里存有每项原始结果（状态/结论/证据），重建报告对象后只需
+    换优先级、重算维度分与总分、重跑优先级标记与根因聚合，再重新渲染，无需重爬。
+    """
+    from site_audit.core import aggregator, priority_config
+    from site_audit.core.models import Priority
+    from site_audit.core.scorer import (calculate_category_scores,
+                                        calculate_total_score, grade_from_score)
+    from site_audit.report.html_report import save_html_report
+    from site_audit.report.json_report import report_from_dict, save_json_report
+
+    audit_dir = BASE_DIR / "output" / "audit"
+    overrides = priority_config.load_overrides()
+    defaults = {it["id"]: it["default_priority"] for it in priority_config.item_catalog()}
+    updated = 0
+    for json_path in sorted(audit_dir.glob("*.json")):
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            report = report_from_dict(data)
+            for r in report.results:
+                # 先归位目录默认值再套覆盖——历史 JSON 里的优先级可能已是上次覆盖后的值
+                default = defaults.get(r.item_id)
+                if default:
+                    r.priority = Priority(default)
+                if r.item_id in overrides:
+                    r.priority = Priority(overrides[r.item_id])
+            report.categories = calculate_category_scores(report.results)
+            report.total_score = calculate_total_score(report.categories)
+            report.grade = grade_from_score(report.total_score)
+            aggregator.annotate(report.results)
+            report.stories = aggregator.aggregate_stories(report.results)
+            html_path = json_path.with_suffix(".html")
+            if html_path.exists():
+                save_html_report(report, str(html_path))
+            save_json_report(report, str(json_path))
+            updated += 1
+        except Exception as e:
+            logger.warning("按新优先级重渲染历史报告失败 %s: %s", json_path.name, e)
+    return updated
+
+
+class PriorityConfigSave(PydanticModel):
+    overrides: dict = Field(default_factory=dict,
+                            description="检查项编号 -> P0/P1/P2；空对象表示全部恢复默认")
+
+
+@app.get("/api/audit/priority-config")
+async def get_priority_config():
+    """检查项优先级配置：全量目录 + 当前覆盖。"""
+    from site_audit.core import priority_config
+    overrides = priority_config.load_overrides()
+    items = priority_config.item_catalog()
+    for it in items:
+        it["priority"] = overrides.get(it["id"], it["default_priority"])
+    return JSONResponse({"ok": True, "items": items, "overrides": overrides})
+
+
+@app.post("/api/audit/priority-config")
+async def save_priority_config(body: PriorityConfigSave):
+    """保存优先级覆盖并立即重算/重排全部历史报告。"""
+    from site_audit.core import priority_config
+    valid_ids = {it["id"] for it in priority_config.item_catalog()}
+    clean = {k: v for k, v in (body.overrides or {}).items()
+             if k in valid_ids and v in ("P0", "P1", "P2")}
+    saved = priority_config.save_overrides(clean)
+    updated = await asyncio.to_thread(_apply_priority_config_to_reports)
+    return JSONResponse({"ok": True, "saved": saved, "reports_updated": updated})
+
+
 def _shorten_brand_name(full_name: str) -> str:
     """从公司全称中提取品牌简称"""
     import re
@@ -2721,6 +2792,40 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
 .audit-form button{padding:12px 28px;border:none;border-radius:10px;background:#0071e3;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:opacity .2s;white-space:nowrap}
 .audit-form button:hover{opacity:.9}
 .audit-form button:disabled{opacity:.5;cursor:not-allowed}
+.audit-form button.btn-ghost{background:#fff;color:#0071e3;border:1.5px solid #0071e3}
+.audit-form button.btn-ghost:hover{opacity:1;background:#f0f7ff}
+/* 优先级配置弹窗 */
+.prio-modal{display:none;position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,.5)}
+.prio-modal.show{display:flex;align-items:flex-start;justify-content:center}
+.prio-box{background:#fff;border-radius:16px;width:720px;max-width:calc(100vw - 40px);max-height:84vh;margin-top:6vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden}
+.prio-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #e5e5ea}
+.prio-head h3{font-size:16px;margin:0}
+.prio-head .sub{font-size:12px;color:#86868b;margin-top:2px}
+.prio-body{overflow:auto;padding:4px 20px 16px;flex:1}
+.prio-cat{font-size:13px;font-weight:700;margin:14px 0 6px;color:#1d1d1f}
+.prio-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f2f2f5;font-size:13px}
+.prio-row .nm{flex:0 0 34%;min-width:0;font-weight:500}
+.prio-row .mod{font-size:10px;font-weight:600;color:#b45309;background:#fef3c7;border-radius:6px;padding:1px 6px;display:none;flex-shrink:0}
+.prio-row.modified .mod{display:inline}
+.prio-row .purpose{flex:1;min-width:0;font-size:11px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prio-row .aud{font-size:10px;font-weight:600;padding:1px 6px;border-radius:6px;flex-shrink:0}
+.aud-both{color:#0071e3;background:#e8f2ff}
+.aud-seo{color:#16a34a;background:#ecfaf0}
+.aud-geo{color:#5C3CF1;background:#efeafe}
+.aud-diag{color:#6b7280;background:#f0f0f3}
+.prio-row select{padding:4px 8px;border:1.5px solid #e0e0e5;border-radius:8px;font-size:13px;background:#fff;cursor:pointer;flex-shrink:0}
+.prio-row.modified select{border-color:#0071e3}
+.prio-search{padding:10px 20px 0}
+.prio-search input{width:100%;padding:9px 14px;border:1.5px solid #e0e0e5;border-radius:10px;font-size:13px;outline:none;font-family:inherit}
+.prio-search input:focus{border-color:#0071e3}
+.prio-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid #e5e5ea}
+.prio-foot .tip{font-size:11px;color:#86868b}
+.prio-foot .ops{display:flex;gap:8px;flex-shrink:0}
+.prio-foot button{padding:8px 18px;border:none;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer}
+.prio-foot button:disabled{opacity:.5;cursor:not-allowed}
+.btn-prio-cancel{background:#f5f5f7;color:#1d1d1f}
+.btn-prio-reset{background:#fff;color:#c0392b;border:1px solid #f5c6cb}
+.btn-prio-save{background:#0071e3;color:#fff}
 .hint{font-size:12px;color:#c0c0c5;margin-top:8px}
 .msg{padding:12px 16px;border-radius:10px;font-size:14px;margin-bottom:16px;display:none}
 .msg.err{display:block;background:#fdf0ed;color:#c0392b;border:1px solid #f5c6cb}
@@ -2782,6 +2887,7 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
     <input id="urlInput" type="text" placeholder="例如 https://www.example.com 或直接输入域名"
            onkeydown="if(event.key==='Enter')startAudit()">
     <button id="auditBtn" onclick="startAudit()">开始诊断</button>
+    <button type="button" class="btn-ghost" onclick="openPrioModal()">优先级配置</button>
   </div>
   <div class="hint">需抓取首页、抽样内页及 robots/sitemap/llms.txt 等配置并检查站内链接，约需 1～2 分钟，请耐心等待</div>
 
@@ -2797,6 +2903,30 @@ header p{color:#86868b;font-size:14px;margin-bottom:20px}
     <h3>历史报告</h3>
     <div class="report-list" id="reportList">
       <div style="text-align:center;color:#86868b;font-size:13px;padding:20px">加载中…</div>
+    </div>
+  </div>
+</div>
+
+<div class="prio-modal" id="prioModal" onclick="if(event.target===this)closePrioModal()">
+  <div class="prio-box">
+    <div class="prio-head">
+      <div>
+        <h3>检查项优先级配置</h3>
+        <div class="sub">P0=致命 · P1=重要 · P2=轻微；计票权重 2 / 1 / 0.5。保存后重算全部历史报告分数并按新优先级排序</div>
+      </div>
+      <button onclick="closePrioModal()" style="border:none;background:#f5f5f7;width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px;color:#6b7280">×</button>
+    </div>
+    <div class="prio-search">
+      <input id="prioSearch" type="text" placeholder="搜索检查项名称或作用…" oninput="filterPrio()">
+    </div>
+    <div class="prio-body" id="prioBody"></div>
+    <div class="prio-foot">
+      <span class="tip" id="prioCount">未调整任何项</span>
+      <div class="ops">
+        <button type="button" class="btn-prio-reset" onclick="resetPrio()">全部恢复默认</button>
+        <button type="button" class="btn-prio-cancel" onclick="closePrioModal()">取消</button>
+        <button type="button" class="btn-prio-save" id="prioSaveBtn" onclick="savePrio()">保存并应用</button>
+      </div>
     </div>
   </div>
 </div>
@@ -2964,6 +3094,123 @@ function handleDelete(btn){
         loadReportList(null);
       }
     });
+}
+
+// ── 检查项优先级配置弹窗 ──────────────────────────
+const PRIO_CATS=['技术可抓取性','AI友好度专项','内容质量与结构化','权威与信任信号','商业转化与决策内容'];
+const PRIO_AUD_CLS={'SEO+GEO':'aud-both','SEO':'aud-seo','GEO':'aud-geo','辅助诊断':'aud-diag'};
+let PRIO_ITEMS=[],PRIO_VALS={};
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+async function openPrioModal(){
+  try{
+    const r=await fetch('/api/audit/priority-config');
+    const d=await r.json();
+    if(!d.ok){throw new Error(d.error||'加载失败');}
+    PRIO_ITEMS=d.items;
+    PRIO_VALS={};
+    d.items.forEach(function(it){PRIO_VALS[it.id]=d.overrides[it.id]||it.default_priority;});
+    document.getElementById('prioSearch').value='';
+    renderPrioBody();
+    document.getElementById('prioModal').classList.add('show');
+  }catch(e){alert('加载优先级配置失败：'+e.message);}
+}
+function renderPrioBody(){
+  let html='';
+  const PRIO_RANK={P0:0,P1:1,P2:2};
+  const idNum=function(s){const m=String(s).match(/(\\d+)/);return m?parseInt(m[1],10):999;};
+  PRIO_CATS.forEach(function(cat){
+    const items_in_cat=PRIO_ITEMS.filter(function(it){return it.category===cat;});
+    if(!items_in_cat.length)return;
+    // 组内按当前生效优先级排序：P0 在前，同优先级按定义序号
+    let items=items_in_cat.slice().sort(function(a,b){
+      const d=PRIO_RANK[PRIO_VALS[a.id]]-PRIO_RANK[PRIO_VALS[b.id]];
+      return d!==0?d:(idNum(a.id)-idNum(b.id));
+    });
+    html+='<div class="prio-cat">'+cat+'（'+items.length+' 项）</div>';
+    items.forEach(function(it){
+      const idx=PRIO_ITEMS.indexOf(it);
+      const modified=PRIO_VALS[it.id]!==it.default_priority;
+      const opts=['P0','P1','P2'].map(function(p){
+        return '<option value="'+p+'"'+(PRIO_VALS[it.id]===p?' selected':'')+'>'+p+'</option>';
+      }).join('');
+      html+='<div class="prio-row'+(modified?' modified':'')+'" id="prow-'+idx+'" data-search="'+escHtml((it.name+' '+it.purpose+' '+(it.audience||'')).toLowerCase())+'">'+
+        '<span class="nm">'+escHtml(it.name)+'<span class="mod">已调整</span></span>'+
+        '<span class="aud '+(PRIO_AUD_CLS[it.audience]||'aud-diag')+'">'+escHtml(it.audience||'')+'</span>'+
+        '<span class="purpose" title="'+escHtml(it.purpose)+'">'+escHtml(it.purpose||'-')+'</span>'+
+        '<select onchange="prioPick('+idx+',this.value)">'+opts+'</select>'+
+      '</div>';
+    });
+  });
+  document.getElementById('prioBody').innerHTML=html;
+  updatePrioCount();
+}
+function prioPick(idx,val){
+  const it=PRIO_ITEMS[idx];
+  PRIO_VALS[it.id]=val;
+  const row=document.getElementById('prow-'+idx);
+  if(row)row.classList.toggle('modified',val!==it.default_priority);
+  updatePrioCount();
+}
+function updatePrioCount(matchCount){
+  const n=PRIO_ITEMS.filter(function(it){return PRIO_VALS[it.id]!==it.default_priority;}).length;
+  let txt=n?('已调整 '+n+' 项'):'未调整任何项';
+  if(typeof matchCount==='number'){txt+=' · 匹配 '+matchCount+' 项';}
+  document.getElementById('prioCount').textContent=txt;
+}
+function filterPrio(){
+  const q=document.getElementById('prioSearch').value.trim().toLowerCase();
+  let matches=0;
+  document.querySelectorAll('#prioBody .prio-cat').forEach(function(cat){
+    let visible=0;
+    let n=cat.nextElementSibling;
+    while(n&&n.classList.contains('prio-row')){
+      const show=!q||(n.getAttribute('data-search')||'').indexOf(q)>=0;
+      n.style.display=show?'':'none';
+      if(show)visible++;
+      n=n.nextElementSibling;
+    }
+    cat.style.display=visible?'':'none';
+    matches+=visible;
+  });
+  updatePrioCount(q?matches:undefined);
+}
+function resetPrio(){
+  PRIO_ITEMS.forEach(function(it){PRIO_VALS[it.id]=it.default_priority;});
+  renderPrioBody();
+}
+async function savePrio(){
+  const overrides={};
+  PRIO_ITEMS.forEach(function(it){
+    const v=PRIO_VALS[it.id];
+    if(v!==it.default_priority)overrides[it.id]=v;
+  });
+  const btn=document.getElementById('prioSaveBtn');
+  btn.disabled=true;btn.textContent='保存中…';
+  try{
+    const r=await fetch('/api/audit/priority-config',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({overrides:overrides})
+    });
+    const d=await r.json();
+    if(!d.ok){throw new Error(d.error||'保存失败');}
+    closePrioModal();
+    loadReportList();
+    showToast('优先级已保存，'+d.reports_updated+' 份历史报告已按新优先级重算并排序');
+  }catch(e){alert('保存失败：'+e.message);}
+  finally{btn.disabled=false;btn.textContent='保存并应用';}
+}
+function closePrioModal(){document.getElementById('prioModal').classList.remove('show');}
+let toastTimer=null;
+function showToast(msg){
+  let t=document.getElementById('toast');
+  if(!t){
+    t=document.createElement('div');t.id='toast';
+    t.style.cssText='position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#1d1d1f;color:#fff;font-size:13px;padding:10px 18px;border-radius:10px;z-index:1200;box-shadow:0 6px 20px rgba(0,0,0,.25);display:none';
+    document.body.appendChild(t);
+  }
+  t.textContent=msg;t.style.display='block';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){t.style.display='none';},3500);
 }
 
 // 页面加载时自动获取历史报告列表

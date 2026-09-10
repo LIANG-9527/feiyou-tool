@@ -150,6 +150,27 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
             import traceback
             traceback.print_exc()
             extra_pages = []
+
+        # 2026-09-10 V6：重定向后落到同一最终地址的内页只保留一个，
+        # 否则各检查项"结论 17 个、来源 12 个"对不上。
+        # 键=小写+去尾斜杠+去掉 index.html/index.php 入口段——
+        # Windows/IIS 主机大小写不敏感（/CompanyProfile/ 与 /companyprofile/ 同页）
+        def _final_key(u: str) -> str:
+            k = (u or "").lower().rstrip("/")
+            for seg in ("/index.html", "/index.htm", "/index.php", "/index.aspx"):
+                if k.endswith(seg):
+                    k = k[: -len(seg)] or "/"
+            return k
+
+        _seen_finals = {_final_key(page.final_url)}
+        _dedup = []
+        for _p in extra_pages:
+            _k = _final_key(_p.final_url)
+            if _k in _seen_finals:
+                continue
+            _seen_finals.add(_k)
+            _dedup.append(_p)
+        extra_pages = _dedup
         # 必查类型覆盖情况（关于/联系/产品服务/案例/资讯/FAQ/隐私 各发现/选中多少）
         page_coverage = getattr(crawler, "last_coverage", {})
 
@@ -173,7 +194,8 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         all_results = []
         for checker_cls in PAGE_CHECKERS:
             checker = checker_cls(fetcher, page, extra_pages, ai_engine=ai_engine,
-                                  all_site_urls=all_site_urls)
+                                  all_site_urls=all_site_urls,
+                                  sitemap_article_urls=getattr(crawler, "_sitemap_article_urls", None))
             if checker_cls is TechnicalChecker:
                 checker.search_pages = list(getattr(crawler, "search_pages", []))
             all_results.extend(checker.run())

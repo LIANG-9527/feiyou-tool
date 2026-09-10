@@ -9,7 +9,7 @@ from site_audit.core.scorer import grade_from_score
 
 # 引擎版本：检查逻辑或报告模板每次改动必须 +1（日期.当日序号），
 # 以隐藏方式写入每份报告（查看源代码可见），排查问题时区分报告由哪个版本生成。
-ENGINE_VERSION = "2026.09.09.13"
+ENGINE_VERSION = "2026.09.10.1"
 
 
 # 报告出具方：默认本公司品牌「飞柚GEO」，可用环境变量 GEO_REPORT_PROVIDER 覆盖。
@@ -35,7 +35,7 @@ def _evidence_pages(r, home_url: str) -> list:
         p = p.strip()
         if p and p not in pages and len(p) > 1:
             pages.append(p)
-    pages = pages[:12]
+    # 2026-09-10 V6：不再截断来源清单——截断会让"结论17个、来源12个"对不上
     if pages:
         return pages
     scope = getattr(r, "scope", "")
@@ -225,7 +225,7 @@ TIER_REASON = {
 # ── SEO/GEO Tab 模块映射 ──
 SEO_MODULE_MAP = [
     {"title": "站点抓取基础", "subtitle": "网站是否能被搜索引擎正常收录",
-     "items": ["tech-01","tech-02","tech-03","tech-06","tech-07","tech-20","tech-08","tech-09","tech-10","tech-11","tech-12","tech-13","tech-16","tech-17","tech-18","tech-19"]},
+     "items": ["tech-01","tech-02","tech-03","tech-06","tech-07","tech-20","tech-08","tech-09","tech-10","tech-11","tech-12","tech-13","tech-16","tech-17","tech-18","tech-19","tech-21","tech-22"]},
     {"title": "内容就绪-搜索意图匹配", "subtitle": "内容是否匹配用户真实搜索需求",
      "items": ["ai-01","ai-02","ai-03","ai-04","ai-07","ai-08","ai-11","content-01","content-02","content-03","content-04","content-05","content-06","content-07","content-08","mp-01","mp-02","mp-03","mp-04","mp-05","mp-06","mp-07"]},
     {"title": "内容就绪-站点可信度", "subtitle": "网站可信度对外传递效果",
@@ -236,7 +236,7 @@ SEO_MODULE_MAP = [
 
 GEO_MODULE_MAP = [
     {"title": "前置抓取基础", "subtitle": "网站内容能否被 AI 检索链路有效获取",
-     "items": ["tech-01","tech-02","tech-03","tech-04","tech-05","tech-06","tech-07","tech-20","tech-08","tech-09","tech-10","tech-11","tech-12","tech-13","tech-16","tech-17","tech-18","tech-19"]},
+     "items": ["tech-01","tech-02","tech-03","tech-04","tech-05","tech-06","tech-07","tech-20","tech-08","tech-09","tech-10","tech-11","tech-12","tech-13","tech-16","tech-17","tech-18","tech-19","tech-21","tech-22"]},
     {"title": "AI 搜索适配专项", "subtitle": "是否适合 AI 搜索引用与回答生成（GEO 独有）",
      "items": ["ai-01","ai-02","ai-03","ai-04","ai-05","ai-06","ai-07","ai-08","ai-09","ai-10","ai-11","mp-01","mp-02","mp-03"]},
     {"title": "内容就绪-搜索意图匹配", "subtitle": "内容是否匹配 AI 理解的用户真实搜索需求",
@@ -315,13 +315,16 @@ def _light_scan_panel(report: AuditReport) -> str:
         sc_style = "" if (sc or 200) < 400 else "color:var(--state-error);font-weight:700;"
         url = m.get("url", "")
         title = m.get("title") or "(无标题)"
+        # 2026-09-10 V6：异常行直接附原因，免去追问
         note = ""
-        if (sc or 200) >= 400:
-            note = " ⚠️ 无法访问"
+        if sc == 403:
+            note = " ⚠️ 被站点防护拦截（浏览器可开，AI爬虫会被拦）"
+        elif (sc or 200) >= 400:
+            note = " ⚠️ 无法访问，AI爬虫抓不到"
         elif m.get("h1Count") not in (0, 1):
-            note = " ⚠️ 主标题异常"
+            note = f" ⚠️ 主标题异常：检测到 {m.get('h1Count')} 个H1（模板把板块标题也设为H1）"
         elif m.get("imagesTotal", 0) > 0 and m.get("imagesMissingAlt") == m.get("imagesTotal"):
-            note = " ⚠️ 图片全缺说明"
+            note = " ⚠️ 图片全缺说明文字，AI看不懂图片（装饰图不检查：背景图、分割线、图标本就应留空）"
         rows += (f'<div style="padding:6px 0;border-bottom:1px solid var(--jl-neutral-100);font-size:12px;">'
                  f'<span style="{sc_style}min-width:34px;display:inline-block;">{sc}</span>'
                  f'<span style="color:var(--jl-neutral-700);margin-right:6px;">{e(title[:36])}</span>'
@@ -330,46 +333,77 @@ def _light_scan_panel(report: AuditReport) -> str:
                  f'<span style="color:var(--state-error);">{note}</span>'
                  f'<div style="color:var(--jl-neutral-400);font-size:11px;word-break:break-all;">{e(url)}</div></div>')
 
+    # 外壳与「报告详情」折叠卡同款：40px图标块+标题/副标题+右侧chev箭头；
+    # 间距与其他板块一致（上邻卡片自带 margin-bottom:20px，本卡只给 margin-bottom:24px）
     return (
-        f'<details style="margin-top:16px;border:1px solid var(--jl-border);border-radius:12px;'
-        f'background:var(--jl-card);overflow:hidden;">'
-        f'<summary style="cursor:pointer;padding:12px 16px;font-size:13px;font-weight:600;'
-        f'color:var(--jl-neutral-700);list-style:none;display:flex;align-items:center;">'
-        f'<span style="margin-right:6px;">🔍</span>全站扫描明细'
-        f'<span style="color:var(--jl-neutral-400);font-weight:400;margin-left:8px;font-size:12px;">('
-        f'{len(meta)} 页 · {len(bad_status)} 个异常 · 点击展开)</span></summary>'
-        f'<div style="padding:12px 16px;font-size:12px;color:var(--jl-neutral-500);'
-        f'line-height:1.7;border-top:1px solid var(--jl-neutral-100);">{e(summary_open)}</div>'
-        f'<div style="padding:0 16px 16px;max-height:420px;overflow:auto;">{rows}</div>'
+        f'<details style="margin:0 0 24px;background:var(--jl-card);border:1px solid var(--jl-border);'
+        f'border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,0.04);">'
+        f'<summary style="padding:20px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;">'
+        f'<div style="display:flex;align-items:center;gap:12px;">'
+        f'<div style="width:40px;height:40px;border-radius:12px;background:var(--jl-blue-50);color:var(--jl-primary);'
+        f'display:flex;align-items:center;justify-content:center;flex-shrink:0;">'
+        f'<svg style="width:20px;height:20px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div>'
+        f'<div><h2 style="font-size:16px;font-weight:700;color:var(--jl-neutral-900);margin:0;">全站扫描明细</h2>'
+        f'<p style="font-size:12px;color:var(--jl-neutral-500);margin:4px 0 0 0;">'
+        f'{len(meta)} 页全站轻量扫描 · {len(bad_status)} 个异常，点击展开</p></div></div>'
+        f'<svg class="chev" style="width:20px;height:20px;color:var(--jl-neutral-500);" viewBox="0 0 24 24" fill="none" '
+        f'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        f'<polyline points="6 9 12 15 18 9"/></svg></summary>'
+        f'<div style="padding:0 24px 16px;">'
+        f'<div style="font-size:12px;color:var(--jl-neutral-500);line-height:1.7;'
+        f'border-top:1px solid var(--jl-neutral-100);padding-top:12px;">{e(summary_open)}</div>'
+        f'<div style="max-height:420px;overflow:auto;">{rows}</div></div>'
         f'</details>'
     )
 
 
-def _pick_problem_cards(report: AuditReport) -> list:
-    """从失败项里按「影响大 × 容易改」选最多 3 张客户版问题卡。"""
-    # H3：候选池 = 全部不合格项 + P1 级"不足"项（高优先级 WARN 也可能上首屏，如全站镜像/导航死链）
-    fails = [r for r in report.results
-             if (r.status == Status.FAIL or (r.status == Status.WARN and getattr(r, "priority_mark", "") == "P1"))
-             and r.item_id not in ("tech-14", "tech-15")
-             and getattr(r, 'tier', 'core') != 'bonus']
+def _pick_problem_cards(report: AuditReport, warn_only: bool = False) -> list:
+    """按「影响大 × 容易改」选最多 3 张客户版问题卡。
+
+    warn_only=False（默认）：候选池 = 全部必检不合格项 + P1 级"不足"项（高优先级 WARN 也可能上首屏）；
+    warn_only=True：候选池 = 必检"不足"项（用于首屏分支二：没有不合格、只有不足的报告）。
+    """
+    _top_for_card = {"auth-01", "tech-09"}  # 2026-09-10 V6：可信信号、内容可访问性置顶
+    if warn_only:
+        candidates = [r for r in report.results
+                      if r.status == Status.WARN
+                      and r.item_id not in ("tech-14", "tech-15")
+                      and getattr(r, 'tier', 'core') != 'bonus']
+    else:
+        candidates = [r for r in report.results
+                      if (r.status == Status.FAIL or (r.status == Status.WARN and getattr(r, "priority_mark", "") == "P1")
+                          or (r.status == Status.WARN and r.item_id in _top_for_card))
+                      and r.item_id not in ("tech-14", "tech-15")
+                      and getattr(r, 'tier', 'core') != 'bonus']
 
     # 优先修复排序：先按问题严重档（P0>P1>P2），同档再按"好不好改"；
     # 对 AI 引用影响很弱的基础体验项（如移动 viewport，浏览器/脚本多已兜底）降为补位，
     # 只有当更要命的问题凑不满 3 个时才会出现在优先修复里。
-    _prio_rank = {"P0": 3, "P1": 2, "P2": 1}
-    _low_for_card = {"tech-11"}
-
     def _score(r):
+        _prio_rank = {"P0": 3, "P1": 2, "P2": 1}
+        _low_for_card = {"tech-11"}
+        _top_for_card = {"auth-01", "tech-09"}  # 2026-09-10 V6：可信信号、内容可访问性置顶
         copy = CARD_COPY.get(r.item_name, {})
         pv = getattr(r.priority, "value", r.priority)
         base = _prio_rank.get(pv, 2)
         if r.item_id in _low_for_card:
             base = min(base, 1)
+        if r.item_id in _top_for_card:
+            base += 100  # 置顶表达优先级（国内语境最硬两项）
+        return base * 10 + copy.get("weight_f", 3)
+        copy = CARD_COPY.get(r.item_name, {})
+        pv = getattr(r.priority, "value", r.priority)
+        base = _prio_rank.get(pv, 2)
+        if r.item_id in _low_for_card:
+            base = min(base, 1)
+        if r.item_id in _top_for_card:
+            base += 100  # 置顶表达优先级（国内语境最硬两项）
         return base * 10 + copy.get("weight_f", 3)
 
-    fails.sort(key=_score, reverse=True)
+    candidates.sort(key=_score, reverse=True)
     cards = []
-    for r in fails[:3]:
+    for r in candidates[:3]:
         copy = CARD_COPY.get(r.item_name)
         ev_pages = _evidence_pages(r, report.final_url)
         evidence = r.message
@@ -385,21 +419,19 @@ def _pick_problem_cards(report: AuditReport) -> list:
                 evidence += "。" + snippet
         ev_full = re.sub(r"检查页面[:：][^。]+。", "", (r.detail or "")).strip() or evidence
         if copy:
-            cards.append({
-                "problem": copy["problem"], "evidence": evidence,
-                "evidence_full": ev_full,
-                "ev_pages": ev_pages, "biz": copy["biz"],
-                "before": evidence, "after": copy["after"],
-            })
+            conclusion, biz, before, after = copy["problem"], copy["biz"], evidence, copy["after"]
         else:
-            cards.append({
-                "problem": r.item_name, "evidence": evidence,
-                "evidence_full": ev_full,
-                "ev_pages": ev_pages,
-                "biz": r.impact or "该项不达标会影响 AI 对您网站的评价。",
-                "before": "当前实际：" + (r.message or "未达标"),
-                "after": r.suggestion or "请联系顾问获取修改方案",
-            })
+            conclusion = r.message or r.item_name
+            biz = r.impact or "该项不合格会影响 AI 对您网站的评价。"
+            before = "当前实际：" + (r.message or "不合格")
+            after = r.suggestion or "请联系顾问获取修改方案"
+        cards.append({
+            # 2026-09-10 客户定版：卡标题=检查项名称；红 tag=两行（第一行业务结论、第二行当前证据文案）；
+            # 来源紫色标签在红 tag 外保持原样；下方两张卡（影响/改前改后）不变
+            "item_name": r.item_name, "conclusion": conclusion,
+            "desc": evidence, "evidence_full": ev_full, "ev_pages": ev_pages,
+            "biz": biz, "before": before, "after": after,
+        })
     return cards
 
 
@@ -455,8 +487,9 @@ def generate_html_report(report: AuditReport) -> str:
             brand_name = parts[0]
 
     # ── L1 根因聚合（整改故事）区块 ──
+    # 2026-09-10 客户反馈：该板块暂不上线，报告不再展示；聚合结果仍写入 JSON 存档，随时可恢复
     stories_html = ""
-    if getattr(report, "stories", []):
+    if False and getattr(report, "stories", []):
         items = ""
         for st in report.stories:
             ev = "；".join(st["evidence"][:6])
@@ -482,37 +515,53 @@ def generate_html_report(report: AuditReport) -> str:
     trunc_note = "；网址超出上限已截断" if cs.get("truncated") else ""
 
     # ── 客户版首屏：30秒看懂 + 问题卡（核心项口径：锦上添花项不计分）──
+    # 首屏分支（规则见 docs/报告展示规则.md）：
+    #   有必检不合格 → 分支一（话术=不合格，问题卡从 不合格+P1级不足 里挑）；
+    #   无必检不合格 → 分支二（话术=不足，X=必检不足数，问题卡从必检不足项里挑）。
     fail_n = sum(1 for r in report.results
                  if r.status == Status.FAIL and r.item_id not in ("tech-14", "tech-15")
                  and getattr(r, 'tier', 'core') != 'bonus')
-    cards = _pick_problem_cards(report)
+    warn_n = sum(1 for r in report.results
+                 if r.status == Status.WARN and r.item_id not in ("tech-14", "tech-15")
+                 and getattr(r, 'tier', 'core') != 'bonus')
+    total_n = summary['core_total'] + summary['bonus_total']
+    cards = _pick_problem_cards(report, warn_only=(fail_n == 0))
     card_n = len(cards)
     # 全站扫描覆盖声明（B方案：总结话术里提及，不塞进正文受检项）
     ls_n = len(getattr(report, "light_scan_meta", []) or [])
-    ls_note = (f"另对全站 {ls_n} 个页面做了轻量扫描（含状态码/重复标题/模板副本/图片说明），"
-               f"明细见报告上方『全站扫描明细』按钮。" if ls_n else "")
-    if card_n > 0:
-        headline = (f"本次体检 {summary['core_total']} 项计分检查，{fail_n} 项未达标——"
-                    f"这些环节正在影响 AI 搜索引擎对您网站内容的理解与引用。"
+    ls_note = (f"另对全站 {ls_n} 个页面做了快速核验（含状态码/重复标题/模板副本/图片说明），"
+               f"明细见下方『全站扫描明细』。" if ls_n else "")
+    if fail_n > 0:
+        # 2026-09-10 V6：卡数可能多于不合格数（含置顶提醒卡），分开表述不打架；单数用"该环节"
+        extra_card_n = max(card_n - fail_n, 0)
+        impact = "该环节正在影响" if fail_n == 1 else "这些环节正在影响"
+        lead = (f"本次合计体检 {total_n} 项（其中 {summary['core_total']} 项必检项目，"
+                f"{summary['bonus_total']} 项非必检项目），当前有 {fail_n} 项必检项目不合格")
+        if extra_card_n:
+            lead += f"，另有 {extra_card_n} 项重点优化建议"
+        headline = (f"{lead}——{impact} AI 搜索引擎对您网站内容的理解与引用。"
                     f"优先修复以下 {card_n} 个关键问题，可快速提升 AI 可见度。{ls_note}")
     else:
-        headline = (f"本次体检 {summary['core_total']} 项计分检查，{fail_n} 项未达标，"
-                    f"整体表现良好，仍有优化空间。{ls_note}")
+        headline = (f"本次合计体检 {total_n} 项（其中 {summary['core_total']} 项必检项目，"
+                    f"{summary['bonus_total']} 项非必检项目），当前有 {warn_n} 项必检项目存在不足，"
+                    f"优先调整优化以下 {card_n} 个关键问题，可提升 AI 引用概率。{ls_note}")
     cards_html = ""
     for i, c in enumerate(cards, 1):
-        # 悬浮提示展示完整结果（不截断），分号处换行便于阅读
-        _ev_full_html = e(c["evidence_full"]).replace("；", "；<br>")
+        # 悬浮提示框：第一行=结论（加粗、15px），换行后=完整描述（12px，分号处换行）；标签本身宽高不变
+        _ev_full_html = ('<b style="font-size:15px;">' + e(c["conclusion"]) + "</b><br>"
+                         + e(c["evidence_full"]).replace("；", "；<br>"))
+        _src_chip = _source_html(c["ev_pages"], report.final_url)
+        # 红 tag 与原版完全同款（同宽、单行、截断省略号、悬浮浮层），仅内容顺序改为结论在前
         _ev_chip = _overflow_chip(
-            c["evidence"],
+            c["conclusion"] + "；" + c["desc"],
             "px-2.5 py-1 rounded-md text-xs font-medium "
             "bg-[var(--state-error-bg)] text-[var(--state-error-text)] border border-[var(--state-error)]/10",
             maxw="max-w-[220px] sm:max-w-[300px]",
             full_html=_ev_full_html)
-        _src_chip = _source_html(c["ev_pages"], report.final_url)
         cards_html += f'''
       <article class="relative bg-[var(--jl-card)] rounded-2xl p-5 sm:p-6 shadow-sm border border-[var(--jl-border)] overflow-visible">
         <div class="flex items-center gap-3 mb-4 flex-wrap">
-          <h2 class="text-lg font-bold text-[var(--jl-neutral-900)]">{i}. {e(c["problem"])}</h2>
+          <h2 class="text-lg font-bold text-[var(--jl-neutral-900)]">{i}. {e(c["item_name"])}</h2>
           {_ev_chip}
           <span class="inline-flex items-center">{_src_chip}</span>
         </div>
@@ -680,7 +729,7 @@ def generate_html_report(report: AuditReport) -> str:
         # 辅助检测项（CMS诊断与运营维护评估）：必检但不计分
         if getattr(r, 'tier', 'core') == 'bonus':
             level_tag = '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold whitespace-nowrap flex-shrink-0 text-[var(--jl-neutral-500)] bg-[var(--jl-muted)] border border-[var(--jl-border)]">非必检项</span>'
-            score_tag = '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium whitespace-nowrap flex-shrink-0 text-[var(--jl-neutral-600)] bg-[var(--jl-muted)] border border-[var(--jl-border)]">不计分</span>'
+            score_tag = '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium whitespace-nowrap flex-shrink-0 text-[#b45309] bg-[#fef3c7] border border-[#f5deb3]">优化机会</span>'
         elif r.item_id in ("tech-14", "tech-15"):
             level_tag = '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold whitespace-nowrap flex-shrink-0 text-white bg-[var(--jl-blue-500)]">必检项</span>'
             score_tag = '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium whitespace-nowrap flex-shrink-0 text-[var(--jl-neutral-600)] bg-[var(--jl-muted)] border border-[var(--jl-border)]">不计分</span>'
@@ -695,6 +744,12 @@ def generate_html_report(report: AuditReport) -> str:
             _reason_label, _reason_text = "不计分", TIER_REASON.get(r.item_id, "")
         else:
             _reason_label, _reason_text = "影响", (r.impact or "")
+        # 2026-09-10 V6：参与计分的 AI 项标注结论波动可能
+        ai_wave_note = ""
+        if (r.item_id in ("ai-09", "ai-10", "content-07")
+                and getattr(r, "tier", "core") == "core" and r.status != Status.SKIP):
+            ai_wave_note = ('<div class="mt-0.5 pl-6 text-[10px] text-[var(--jl-neutral-500)] leading-snug">'
+                            '（AI 判定项：两次诊断的结论可能存在波动，供参考）</div>')
         reason_html = ""
         if _reason_text:
             reason_html = (
@@ -715,12 +770,12 @@ def generate_html_report(report: AuditReport) -> str:
                     </div>
                   </div>
                   {reason_html}
+                  {ai_wave_note}
                 </td>
                 <td class="text-center px-4 py-3 whitespace-nowrap">
                   <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-[var(--{bg_var})] text-[var(--{text_var})] border border-[var(--{color_var})]/10 whitespace-nowrap">
                     {icon_svg}{label}
                   </span>
-                  {prio_badge}
                 </td>
                 <td class="text-left px-4 py-3 text-[var(--jl-neutral-700)] text-sm">
                   {e(_clean_punct(r.message))}
@@ -826,6 +881,14 @@ def generate_html_report(report: AuditReport) -> str:
       function openCfgModal(){{document.getElementById('cfgModal').style.display='block';document.body.style.overflow='hidden';}}
       function closeCfgModal(){{document.getElementById('cfgModal').style.display='none';document.body.style.overflow='';}}
       document.addEventListener('keydown',function(e){{if(e.key==='Escape')closeCfgModal();}});
+      // 「报告详情」折叠卡：展开/收起时切换提示文字
+      document.addEventListener('toggle',function(e){{
+        var t=e.target;
+        if(t.tagName==='DETAILS'){{
+          var p=t.querySelector('#detailToggleText');
+          if(p){{p.textContent=p.textContent.replace(/点击展开|点击收起/,t.open?'点击收起':'点击展开');}}
+        }}
+      }},true);
     </script>'''
 
     def _render_detail_modules(module_map):
@@ -835,9 +898,12 @@ def generate_html_report(report: AuditReport) -> str:
             mod_items = [item_map[i] for i in mod["items"] if i in item_map and i not in cms_item_ids]
             if not mod_items:
                 continue
-            # 必检项（计分）排前、非必检项排后；组内按严重程度：不合格 > 不足 > 合格 > 未检查
+            # 必检项（计分）排前、非必检项排后；组内按配置的优先级（P0>P1>P2），
+            # 同优先级再按严重程度：不合格 > 不足 > 合格 > 未检查
             _sev_rank = {Status.FAIL: 0, Status.WARN: 1, Status.PASS: 2, Status.SKIP: 3}
+            _pr_rank = {"P0": 0, "P1": 1, "P2": 2}
             mod_items.sort(key=lambda r: (getattr(r, 'tier', 'core') == 'bonus',
+                                          _pr_rank.get(getattr(r.priority, "value", r.priority), 1),
                                           _sev_rank.get(r.status, 9)))
             rows = "".join(_render_row(r, show_set_tag=False) for r in mod_items)
             sections += f'''
@@ -1108,12 +1174,6 @@ def generate_html_report(report: AuditReport) -> str:
   <!-- L1 根因聚合（整改故事） -->
   {stories_html}
 
-  <!-- 覆盖声明（A4/L5） -->
-  <div style="font-size:11px;color:var(--jl-neutral-500);margin-bottom:12px;line-height:1.7;">
-    评估范围声明：{crawl_mode}，共评估 {crawl_pages} 个页面（首页+抽样内页）；覆盖 技术可抓取性/AI友好度/内容质量/权威信任/商业转化 5 维度 {check_n} 项检查。
-    未覆盖：登录后页面、需 JS 交互才能呈现的内容{trunc_note}。规则外问题反馈渠道：项目工作日志。
-  </div>
-
   <!-- Brand Header -->
   <header style="display:flex;flex-direction:column;gap:16px;margin-bottom:24px;">
     <div style="display:flex;align-items:center;gap:12px;">
@@ -1131,8 +1191,6 @@ def generate_html_report(report: AuditReport) -> str:
       </button>
     </div>
   </header>
-
-  {light_scan_panel_html}
 
   <!-- Hero -->
   <section style="position:relative;overflow:hidden;border-radius:16px;background:linear-gradient(135deg,var(--jl-blue-800) 0%,var(--jl-blue-600) 100%);padding:32px 28px;color:#fff;margin-bottom:24px;box-shadow:0 4px 6px -1px rgba(15,23,42,0.05);">
@@ -1165,6 +1223,8 @@ def generate_html_report(report: AuditReport) -> str:
     <p style="font-size:18px;font-weight:700;color:var(--jl-neutral-900);line-height:1.7;">{e(headline)}</p>
   </section>
 
+  {light_scan_panel_html}
+
   <!-- Problem Cards -->
   <section style="display:flex;flex-direction:column;gap:16px;margin-bottom:24px;">
     {cards_html}
@@ -1179,7 +1239,7 @@ def generate_html_report(report: AuditReport) -> str:
         </div>
         <div>
           <h2 style="font-size:16px;font-weight:700;color:var(--jl-neutral-900);margin:0;">报告详情</h2>
-          <p style="font-size:12px;color:var(--jl-neutral-500);margin:4px 0 0 0;">{summary["total"]} 项全量打分表与检测证据，点击展开</p>
+          <p id="detailToggleText" style="font-size:12px;color:var(--jl-neutral-500);margin:4px 0 0 0;">{summary["total"]} 项全量打分表与检测证据，点击收起</p>
         </div>
       </div>
       <svg class="chev" style="width:20px;height:20px;color:var(--jl-neutral-500);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
@@ -1272,14 +1332,11 @@ def generate_html_report(report: AuditReport) -> str:
             </table>
           </div>
           <div style="font-size:13px;color:var(--jl-neutral-600);line-height:1.8;margin-top:16px;">
-            <div style="font-weight:600;color:var(--jl-neutral-700);margin-bottom:8px;">单项维度示例（技术可抓取性得分）</div>
-            <div>1. 10项合格 × 1分/项 = 10分</div>
-            <div>2. 2项不足 × 0.5分/项 = 1分</div>
-            <div>3. 1项不合格 × 0分/项 = 0分</div>
-            <div>4. (10+1+0) / 13个检测项 × 100 = 84.6分</div>
-            <div style="font-weight:600;color:var(--jl-neutral-700);margin-top:12px;margin-bottom:8px;">总分示例</div>
-            <div>1. 单项积分：30% × 84.6分 = 25.3</div>
-            <div>2. 总分：各单项积分累计总和</div>
+            <div style="font-weight:600;color:var(--jl-neutral-700);margin-bottom:8px;">计分公式</div>
+            <div>状态分：合格 = 1，不足 = 0.5，不合格 = 0</div>
+            <div>优先级票数：最高档 = 2 票，重要档 = 1 票，轻微档 = 0.5 票</div>
+            <div>维度得分 = Σ(状态分 × 票数) ÷ Σ票数 × 100</div>
+            <div>总分 = Σ(维度得分 × 维度权重)（权重合计 100%）</div>
           </div>
         </div>
       </section>

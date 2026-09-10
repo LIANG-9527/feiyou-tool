@@ -59,68 +59,83 @@ class ContentChecker(BaseChecker):
             failed="多数页面未标注时间，且内容为全网通用套话/AI水文，无原创观点和一手数据",
         )
 
-        # 收集所有页面（首页+内页），但只对有实质内容的页面检查
+        # 2026-09-10 V6 拆分：时间标注保留计分；AI 原创性判断移出计分改只提醒。
         all_pages = [self.page] + self.extra_pages
         content_pages = [p for p in all_pages if p.word_count() > 100]
-
         if not content_pages:
-            return self._result(item, Status.SKIP, "未抓取到内容页，无法检查原创性与时效性",
-                                detail="抽样内页均无足够正文内容")
+            return self._result(item, Status.SKIP, "未抓取到内容页，无法检查时效性",
+                                detail="抽样内页均无足够正文内容", skip_kind="missing")
 
-        # 逐页检查时间标注
-        pages_with_time = 0
-        pages_without_time = []
-        for p in content_pages:
-            time_tags = p.soup.find_all("time")
-            pub_time = p.meta("article:published_time")
-            mod_time = p.meta("article:modified_time")
-            if time_tags or pub_time or mod_time:
-                pages_with_time += 1
-            else:
-                pages_without_time.append(p.final_url)
+        _DATE_RE = re.compile(
+            r"(?:发布|更新|发表于|更新于|发布时间|更新时间)[:：]?\s*"
+            r"(20\d{2}[-年/.]\d{1,2}(?:[-月/.]\d{1,2})?|20\d{2}年\d{1,2}月)", re.I)
 
-        time_ratio = pages_with_time / len(content_pages) if content_pages else 0
+        def _has_time_signal(p):
+            if p.soup.find("time", attrs={"datetime": True}) is not None:
+                return True
+            if p.meta("article:published_time") or p.meta("article:modified_time") or p.meta("og:updated_time"):
+                return True
+            return bool(_DATE_RE.search(p.get_text()))
 
-        # AI原创性分析：检查最具代表性的内容页
-        orig_status, orig_summary, orig_detail = (Status.SKIP, "", "")
-        check_page = self._pick_content_page()
-        if not check_page:
-            check_page = content_pages[0] if content_pages else self.page
+        with_time = sum(1 for p in content_pages if _has_time_signal(p))
+        ratio = with_time / len(content_pages)
+        pages_without = [p.final_url for p in content_pages if not _has_time_signal(p)]
+
+        # 永不判不合格：没时间标注不阻断收录，只是 AI 找新鲜内容时优先别人
+        status = Status.PASS if ratio >= 0.8 else Status.WARN
+        msg = f"{with_time}/{len(content_pages)} 个内容页标注了发布/更新时间"
+        if ratio < 0.3:
+            msg += "（高优先提醒：AI 判断内容新鲜度主要依赖时间标注）"
+        detail = f"未标注页面: {', '.join(pages_without[:8])}" if pages_without else None
+
+        # 防造假：站点地图 lastmod 同日占比 ≥50% → 封顶"不足（疑似批量回填）"
+        same_ratio, lastmod_n = self._sitemap_lastmod_same_day_ratio()
+        if same_ratio is not None and lastmod_n and same_ratio >= 0.5:
+            status = Status.WARN
+            msg += f"；站点地图 {lastmod_n} 个网址中 {int(same_ratio * 100)}% 的 lastmod 集中在同一天（疑似批量回填）"
+
         if self.ai_engine:
-            orig_status, orig_summary, orig_detail = self.ai_engine.consensus(lambda: self.ai_engine.check_originality(check_page))
+            check_page = self._pick_content_page() or content_pages[0]
+            _os, _om, _od = self.ai_engine.consensus(lambda: self.ai_engine.check_originality(check_page))
+            if _om or _od:
+                detail = ((detail + "。" if detail else "") +
+                          f"原创性参考（不计分，需人工复核）: {_om or _od}。检查页面: {check_page.final_url}")
 
-        # 综合判断
-        _cp = self._pg(check_page)
-        # 时间标注的结论覆盖全部内容页，来源须挂全量实测页面，不能只挂原创性抽中的那一页
-        _all_content = [p.final_url for p in content_pages] or _cp
-        if time_ratio >= 0.8:
-            time_msg = f"{pages_with_time}/{len(content_pages)} 个内容页标注了时间"
-            if orig_status != Status.SKIP:
-                return self._result(item, orig_status,
-                                    f"{time_msg}。{orig_summary}",
-                                    detail=f"时间标注: {time_msg}。原创性: {orig_detail}。检查页面: {check_page.final_url}",
-                                    pages=_all_content)
-            return self._result(item, Status.PASS, f"{time_msg}",
-                                detail=f"检查页面: {check_page.final_url}", pages=_all_content)
-        elif time_ratio >= 0.3:
-            time_msg = f"{pages_with_time}/{len(content_pages)} 个内容页标注了时间，{len(pages_without_time)} 个未标注"
-            if orig_status != Status.SKIP:
-                return self._result(item, Status.WARN,
-                                    f"{time_msg}。{orig_summary}",
-                                    detail=f"未标注页面: {', '.join(pages_without_time[:8])}。原创性: {orig_detail}。检查页面: {check_page.final_url}",
-                                    pages=_all_content)
-            return self._result(item, Status.WARN, time_msg,
-                                detail=f"未标注页面: {', '.join(pages_without_time[:8])}", pages=_all_content)
-        else:
-            time_msg = f"仅 {pages_with_time}/{len(content_pages)} 个内容页标注了时间"
-            if orig_status != Status.SKIP:
-                status = Status.WARN if orig_status == Status.PASS else orig_status
-                return self._result(item, status,
-                                    f"{time_msg}。{orig_summary}",
-                                    detail=f"未标注页面: {', '.join(pages_without_time[:8])}。原创性: {orig_detail}。检查页面: {check_page.final_url}",
-                                    pages=_all_content)
-            return self._result(item, Status.WARN, time_msg,
-                                detail=f"未标注页面: {', '.join(pages_without_time[:8])}", pages=_all_content)
+        return self._result(item, status, msg, detail=detail,
+                            pages=[p.final_url for p in content_pages])
+
+    def _sitemap_lastmod_same_day_ratio(self):
+        """解析站点地图取 lastmod，返回 (同日占比, 样本数)；样本 <5 返回 (None, 0)。"""
+        from collections import Counter
+        sm_declared = None
+        rbt = self.fetcher.fetch_raw(f"{self.base_url}/robots.txt") if self.fetcher else None
+        if rbt is not None and rbt.status_code == 200:
+            msm = re.search(r"(?im)^\s*Sitemap:\s*(\S+)", rbt.text)
+            if msm:
+                sm_declared = msm.group(1).strip()
+        candidates = ([sm_declared] if sm_declared else []) + [f"{self.base_url}/sitemap.xml"]
+        lms = []
+        for u in candidates:
+            if not u:
+                continue
+            resp = self.fetcher.fetch_raw(u) if self.fetcher else None
+            if resp is None or resp.status_code != 200:
+                continue
+            xml = resp.text
+            sub_maps = re.findall(r"<sitemap>.*?<loc>(.*?)</loc>", xml, re.S | re.I)
+            blocks = re.findall(r"<url>(.*?)</url>", xml, re.S | re.I)
+            if sub_maps and not blocks:
+                for su in sub_maps[:5]:
+                    sr = self.fetcher.fetch_raw(su)
+                    if sr is not None and sr.status_code == 200:
+                        lms += [m.group(1)[:10] for m in re.finditer(r"<lastmod>(.*?)</lastmod>", sr.text, re.I | re.S)]
+            else:
+                lms = [m.group(1)[:10] for m in re.finditer(r"<lastmod>(.*?)</lastmod>", xml, re.I | re.S)]
+            break
+        if len(lms) < 5:
+            return None, 0
+        top_day, top_n = Counter(lms).most_common(1)[0]
+        return top_n / len(lms), len(lms)
 
     # 内容-07 搜索意图匹配
     def _check_search_intent(self) -> CheckResult:
@@ -141,8 +156,9 @@ class ContentChecker(BaseChecker):
         content_page = self._pick_content_page()
         if not content_page:
             return self._result(item, Status.SKIP,
-                                "搜索意图匹配为内容页检查项，首页不适用，且未抽样到内容页",
-                                detail="搜索意图分析需在有明确主题的内容页上进行，首页是品牌导航页不适用")
+                                "未抓取到内容详情页（栏目/列表页不作为检查对象），无法检查搜索意图匹配，需人工复核",
+                                detail="搜索意图分析需在有明确主题的文章/产品详情页上进行；仅抓到栏目列表页时本项不判分",
+                                skip_kind="missing")
         status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_search_intent(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
         return self._result(item, status, summary, detail=f"检查页面: {page_label}。{detail}",
@@ -241,8 +257,8 @@ class ContentChecker(BaseChecker):
             # /faq/ 等专职 FAQ 路径排最前（与明细 is_faq_path 优先一致）
             dom_only_pages.sort(key=lambda x: (not bool(re.search(r"/(faq|cjwt|changjianwenti)", x[0], re.I)), -x[1]))
             pages_sorted = [path_by[x[0]] for x in dom_only_pages if x[0] in path_by]
-            return self._result(item, Status.WARN,
-                                f"有 FAQ 板块但缺少 FAQPage 结构化标记（{len(dom_only_pages)} 个页面）",
+            return self._result(item, Status.PASS,
+                                f"有 FAQ 问答板块（{len(dom_only_pages)} 个页面，其中 {len([x for x in dom_only_pages if not x[2]])} 个建议加 FAQPage 标记——属可选优化，标记富媒体展示已停显）",
                                 detail=f"涉及页面: {labels}。"
                                        + (dup_note + "。" if dup_note else "")
                                        + "加 FAQPage JSON-LD 后 AI 可稳定摘取问答"
@@ -269,37 +285,27 @@ class ContentChecker(BaseChecker):
         if not images:
             return self._result(item, Status.SKIP, "页面无图片")
 
-        # 无效 alt 分三类：空 / 模板残留（如 {{$field.title}}、{$vo.xxx}、eyou 标签）/ 无意义占位
+        # 2026-09-10 V6 三态口径：留空(alt="")=装饰图标准做法，剔除分母不判错；
+        # 算错=无alt属性/占位词/模板残留；写清说明=好。坏文件名为独立提示不进判级。
         _tpl_residue = re.compile(r"\{\{|\{\$|\{%|\{:|%\}|\$field|\$vo|\$[a-zA-Z_]+\.|eyou:|volist|think\.")
-        _meaningless = {"图片", "图像", "image", "img", "photo", "pic", "-", "--", "|",
-                        "alt", "图片占位", "暂无图片", "nophoto", "default", "icon"}
+        _meaningless = {"图片", "图像", "image", "img", "photo", "pic", "照片"}
 
-        def _alt_problem(img):
+        def _state(img):
             a = img.get("alt")
-            if a is None or not str(a).strip():
-                return "空"
+            if a is None:
+                return "err"
             a = str(a).strip()
-            if _tpl_residue.search(a):
-                return "模板残留"
-            if a.lower() in _meaningless or len(a) <= 1:
-                return "无意义"
-            return None
+            if not a:
+                return "blank"
+            if len(a) <= 2 or a.lower() in _meaningless or _tpl_residue.search(a):
+                return "err"
+            return "ok"
 
-        no_alt, residue_alt, meaningless_alt, residue_samples = [], [], [], []
-        for img in images:
-            kind = _alt_problem(img)
-            if kind == "空":
-                no_alt.append(img)
-            elif kind == "模板残留":
-                residue_alt.append(img)
-                if len(residue_samples) < 3:
-                    residue_samples.append(str(img.get("alt")).strip())
-            elif kind == "无意义":
-                meaningless_alt.append(img)
-        invalid_alt = no_alt + residue_alt + meaningless_alt  # 写了等于没写的都算无效
-        missing_ratio = len(invalid_alt) / len(images)
+        scored = [i for i in images if _state(i) != "blank"]
+        blank_n = len(images) - len(scored)
+        err = [i for i in scored if _state(i) == "err"]
+        good = len(scored) - len(err)
 
-        # 检查文件名描述性（排除纯数字、img1、DSC、无意义名称）
         import os
         bad_filename_patterns = [
             r'^\d+\.', r'^img\d+\.', r'^image\d+\.', r'^dsc\d+\.',
@@ -308,56 +314,31 @@ class ContentChecker(BaseChecker):
         ]
         bad_filenames = 0
         for img in images:
-            src = img.get("src", "")
-            filename = os.path.basename(src).lower()
-            if not filename:
-                continue
-            import re as _re
-            if any(_re.match(p, filename) for p in bad_filename_patterns):
+            filename = os.path.basename(img.get("src", "")).lower()
+            if filename and any(re.match(pat, filename) for pat in bad_filename_patterns):
                 bad_filenames += 1
-        bad_filename_ratio = bad_filenames / len(images) if images else 0
 
-        # 分析无效 alt 的图片类型（沿用原分类）
-        if no_alt:
-            from collections import Counter
-            types = Counter()
-            for img in no_alt:
-                src = img.get("src", "")
-                if "logo" in src.lower():
-                    types["Logo"] += 1
-                elif "slide" in src.lower() or "banner" in src.lower():
-                    types["Banner图"] += 1
-                elif "sort" in src.lower() or "category" in src.lower() or "class" in src.lower():
-                    types["分类/产品图标"] += 1
-                elif "template" in src.lower():
-                    types["模板装饰图"] += 1
-                elif "upload" in src.lower():
-                    types["上传图片"] += 1
-                else:
-                    types["其他"] += 1
-            detail_parts = ["空白alt: " + "、".join(f"{k}{v}张" for k, v in types.most_common())]
-        else:
-            detail_parts = []
-        # 模板残留与无意义占位单独点名（这是"写了等于没写"的模板 bug）
-        if residue_alt:
-            detail_parts.append(f"{len(residue_alt)} 张图片的 alt 是没渲染出来的模板代码（如 {'、'.join(residue_samples)}），等于没写")
-        if meaningless_alt:
-            detail_parts.append(f"{len(meaningless_alt)} 张图片的 alt 只是'图片/image'之类无意义占位")
+        detail_parts = []
+        if blank_n:
+            detail_parts.append(f"{blank_n} 张留空（装饰图标准做法；如为信息图请补说明）")
+        if err:
+            detail_parts.append(f"{len(err)} 张该写说明的图没写/写了无意义占位或模板残留")
+        if bad_filenames:
+            detail_parts.append(f"无意义文件名 {bad_filenames} 张（提示项，不判级）")
+        detail = "；".join(detail_parts) or None
 
-        if bad_filenames > 0:
-            detail_parts.append(f"无意义文件名: {bad_filenames}/{len(images)} 张（{bad_filename_ratio:.0%}）")
-        detail = "；".join(detail_parts) if detail_parts else None
-
-        # 综合判断：有效 alt 覆盖率为主，文件名问题作为补充
-        if missing_ratio == 0 and bad_filename_ratio < 0.3:
+        if not scored:
             return self._result(item, Status.PASS,
-                                f"全部 {len(images)} 张图片都有有效 alt，文件名质量良好")
-        if missing_ratio < 0.3:
-            return self._result(item, Status.WARN,
-                                f"{len(invalid_alt)}/{len(images)} 张图片缺少有效 alt",
+                                f"{len(images)} 张图片全部留空 alt（装饰图合规做法，无该写说明的图）",
                                 detail=detail)
+        ratio = good / len(scored)
+        base_msg = f"该写说明的图片 {good}/{len(scored)} 写清了说明" + (f"（另有 {blank_n} 张装饰图留空）" if blank_n else "")
+        if ratio >= 0.8:
+            return self._result(item, Status.PASS, base_msg, detail=detail)
+        if ratio >= 0.5:
+            return self._result(item, Status.WARN, f"{base_msg}，覆盖偏低", detail=detail)
         return self._result(item, Status.FAIL,
-                            f"{len(invalid_alt)}/{len(images)} 张图片缺少有效 alt（{missing_ratio:.0%}，含空白/模板残留/无意义占位）",
+                            f"{base_msg}——过半图片对搜索引擎和AI'不存在'",
                             detail=detail)
 
     # 24. 内部链接质量
@@ -372,6 +353,7 @@ class ContentChecker(BaseChecker):
             excellent="几乎所有内部链接都使用描述性锚文本（含关键词），无'点击这里'类无意义链接，锚文本与目标页面强相关",
             normal="大部分链接有描述性，但存在少量（<40%）'了解更多''详情'类通用锚文本",
             failed="大量内部链接使用'点击这里''了解更多'等无意义锚文本（≥40%）",
+            tier="bonus",  # 2026-09-10 V6定版：两档同为不足说明非决定性，转只提醒
         )
         from urllib.parse import urlparse
         base_domain = urlparse(self.page.final_url).netloc
@@ -420,6 +402,13 @@ class ContentChecker(BaseChecker):
         )
         hreflang = self.local_soup.find_all("link", attrs={"rel": "alternate", "hreflang": True})
         lang_switch = self.local_soup.find(class_=re.compile(r"lang|language|i18n", re.I))
+        # 2026-09-10 V6：很多站的切换器是普通链接（如 <a href='/cn/…'>简体中文</a>），无特征类名——
+        # 可见文本命中语言名称也算切换器
+        if lang_switch is None:
+            for a in self.local_soup.find_all("a"):
+                if a.get_text(strip=True) in ("简体中文", "繁體中文", "中文", "English", "EN"):
+                    lang_switch = a
+                    break
 
         # ── 语言一致性（D2 决议口径）──
         # 第一步：识别语言切换器（语言菜单 / /cn//en/ 路径 / hreflang 声明）
@@ -446,7 +435,7 @@ class ContentChecker(BaseChecker):
         # 第三步：无切换器且只有单语言版本 = 单语言站，尊重母语设置，镜像检查跳过、不扣分
         if not has_switcher and len(content_versions) < 2:
             return self._result(item, Status.SKIP,
-                                "站点为单语言，尊重母语设置，多语言镜像检查不适用",
+                                "站点为单语言，多语言/多地区检查不适用",
                                 detail=f"未检测到语言切换器与多语言版本（识别语言: {', '.join(sorted(content_versions)) or '无'}）")
 
         # 第四步：有切换器才逐版本查镜像——中文页与英文页正文相似度 ≥70% = 半成品镜像（高优先级）

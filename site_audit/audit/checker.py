@@ -2,6 +2,7 @@
 from abc import ABC, abstractmethod
 from typing import List
 from site_audit.core.models import CheckResult, CheckItem, Status, Priority, Category
+from site_audit.core import priority_config
 from site_audit.core.fetcher import Fetcher, PageData
 
 
@@ -218,7 +219,7 @@ class BaseChecker(ABC):
     category: Category = Category.TECHNICAL
 
     def __init__(self, fetcher: Fetcher, page: PageData, extra_pages=None,
-                 ai_engine=None, all_site_urls=None):
+                 ai_engine=None, all_site_urls=None, sitemap_article_urls=None):
         self.fetcher = fetcher
         self.page = page
         # 多页面抽样：除首页外抓取到的内页 PageData 列表（跨页面检查用）
@@ -227,6 +228,9 @@ class BaseChecker(ABC):
         # 全站 URL 清单（轻量层 collect_all_urls 产出，含整站可达页面，
         # 供"必备页面完备性"等需要全站清单的检查用；未传入时为 None 则回退 all_pages）
         self.all_site_urls = all_site_urls or []
+        # 站点地图「文章清单」子地图声明的文章页（站长认定 + 引擎解析，
+        # 供内容页挑选器识别真文章，天然排除栏目列表页；未传入时为空集）
+        self.sitemap_article_urls = set(sitemap_article_urls or ())
         self.base_url = self._get_base_url()
         # AI语义引擎（可选，用于AI层检查）
         self.ai_engine = ai_engine
@@ -300,6 +304,8 @@ class BaseChecker(ABC):
         # 如果没传 suggestion，从全局字典查找
         if not suggestion:
             suggestion = SUGGESTION_MAP.get(id, "")
+        # 管理页"优先级配置"的自定义覆盖：生效优先级改变计分权重与报告排序
+        priority = Priority(priority_config.effective_priority(id, priority))
         return CheckItem(
             id=id, name=name, category=self.category, priority=priority,
             description=description, check_method=check_method, standard=standard,
@@ -323,7 +329,14 @@ class BaseChecker(ABC):
 
         排除与首页正文高度雷同的克隆页（ZSTEK教训：/adventure-news/ 实为首页模板副本，
         曾被当文章页做署名检查，得出对克隆页无意义的结论）；排除后无候选则返回 None，
-        由调用方如实跳过。"""
+        由调用方如实跳过。
+        2026-09-10 客户反馈补充：署名/语义等要查的是文章详情页，不是栏目列表页
+        （ZSTEK再次教训：/adventure-news/ 是新闻列表页却被当文章查署名）。
+        站点地图「文章清单」子地图声明的文章页是最高优先候选——那是站长认定、
+        引擎可验证的真文章；栏目列表页在这类主题下与文章页结构难辨（实测
+        article/time 标签、链接密度均不可分），不再用结构启发式硬猜。
+        整站抓不到声明文章/合格候选时返回 None，各内容页检查项如实标「未检查·需人工复核」。
+        """
         if not self.extra_pages:
             return None
         import re
@@ -331,7 +344,8 @@ class BaseChecker(ABC):
 
         def _is_home_clone(p) -> bool:
             a = {home_text[i:i + 2] for i in range(len(home_text) - 1)}
-            b = {p.get_text()[i:i + 2] for i in range(len(p.get_text()) - 1)}
+            p_text = p.get_text()
+            b = {p_text[i:i + 2] for i in range(len(p_text) - 1)}
             if not a or not b:
                 return False
             return len(a & b) / len(a | b) > 0.85
@@ -340,6 +354,13 @@ class BaseChecker(ABC):
                       if p.word_count() > 100 and not _is_home_clone(p)]
         if not candidates:
             return None
+        # 站点地图声明的文章页最高优先（去尾斜杠比对）
+        if self.sitemap_article_urls:
+            declared = {u.rstrip("/") for u in self.sitemap_article_urls}
+            in_sitemap = [p for p in candidates
+                          if p.final_url.rstrip("/") in declared]
+            if in_sitemap:
+                return max(in_sitemap, key=lambda p: p.word_count())
         priority_patterns = [
             r"article|blog|news|post|文章|新闻|资讯",
             r"case|customer|story|案例|客户",
@@ -350,6 +371,31 @@ class BaseChecker(ABC):
                 if re.search(pattern, p.final_url, re.I):
                     return p
         return max(candidates, key=lambda p: p.word_count(), default=None)
+
+    @staticmethod
+    def _is_list_page(page) -> bool:
+        """判断页面是否为栏目列表页/着陆页：链接密集且无文章结构特征。
+
+        实测校准（ZSTEK 2026-09-10）：WordPress 主题给列表页也套 article/time 标签、
+        链接文字占比普遍低于 0.2，结构启发式不可分；本方法不再用于挑选器硬过滤，
+        保留供诊断探针使用。
+        """
+        soup = page.soup
+        if soup is None:
+            return False
+        if soup.find("article") is not None:
+            return False
+        if soup.find("time", attrs={"datetime": True}) is not None:
+            return False
+        if soup.find("meta", attrs={"property": "article:published_time"}) is not None:
+            return False
+        total_text = page.get_text()
+        if not total_text:
+            return True
+        link_text_len = 0
+        for a in soup.find_all("a"):
+            link_text_len += len(a.get_text(strip=True))
+        return link_text_len / len(total_text) >= 0.5
 
     @staticmethod
     def _pg(page) -> list:

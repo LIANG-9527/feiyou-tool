@@ -131,6 +131,16 @@ class AuthorityChecker(BaseChecker):
         else:
             privacy_note = None
 
+        # 支撑理由：站点存在收集个人信息的功能时，说明"为什么需要隐私政策"
+        features = []
+        url_blob = " ".join((p.final_url or "").lower() for p in self.all_pages)                    + " " + " ".join((u or "").lower() for u in (self.all_site_urls or []))
+        if re.search(r"member-(register|login)|/register|/signup", url_blob):
+            features.append("会员注册/登录")
+        if re.search(r"submit-question|my-question|/message|/liuyan", url_blob) or self.local_soup.find("form"):
+            features.append("留言/提交问题表单")
+        feature_note = (f"站点存在{'、'.join(features)}功能（会收集个人信息），按《个人信息保护法》"
+                        "应有隐私政策作为告知载体" if features else None)
+
         signals = []
         if has_icp:
             signals.append("ICP备案")
@@ -142,19 +152,28 @@ class AuthorityChecker(BaseChecker):
         icp_note = ("检测到 ICP 备案号位数异常（" + "、".join(bad_icp)
                     + "），工信部备案号为 8 位数字，位数不对会查不到、等于无效备案，请核对是否粘贴错误"
                     if bad_icp else None)
-        notes = "；".join(n for n in (privacy_note, icp_note, copyright_note) if n)
+        notes = "；".join(n for n in (privacy_note, feature_note, icp_note, copyright_note) if n)
 
+        # 2026-09-10 V6：结论/示例/影响三段统一以"实际缺失清单"为准，不再各说各话
+        missing = [n for n, has in (("ICP备案", has_icp), ("联系方式", has_contact),
+                                    ("隐私政策入口", has_privacy)) if not has]
+        if missing:
+            item.suggestion = ("补充缺失的可信信号：" + "、".join(missing)
+                               + "；律所/金融等特殊行业还需执业资质许可")
+            item.impact = (f"缺少 {'、'.join(missing)} 会直接削弱 AI 与用户对站点可信度的判断，"
+                           "降低推荐与引用概率")
         if len(signals) >= 2:
             if icp_note:
                 return self._result(item, Status.WARN,
-                                    f"可信信号完善但备案号无法验证: {', '.join(signals)}", detail=notes)
+                                    f"可信信号基本完善，但备案号无法验证: {', '.join(signals)}", detail=notes)
             return self._result(item, Status.PASS, f"可信信号完善: {', '.join(signals)}",
                                 detail=notes)
         if signals:
             return self._result(item, Status.WARN,
-                                f"可信信号不足，仅有: {', '.join(signals)}",
+                                f"可信信号不足，仅有: {', '.join(signals)}；缺少: {'、'.join(missing)}",
                                 detail=notes)
-        return self._result(item, Status.FAIL, "缺少 ICP 备案、联系方式、隐私政策等可信信号",
+        return self._result(item, Status.FAIL,
+                            "可信信号严重缺失：ICP备案、联系方式、隐私政策入口均未检出",
                             detail=notes)
 
     # 30. 客户评价与证言
@@ -169,6 +188,7 @@ class AuthorityChecker(BaseChecker):
             excellent="有客户 Logo 墙（≥10个知名客户）+ 详细客户案例（含背景/挑战/方案/成果数据）+ 客户证言，信息真实可验证",
             normal="有客户 Logo 展示，但缺少详细案例或评价；或有案例但客户知名度不高",
             failed="未检测到任何客户 Logo、评价或案例展示",
+            tier="bonus",  # 2026-09-10 V6定版：转化引导项，转只提醒
         )
         soup = self.local_soup
         testimonial_classes = ["testimonial", "review", "评价", "证言", "客户说", "customer-say"]
@@ -234,6 +254,7 @@ class AuthorityChecker(BaseChecker):
             excellent="有 ≥3 个指向行业权威网站/媒体/合作伙伴的高质量外链，且自身有被权威网站引用的记录",
             normal="有 1-2 个外部链接，或外链质量一般（如链向普通博客）",
             failed="没有任何指向第三方权威网站的外链，或所有链接都是站内链接",
+            tier="bonus",  # 2026-09-10 V6定版：绿萝算法后外链权重大减，且只数数量不验权威，转只提醒
         )
         from urllib.parse import urlparse
         base_domain = urlparse(self.page.final_url).netloc
@@ -270,12 +291,14 @@ class AuthorityChecker(BaseChecker):
             excellent="百度百科+维基百科+谷歌知识面板均有品牌实体，信息完整准确，与官网一致，定期更新",
             normal="至少在百度百科或维基百科有1个品牌词条，基本信息准确，但可能不够完整",
             failed="无任何百科词条或知识面板，品牌在 AI 知识图谱中不存在",
+            tier="bonus",  # 2026-09-10 V6定版：不联网AI凭训练知识判断，方法无效，转只提醒（需人工复核）
         )
         if not self.ai_engine:
             return self._result(item, Status.SKIP, "未检查（需配置AI语义引擎）",
                                 detail="未配置LLM，无法进行知识图谱检查")
         status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_knowledge_graph(self.page))
-        return self._result(item, status, summary, detail=detail)
+        return self._result(item, status, summary,
+                            detail=detail + "（AI 基于训练知识判定，非实时联网，需人工复核）")
 
     # 31. 跨平台内容分发
     def _check_cross_platform(self) -> CheckResult:
@@ -309,6 +332,7 @@ class AuthorityChecker(BaseChecker):
             excellent="内容页明确标注作者姓名+专业资质/头衔，有第一手经验或实测描述，关键数据标注来源，有编辑审核与更新机制，完整体现E-E-A-T",
             normal="有作者署名但无资质说明，或部分体现经验但不系统，数据来源标注不全",
             failed="无作者信息、无经验描述、无来源标注，内容像匿名通用文案，无法建立信任",
+            tier="bonus",  # 2026-09-10 V6定版：AI引用不做交叉验证，署名/经验/来源不构成扣分依据，转只提醒
         )
         if not self.ai_engine:
             return self._result(item, Status.SKIP, "未检查（需配置AI语义引擎）",
@@ -319,9 +343,10 @@ class AuthorityChecker(BaseChecker):
         content_page = self._pick_content_page()
         if not content_page:
             return self._result(item, Status.SKIP,
-                                "E-E-A-T为内容页检查项，首页不适用，且未抽样到内容页",
+                                "未抓取到内容详情页（栏目/列表页不作为检查对象），无法检查E-E-A-T内容可信度，需人工复核",
                                 detail="E-E-A-T评估对象是文章/案例/产品详情页等有主体内容的页面；"
-                                       "首页是品牌导航页不适用，与首页高度重复的克隆页也不能作为评估对象")
+                                       "首页是品牌导航页不适用，与首页高度重复的克隆页、栏目列表页也不能作为评估对象",
+                                skip_kind="missing")
         status, summary, detail = self.ai_engine.consensus(lambda: self.ai_engine.check_eeat(content_page))
         page_label = content_page.soup.title.get_text(strip=True)[:30] if content_page.soup.title else content_page.final_url
         return self._result(item, status, summary,
@@ -342,6 +367,7 @@ class AuthorityChecker(BaseChecker):
             failed="成立年份、规模或电话等关键信息在名片与页面上自相矛盾",
             scope="全站", applicable_pages="全站",
             suggestion="先内部定一份唯一的官方事实表（主体全称、成立年、规模、对外电话、官网标准写法），再同步改正文、页脚与隐形名片",
+            tier="bonus",  # 2026-09-10 V6定版：矛盾未阻止引用，转只提醒
         )
 
         # ── 来源一：全站隐形名片（JSON-LD 组织节点）──
@@ -497,7 +523,7 @@ class AuthorityChecker(BaseChecker):
         auth_pages = [(urlparse(p.final_url).path or "/") for p in visible_pages]
         if hard:
             return self._result(item, Status.FAIL,
-                                f"有 {len(hard)} 处公司关键信息自相矛盾，会削弱 AI 对'你是谁'的采信",
+                                f"有 {len(hard)} 处公司关键信息自相矛盾——矛盾会让 AI 随机采用其中一个版本，你失去对自己叙事的控制",
                                 detail=detail, pages=auth_pages)
         if soft:
             return self._result(item, Status.WARN,

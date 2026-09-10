@@ -60,7 +60,7 @@ class TechnicalChecker(BaseChecker):
             "robots.txt 是否存在，是否封禁 AI 爬虫，是否引用 sitemap",
             "访问 /robots.txt，检查 Disallow 规则和 Sitemap 引用",
             "允许主流 AI 爬虫，且引用了 sitemap 地址",
-            manual_check="浏览器访问 https://你的域名/robots.txt，查看是否有针对 GPTBot/ClaudeBot/Google-Extended/Bytespider 的 Disallow 规则，以及最后是否有 Sitemap: 行",
+            manual_check="浏览器打开 /robots.txt，按 RFC 9309 语义检查（支持通配符）：① A 组检索型爬虫任一被封→不合格。A组=搜索引擎（Baiduspider/360Spider/搜狗/神马/头条/Googlebot/Bingbot/Applebot）+ AI检索（Bytespider/OAI-SearchBot/PerplexityBot/KimiBot/ChatGPT-User/Perplexity-User/Claude-User）；② B 组训练型（GPTBot/ClaudeBot/Google-Extended/Cohere-AI）封禁属商业选择，不判级；③ 文末有 Sitemap: 行→sitemap 引用子项合格（sitemap 文件本身的质量由「站点地图」检查项单独查）",
             purpose="robots.txt 决定 AI 爬虫能不能抓你的站。另外，在robots.txt中引用sitemap，能让搜索引擎和AI爬虫自动发现你的sitemap，提升收录效率",
             excellent="robots.txt 存在，明确允许所有主流 AI 爬虫，引用了 sitemap 地址，规则清晰无歧义",
             normal="robots.txt 存在，未封禁主流 AI 爬虫，但未引用 sitemap 地址",
@@ -70,26 +70,87 @@ class TechnicalChecker(BaseChecker):
         if resp is None or resp.status_code != 200:
             return self._result(item, Status.WARN, "未找到 robots.txt（默认允许所有爬虫）")
 
-        content = resp.text.lower()
-        ai_bots = ["gptbot", "claudebot", "google-extended", "bytespider",
-                   "applebot", "chatgpt-user", "perplexitybot", "cohere-ai"]
-        blocked = []
-        for bot in ai_bots:
-            pattern = rf"user-agent:\s*{re.escape(bot)}.*?disallow:\s*/"
-            if re.search(pattern, content, re.DOTALL | re.IGNORECASE):
-                blocked.append(bot)
-
-        has_sitemap_ref = "sitemap:" in content
-
-        if blocked:
+        # 2026-09-10 V6：按 RFC 9309 语义解析（Allow/Disallow、* 通配、$ 锚定、最长匹配），
+        # 名单配置化（config/ai_crawlers.yaml，季度复核）。A组检索型（搜索引擎+AI检索）
+        # 任一被封→不合格；B组训练型封禁=商业选择，不判级不出报告。
+        groups = self._load_crawler_groups()
+        rules = self._parse_robots_rules(resp.text)
+        group_a = groups.get("search_engine", []) + groups.get("ai_retrieval", [])
+        blocked_a = [b for b in group_a if self._bot_blocked(rules, b)]
+        scope_note = "UA 可伪造，本结果为初判；robots.txt 只约束声明遵守的爬虫"
+        if blocked_a:
             return self._result(
                 item, Status.FAIL,
-                f"robots.txt 封禁了 {len(blocked)} 个 AI 爬虫",
-                detail=f"被封禁的爬虫: {', '.join(blocked)}",
+                f"robots.txt 封禁了 {len(blocked_a)} 个检索型爬虫（封禁=阻断收录或AI引用资格）",
+                detail=f"被封禁: {', '.join(blocked_a)}；{scope_note}",
             )
+        has_sitemap_ref = "sitemap:" in resp.text.lower()
         if has_sitemap_ref:
-            return self._result(item, Status.PASS, "robots.txt 存在，未封禁 AI 爬虫，已引用 sitemap")
-        return self._result(item, Status.WARN, "robots.txt 存在，未封禁 AI 爬虫，但未引用 sitemap 地址")
+            return self._result(item, Status.PASS, "robots.txt 存在，检索型爬虫未被封禁，已引用 sitemap",
+                                detail=scope_note)
+        return self._result(item, Status.WARN, "robots.txt 存在，未封禁检索型爬虫，但未引用 sitemap 地址",
+                            detail=scope_note)
+
+    @staticmethod
+    def _load_crawler_groups() -> dict:
+        """爬虫分组名单（配置文件化，季度复核只改 yaml）。"""
+        import os
+        import yaml
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "config", "ai_crawlers.yaml")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return yaml.safe_load(f).get("groups", {})
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _parse_robots_rules(text: str) -> dict:
+        """解析 robots.txt → {ua_token小写: {"allow": [...], "disallow": [...]}}。"""
+        rules = {}
+        uas = []
+        for raw in text.splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if not line or ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip().lower()
+            val = val.strip()
+            if key == "user-agent":
+                uas.append(val.lower())
+            elif key in ("allow", "disallow") and uas:
+                for ua in uas:
+                    bucket = rules.setdefault(ua, {"allow": [], "disallow": []})
+                    if val:
+                        bucket[key].append(val)
+        return rules
+
+    @staticmethod
+    def _robots_rule_matches(pattern: str, path: str) -> bool:
+        if not pattern:
+            return False
+        regex = "^" + re.escape(pattern).replace(r"\*", ".*")
+        if pattern.endswith("$"):
+            regex = regex[:-2] + "$"  # 去掉转义尾巴的 \$
+        return re.match(regex, path) is not None
+
+    @classmethod
+    def _bot_blocked(cls, rules: dict, bot: str) -> bool:
+        """bot 抓取根路径 / 是否被 Disallow：该 bot 所属组内 Allow/Disallow 最长匹配，同长 Allow 优先。"""
+        allow, disallow = [], []
+        bot_l = bot.lower()
+        for ua, r in rules.items():
+            if ua in bot_l or bot_l in ua:
+                allow += r.get("allow", [])
+                disallow += r.get("disallow", [])
+        best = ("", -1)
+        for p in allow:
+            if cls._robots_rule_matches(p, "/") and len(p) > best[1]:
+                best = ("allow", len(p))
+        for p in disallow:
+            if cls._robots_rule_matches(p, "/") and len(p) >= best[1]:
+                best = ("disallow", len(p))
+        return best[0] == "disallow"
 
     # 3. sitemap.xml
     def _check_sitemap(self) -> CheckResult:
@@ -323,6 +384,49 @@ class TechnicalChecker(BaseChecker):
             normal="首页有 canonical 标签，但内页可能缺失或指向不够精确",
             failed="未设置 canonical，或 canonical 指向错误页面（如全部指向首页）",
         )
+        # 2026-09-10 V6：canonical 五项机检（任一命中→不合格）
+        # ①href空/解析失败/模板占位符 ②指向站外(注册域≠本站) ③目标404/410/5xx
+        # ④目标3xx且落点≠声明值 ⑤目标页含noindex。注册域用内置公共后缀清单（eTLD+1）。
+        failures = []
+        fetch_cache = {}
+        for p in self.all_pages:
+            if not p.soup:
+                continue
+            c = p.soup.find("link", attrs={"rel": "canonical"})
+            if not c:
+                continue
+            href = (c.get("href") or "").strip()
+            path_p = urlparse(p.final_url).path or "/"
+            if not href or re.search(r"\{\{|\{%|%s", href):
+                failures.append(f"{path_p}：canonical 为空/解析失败/含模板占位符")
+                continue
+            target = urljoin(p.final_url, href)
+            if self._registered_domain(urlparse(target).netloc) != self._registered_domain(urlparse(p.final_url).netloc):
+                failures.append(f"{path_p}：canonical 指向站外（{urlparse(target).netloc}）")
+                continue
+            if target not in fetch_cache:
+                fetch_cache[target] = self.fetcher.fetch(target) if self.fetcher else None
+            fp = fetch_cache[target]
+            if fp is None:
+                continue  # 目标请求失败不武断判级
+            if fp.status_code in (404, 410) or fp.status_code >= 500:
+                failures.append(f"{path_p}：canonical 目标返回 {fp.status_code}（{target}）")
+                continue
+            if fp.final_url.rstrip("/") != target.rstrip("/"):
+                failures.append(f"{path_p}：canonical 声明 {target}，实际落在 {fp.final_url}")
+                continue
+            meta_r = ""
+            if fp.soup:
+                tag = fp.soup.find("meta", attrs={"name": "robots"})
+                meta_r = (tag or {}).get("content", "") if tag else ""
+            x_r = (fp.headers or {}).get("X-Robots-Tag", "")
+            if "noindex" in (meta_r + " " + x_r).lower():
+                failures.append(f"{path_p}：canonical 目标页含 noindex（{target}）")
+        if failures:
+            return self._result(item, Status.FAIL,
+                                f"{len(failures)} 个页面的 canonical 存在严重错误（指向站外/空值/死链/被noindex），等同告诉搜索引擎'别收录本页'",
+                                detail="；".join(failures[:6]),
+                                pages=[p.final_url for p in self.all_pages])
         # C2：全站自指校验——canonical 指向其他页面的页面逐个列出
         mismatch = []
         for p in self.all_pages:
@@ -384,19 +488,22 @@ class TechnicalChecker(BaseChecker):
             failed="初始 HTML 文本量极少，核心内容依赖 JS 渲染，AI 爬虫无法获取有效内容",
         )
         text = self.get_text()
+        note = "本次未检测 JS 依赖（渲染对比能力下期上线）"
         if len(text) < 100:
             return self._result(
                 item, Status.FAIL,
-                "初始 HTML 文本量过少，内容可能依赖 JS 动态渲染",
-                detail=f"初始文本仅 {len(text)} 字符",
+                "初始 HTML 纯文本 <100 字符，爬虫视同空壳，不收录不引用",
+                detail=f"初始文本仅 {len(text)} 字符。{note}",
             )
-        noscript = self.local_soup.find("noscript")
-        if noscript and len(text) < 500:
+        if len(text) < 500:
+            extra = "检测到 noscript 降级标签；" if self.local_soup.find("noscript") else ""
             return self._result(
                 item, Status.WARN,
-                "检测到 noscript 标签，部分内容可能需要 JS 才能显示",
+                f"服务端正文偏少（{len(text)} 字符）",
+                detail=f"{extra}{note}",
             )
-        return self._result(item, Status.PASS, f"初始 HTML 包含 {len(text)} 字符文本")
+        return self._result(item, Status.PASS, f"初始 HTML 包含 {len(text)} 字符文本",
+                            detail=note)
 
     # 10. 页面体积与速度
     def _check_page_size_speed(self) -> CheckResult:
@@ -440,7 +547,7 @@ class TechnicalChecker(BaseChecker):
 
         slow_note = "；最慢页：" + "、".join(f"{l} {t:.2f}s" for l, t, _ in slowest) if len(slowest) >= 1 else ""
         comp_note = f"传输压缩：{enc}" if compressed else "传输压缩：未开启"
-        scope_note = f"共测 {len(rows)} 页（首页+内页），此为服务器文档响应，非真实首屏渲染，受检测点网络影响，供参考"
+        scope_note = f"指标固定为 HTML 文档下载耗时（TTFB+下载），不是首屏渲染速度（LCP），共测 {len(rows)} 页（首页+内页），受检测点网络影响，供参考"
 
         head = rows[0]
         summary = f"首页 {head[1]:.2f}s/{head[2]:.0f}KB，{len(rows)} 页中位 {med_t:.2f}s/{med_kb:.0f}KB"
@@ -464,6 +571,31 @@ class TechnicalChecker(BaseChecker):
         path = p.path or "/"
         return path if len(path) <= 32 else "…" + path[-31:]
 
+    _PUBLIC_SUFFIXES = None  # 类级缓存
+
+    @classmethod
+    def _registered_domain(cls, host: str) -> str:
+        """注册域（eTLD+1）：内置精简公共后缀清单（config/public_suffixes.yaml）。
+        未命中已知后缀时整个 host 视为注册域（宁漏勿错）。"""
+        host = (host or "").lower().rstrip(".")
+        if not host:
+            return ""
+        if cls._PUBLIC_SUFFIXES is None:
+            import os
+            import yaml
+            path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                "config", "public_suffixes.yaml")
+            try:
+                with open(path, encoding="utf-8") as f:
+                    cls._PUBLIC_SUFFIXES = set(yaml.safe_load(f).get("suffixes", []))
+            except Exception:
+                cls._PUBLIC_SUFFIXES = set()
+        labels = host.split(".")
+        for n in range(len(labels), 0, -1):
+            if ".".join(labels[-n:]) in cls._PUBLIC_SUFFIXES:
+                return ".".join(labels[-(n + 1):]) if len(labels) > n else host
+        return host
+
     # 16. HEAD 与 GET 状态一致
     def _check_head_get(self) -> CheckResult:
         item = self._item(
@@ -476,12 +608,21 @@ class TechnicalChecker(BaseChecker):
             excellent="HEAD 与 GET 状态码一致",
             normal="个别静态资源 HEAD 行为不同（不影响正文页可不处理）",
             failed="正文页 HEAD 报 404/5xx 但 GET 正常",
+            tier="bonus",  # 2026-09-10 V6定版：很多服务器不支持HEAD（405/501），误报多，转只提醒
             scope="首页+内页", applicable_pages="首页+内页",
             suggestion="让服务端路由对 HEAD 与 GET 走同一控制器、返回相同状态码，勿把 HEAD 误判成静态文件缺失",
         )
         if self.fetcher is None:
             return self._result(item, Status.SKIP, "无抓取器，无法比对 HEAD")
-        targets = [self.page] + (self.extra_pages or [])[:3]
+        # 按最终地址去重（重定向合并后的重复页不重复计数）
+        _seen = set()
+        targets = []
+        for _p in [self.page] + (self.extra_pages or [])[:3]:
+            k = _p.final_url.rstrip("/")
+            if k in _seen:
+                continue
+            _seen.add(k)
+            targets.append(_p)
         mismatch = []
         mismatch_pages = []
         checked = 0
@@ -515,6 +656,7 @@ class TechnicalChecker(BaseChecker):
             failed="完全没有 og 标签，分享卡片不可控",
             scope="全站", applicable_pages="全站",
             suggestion="在公共页头补 og:title/description/url/image/type/site_name，文章页 og:type 用 article",
+            tier="bonus",  # 2026-09-10 V6定版：只影响社交分享卡片，转只提醒
         )
         core = ["og:title", "og:description", "og:image", "og:url", "og:type"]
 
@@ -544,7 +686,7 @@ class TechnicalChecker(BaseChecker):
     # 18. 匿名页会话与缓存
     def _check_session_cache(self) -> CheckResult:
         item = self._item(
-            "tech-18", "页面缓存与会话开销", Priority.P2,
+            "tech-18", "页面缓存与会话开销", Priority.P1,
             "匿名访问的前台只读页是否无意义地开启了会话 Cookie、并禁止了缓存",
             "检查首页响应头 Set-Cookie 是否含会话标识，Cache-Control 是否 private/no-cache",
             "静态首页不向匿名访客下发会话 Cookie，且允许公共短缓存",
@@ -604,8 +746,9 @@ class TechnicalChecker(BaseChecker):
         head_lack_hsts = is_https and "HSTS 强制 HTTPS" in missing
         if len(missing) >= 3:
             return self._result(item, Status.WARN, f"缺 {len(missing)}/4 项基础安全响应头",
-                                detail=("；".join(missing)) + ("；HTTPS 站点建议优先补 HSTS" if head_lack_hsts else ""))
-        return self._result(item, Status.WARN, f"安全响应头缺：{'、'.join(missing)}")
+                                detail=("；".join(missing)) + ("；HTTPS 站点建议优先补 HSTS" if head_lack_hsts else "")
+                                + "；本项价值主要在等保合规而非排名")
+        return self._result(item, Status.WARN, f"安全响应头缺：{'、'.join(missing)}；本项价值主要在等保合规而非排名")
 
     # 20. 多入口统一跳转到首选域（www/非www、http/https 收口）
     def _check_host_canonicalization(self) -> CheckResult:
@@ -697,11 +840,12 @@ class TechnicalChecker(BaseChecker):
             failed="未设置 viewport meta 标签，或移动端布局严重错乱",
         )
         viewport = self.page.meta("viewport")
+        bd_note = "另：移动适配与落地页弹窗体验引擎测不了，请到百度资源平台自查（百度有独立的移动适配要求与落地页体验算法）"
         if not viewport:
-            return self._result(item, Status.FAIL, "未设置 viewport meta 标签")
+            return self._result(item, Status.FAIL, "未设置 viewport meta 标签", detail=bd_note)
         if "width=device-width" in viewport.lower():
-            return self._result(item, Status.PASS, "已设置响应式 viewport")
-        return self._result(item, Status.WARN, f"viewport 设置异常: {viewport}")
+            return self._result(item, Status.PASS, "已设置响应式 viewport", detail=bd_note)
+        return self._result(item, Status.WARN, f"viewport 设置异常: {viewport}", detail=bd_note)
 
     # 12. URL Slug 可读性
     def _check_url_slug(self) -> CheckResult:
@@ -745,7 +889,16 @@ class TechnicalChecker(BaseChecker):
                 good_count += 1
                 continue
 
-            numeric_segments = [s for s in segments if re.match(r'^\d+$', s)]
+            # 日期型数字段（如 /2026/09/）是正常 CMS 结构，不计问题
+            def _is_date_segment(idx, seg):
+                if not re.match(r'^\d+$', seg or ''):
+                    return False
+                if len(seg) == 4 and 1900 <= int(seg) <= 2100:
+                    return True
+                return len(seg) in (1, 2) and idx > 0 and re.match(r'^(19|20)\d{2}$', segments[idx - 1] or '') is not None
+
+            numeric_segments = [seg for i, seg in enumerate(segments)
+                                if re.match(r'^\d+$', seg) and not _is_date_segment(i, seg)]
             if numeric_segments:
                 page_issues.append(f"纯数字路径({', '.join(numeric_segments)})")
 
@@ -764,17 +917,23 @@ class TechnicalChecker(BaseChecker):
                 good_count += 1
 
         total = len(pages_to_check)
+        # 2026-09-10 V6：来源挂实测页清单，悬浮框可展开逐条路径，避免"没真检测"的观感
+        checked_urls = [p.final_url for p in pages_to_check]
+        checked_paths = "、".join(urlparse(p.final_url).path or "/" for p in pages_to_check)
         if not all_issues:
             return self._result(item, Status.PASS,
                                 f"所有{total}个子页面URL结构良好",
-                                detail=f"已检查{total}个内页路径，均简短可读")
+                                detail=f"已逐页检查以下 {total} 个内页路径，均简短可读：{checked_paths}",
+                                pages=checked_urls)
         if len(all_issues) <= total * 0.3:
             return self._result(item, Status.WARN,
                                 f"URL结构有改进空间（{good_count}/{total}良好）",
-                                detail="；".join(all_issues[:5]))
+                                detail="；".join(all_issues[:5]),
+                                pages=checked_urls)
         return self._result(item, Status.FAIL,
                             f"URL结构可读性差（仅{good_count}/{total}良好）",
-                            detail="；".join(all_issues[:5]))
+                            detail="；".join(all_issues[:5]),
+                            pages=checked_urls)
 
     # 14. CMS指纹识别
     def _load_cms_config(self) -> dict:
@@ -1341,7 +1500,7 @@ class TechnicalChecker(BaseChecker):
                                 detail="禁止: " + "; ".join(forbidden[:3]))
         else:
             return self._result(item, Status.PASS, "未发现暴露的后台路径",
-                                detail=f"扫描了{len(admin_paths)}个常见路径，均为404或重定向")
+                                detail=f"扫描了{len(admin_paths)}个常见路径，均为404或重定向；主动探测可能被贵方 WAF/访问日志记录，属正常审计行为")
 
 
     # 24. 站内搜索页可索引性（A1 ④：noindex=合规不报；可索引=WARN 建议加 noindex；搜索页不进通用打分）
@@ -1360,7 +1519,15 @@ class TechnicalChecker(BaseChecker):
         )
         pages = getattr(self, "search_pages", None) or []
         if not pages:
-            return self._result(item, Status.SKIP, "未检测到站内搜索结果页", skip_kind="na")
+            # 2026-09-10 V6：未检查也要给检测证据（查了多少页、有无搜索表单）
+            n_urls = len(getattr(self, "all_site_urls", []) or []) or len(self.all_pages)
+            has_form = bool(self.local_soup.find("form")) or bool(
+                self.local_soup.find("input", attrs={"type": "search"}))
+            form_note = "首页存在表单但未见搜索结果页" if has_form else "首页亦无搜索表单"
+            return self._result(item, Status.SKIP,
+                                f"站点未配置站内搜索功能，本项不适用"
+                                f"（已核查 {n_urls} 个页面，无搜索结果页特征，{form_note}）",
+                                skip_kind="na")
         indexable = [p.final_url for p in pages if not self._search_noindexed(p)]
         if not indexable:
             return self._result(item, Status.SKIP,
@@ -1406,8 +1573,15 @@ class TechnicalChecker(BaseChecker):
             if has_static:
                 pag_static.append(p.final_url)
                 continue
-            ui = p.soup.find(class_=re.compile(r"pagination|pager|page-numbers|page-nav", re.I))
-            if ui:
+            # 2026-09-10 V6：轮播组件的圆点指示器（swiper-pagination 等）不是列表翻页，排除
+            has_ui = False
+            for el in p.soup.find_all(class_=re.compile(r"pagination|pager|page-numbers|page-nav", re.I)):
+                blob = (str(el.get("class") or []) + " " + str(el.get("id") or "")).lower()
+                if re.search(r"swiper|carousel|slick|slider|slide|banner", blob):
+                    continue
+                has_ui = True
+                break
+            if has_ui:
                 js_ui.append(p.final_url)
         if js_ui:
             return self._result(item, Status.WARN,

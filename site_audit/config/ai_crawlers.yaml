@@ -1,0 +1,42 @@
+# AI/搜索爬虫名单（2026-09-10 V6 定版；每季度复核，只改此文件不改代码）
+# UA 匹配不区分大小写、按子串命中；UA 可伪造，名单命中仅为初判
+groups:
+  search_engine:        # A组 检索型-搜索引擎（封禁→不合格：阻断收录）
+    - Baiduspider
+    - 360Spider
+    - Sogou web spider
+    - YisouSpider
+    - ToutiaoSpider
+    - Googlebot
+    - Bingbot
+    - Applebot
+  ai_retrieval:         # A组 检索型-AI检索/实时引用（封禁→不合格：失去引用资格）
+    - Bytespider
+    - OAI-SearchBot
+    - PerplexityBot
+    - KimiBot
+    - ChatGPT-User
+    - Perplexity-User
+    - Claude-User
+  training:             # B组 训练型（封禁=商业选择，不计分、不出现在问题列表）
+    - GPTBot
+    - ClaudeBot
+    - Google-Extended
+    - Cohere-AI
+  observer:             # 扩展观察名单（默认不展示）
+    - Applebot-Extended
+    - Meta-ExternalAgent
+    - Amazonbot
+    - CCBot
+    - MistralAI-User
+    - DeepSeekBot
+    - TongyiBot
+    - ChatGLMBot
+    - TencentPR
+    - iFlytekBot
+    - YuanbaoBot
+  on_demand:            # 按需触发型（多数不承诺遵守 robots）
+    - Meta-ExternalFetcher
+  preview:              # 分享预览类（声明绕过 robots，不参与判定）
+    - FacebookBot
+    - FacebookExternalHit

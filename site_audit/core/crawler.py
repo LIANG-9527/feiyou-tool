@@ -342,7 +342,8 @@ class SiteCrawler:
         result: dict = {}
         sub_maps = [f"{hp.scheme}://{hp.netloc}/sitemap.xml"]
         seen = set()
-        for _ in range(2):  # 最多下钻两层 sitemap-index
+        # 层级硬上限 3 层（含根）：防止站点地图错误嵌套导致无限钻探；seen 集合兜底防环
+        for _ in range(3):
             next_maps = []
             for sm in sub_maps:
                 if sm in seen:
@@ -736,14 +737,40 @@ class SiteCrawler:
             candidates = [candidates[int(i * stride)] for i in range(limit)]
             sampled_note = f"（内链共 {total_links} 条，按 {limit / total_links:.0%} 抽样 {limit} 条）"
         broken = []
-        for url, anchor, pos in candidates:
-            try:
-                resp = self.fetcher.fetch_raw(url)
-                code = resp.status_code if resp else 0
-            except Exception:
-                code = 0
-            if code == 0 or code >= 400:
+        blocked = []  # 403/429=被站点防护拦截：页面活着但拒绝自动化访问，无法判定死活，不计失效
+        # 2026-09-10 V6：失败退避重试（1s/3s）；连续 3 条无响应=被防护限流，
+        # 停止检查并把最近的连续失败撤下（那不是死链，是不让查了）
+        import time as _time
+        consecutive = 0
+        limited = False
+        # 本轮已成功访问(200)过的页面复查失败=防护拦截，不算死链
+        sampled_200 = {self._normalize(p.final_url) for p in pages if p.status_code == 200}
+        for idx, (url, anchor, pos) in enumerate(candidates):
+            if consecutive >= 3:
+                limited = True
+                break
+            code = 0
+            for wait in (0, 1, 3):
+                if wait:
+                    _time.sleep(wait)
+                try:
+                    resp = self.fetcher.fetch_raw(url)
+                    code = resp.status_code if resp else 0
+                except Exception:
+                    code = 0
+                if code != 0:
+                    break
+            # 2026-09-10 V6：死链确认需要明确错误码（404/410/5xx）；
+            # 无响应/被拦截一律归"无法判定死活"，需人工复核，不硬判失效
+            if code == 0:
+                consecutive += 1
+                blocked.append((url, "无响应", anchor, pos))
+                continue
+            consecutive = 0
+            if code in (403, 429):
+                blocked.append((url, code, anchor, pos))
+            elif code >= 400:
                 broken.append((url, code, anchor, pos))
         stats = {"checked": len(candidates), "total": total_links, "sites_pages": len(pages),
-                 "sampled_note": sampled_note}
+                 "sampled_note": sampled_note, "blocked": blocked, "limited": limited}
         return broken, bad_schemes, stats

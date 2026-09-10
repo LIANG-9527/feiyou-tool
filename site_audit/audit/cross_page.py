@@ -10,8 +10,9 @@ from site_audit.core.crawler import SiteCrawler
 
 
 def _bigrams(s: str) -> set:
+    """2026-09-10 V6定版：统一为8字符滑窗（原2字符），降低中文标题天然高相似导致的误报。"""
     s = re.sub(r"[\s\-\|_–—,，。\.、:：;；()（）\[\]【】]+", "", s or "")
-    return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) >= 2 else set()
+    return {s[i:i + 8] for i in range(len(s) - 8)} if len(s) >= 8 else ({s} if s else set())
 
 
 def _jaccard(a: set, b: set) -> float:
@@ -50,6 +51,8 @@ class CrossPageChecker(BaseChecker):
                                 "未检查（需多页面抽样，当前仅抓取首页）")
         crawler = SiteCrawler(self.fetcher)
         broken, bad_schemes, link_stats = crawler.check_internal_link_status(self.all_pages)
+        # 2026-09-10 V6：403/429=防护拦截，不计失效，明细注明
+        blocked_links = link_stats.get("blocked", [])
         sampled = [p.final_url for p in self.all_pages]
         # 站内非法协议链接（如 htts:// 漏写字母）等同死链；外链只在明细提示、不改判级
         for href, is_internal, anchor in bad_schemes:
@@ -61,18 +64,30 @@ class CrossPageChecker(BaseChecker):
         broken.sort(key=lambda x: POS_RANK.get(x[3], 1))
         if not broken:
             checked_n = link_stats.get("checked", 0)
+            blocked_note = ""
+            if blocked_links:
+                blocked_note = (f"；另有 {len(blocked_links)} 条链接重试后仍无响应，无法判定死活、需人工复核（如 "
+                                + "、".join(u for u, _, _, _ in blocked_links[:3]) + "）")
             msg = (f"抽样检查的站内链接均可访问（检查 {checked_n} 条内链，覆盖 {len(self.all_pages)} 个页面）"
+                   + blocked_note
                    + (f"；发现 {len(ext_bad)} 个外链协议拼写疑似笔误（如 htts://），点击即失效，建议修正"
                       if ext_bad else ""))
             return self._result(item, Status.PASS, msg,
                                 detail="；".join(ext_bad[:5]) if ext_bad else None,
                                 pages=sampled)
         detail = "；".join(f"{b[0]}（{b[3]}）→ {b[1] or '无响应'}" for b in broken[:8])
+        if blocked_links:
+            detail += f"；另有 {len(blocked_links)} 条链接重试后仍无响应，无法判定死活、需人工复核"
         if ext_bad:
             detail += "；外链协议笔误：" + "、".join(ext_bad[:5])
         if link_stats.get("sampled_note"):
             detail += "；" + link_stats["sampled_note"]
-        status = Status.FAIL if len(broken) >= 3 else Status.WARN
+        limited = link_stats.get("limited")
+        if limited:
+            detail += "；检测中途被站点防护限流，剩余链接未判定（不计死链），建议稍后复检"
+            status = Status.WARN  # 限流时未覆盖全量，最多判"不足"
+        else:
+            status = Status.FAIL if len(broken) >= 3 else Status.WARN
         return self._result(item, status, f"发现 {len(broken)} 个失效内部链接",
                             detail=detail,
                             pages=sampled + [u for u, _, _, _ in broken if u not in sampled])
@@ -122,8 +137,11 @@ class CrossPageChecker(BaseChecker):
                                 f"{len(metas)} 个抽样页面的 Title/Description 均唯一")
         n = len(dup_titles) + len(dup_descs)
         status = Status.FAIL if n >= 3 else Status.WARN
+        # 来源列出实际重复的页面 URL，不再笼统标"全站"
+        dup_urls = sorted({u for urls in list(dup_titles.values()) + list(dup_descs.values())
+                           for u in urls})
         return self._result(item, status, f"发现 {n} 组重复的 Title/Description",
-                            detail="；".join(problems))
+                            detail="；".join(problems), pages=dup_urls)
 
     # 内容-08 关键词蚕食（规则版：标题主题相似度）
     def _check_keyword_cannibalization(self) -> CheckResult:
@@ -135,6 +153,7 @@ class CrossPageChecker(BaseChecker):
             manual_check="列出站内主要页面及核心关键词，对比是否有2个以上页面瞄准同一个词，标题和正文主题是否高度重叠",
             purpose="多个页面争夺同一关键词时，AI 和搜索引擎分不清该推荐哪页，可能都不引用或引用错误页面，整站该词排名互相拖后腿",
             excellent="各页面 Title 主题清晰差异化，无高相似页面，形成明确关键词矩阵",
+            tier="bonus",  # 2026-09-10 V6定版：规则初筛误报率高（中文标题天然高相似），转只提醒、需人工确认
             normal="存在少量主题相近页面，但已通过 canonical 或内链锚文本区分主次",
             failed="多个页面标题主题高度重叠，疑似互相蚕食且无主次区分",
         )
