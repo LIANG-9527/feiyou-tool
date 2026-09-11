@@ -19,50 +19,46 @@ logger = logging.getLogger("site_audit.ai_engine")
 # 修复品牌变体漏核心名导致的百科误判（hcqycs 案例：变体只有全名/简称，漏「和创企赢」）。
 PROMPT_VERSION = "geo-v1.1"
 
-# DeepSeek 官方峰谷价格（人民币/百万tokens，2026-09-05 核对 api-docs.deepseek.com/quick_start/pricing）
-# 项目配置的 deepseek-chat 已弃用，自动路由到 deepseek-v4-flash 非思考模式。
-# 峰谷规则：高峰=北京时间周一至周五 9:00-12:00、14:00-18:00（午休12-14为空闲）；空闲价=高峰价一半。
+# 阿里云百炼 qwen3.8-flash 官方价格（人民币/百万tokens，2026-09-11 核对百炼控制台价目表，
+# 国内华北2·北京，0<Token≤1M 单档）：输入 0.8，输出 2.7（非思考/思考同价），
+# 输入·隐式命中缓存 0.1（官方标「上下文缓存享有折扣」）。缓存命中取隐式口径，对应 cached_tokens。
+# 百炼无 DeepSeek 那种峰谷分时，故高峰/空闲两表同值、仅保留分时桶结构以兼容旧报告。
 # 价格如官方调整，改下面两组常量即可。
-PRICE_PEAK = {   # 高峰时段（工作日 9-12 / 14-18）
-    "input_hit": 0.10,     # 输入·缓存命中
-    "input_miss": 3.0,     # 输入·缓存未命中
-    "output": 9.0,         # 输出
+PRICE_PEAK = {   # 百炼无峰谷，此表与空闲表同值
+    "input_hit": 0.1,      # 输入·隐式命中缓存
+    "input_miss": 0.8,     # 输入·缓存未命中
+    "output": 2.7,         # 输出（非思考/思考同价）
 }
-PRICE_OFFPEAK = {  # 空闲时段（其余全部时间，含周末/早晚/工作日午休）
-    "input_hit": 0.05,
-    "input_miss": 1.5,
-    "output": 4.5,
+PRICE_OFFPEAK = {  # 与高峰同值：百炼按量计费，不分时段
+    "input_hit": 0.1,
+    "input_miss": 0.8,
+    "output": 2.7,
 }
 
 
 def _is_peak(dt) -> bool:
-    """DeepSeek 高峰时段：北京时间周一至周五 9:00-12:00、14:00-18:00。
-    注意午休 12:00-14:00 属于空闲时段，不是高峰。"""
-    if dt.weekday() >= 5:  # 周六=5 周日=6
-        return False
-    return 9 <= dt.hour < 12 or 14 <= dt.hour < 18
+    """百炼无峰谷分时，恒为 False（保留函数以兼容 estimate_cost_cny 的旧调用路径）。"""
+    return False
 
 
 def _price_for_hour(hour_key: str) -> dict:
     """按调用时刻返回价格表 {input_hit, input_miss, output}（元/百万tokens）。
 
-    hour_key 格式 "YYYY-MM-DDTHH"（本地时间=北京时间），含日期与小时，
-    完整覆盖 DeepSeek 峰谷规则（工作日+时段双重维度）。
-    解析失败按高峰价返回（上界，不低估成本）。
+    百炼为按量计费、不分时段，两表同值；保留 hour_key 结构以兼容历史报告的分时桶数据。
     """
     try:
-        dt = datetime.strptime(hour_key, "%Y-%m-%dT%H")
+        datetime.strptime(hour_key, "%Y-%m-%dT%H")
     except (ValueError, TypeError):
         return PRICE_PEAK
-    return PRICE_PEAK if _is_peak(dt) else PRICE_OFFPEAK
+    return PRICE_PEAK
 
 
 def estimate_cost_cny(tu: dict, ts_hint: str = None) -> float:
-    """按 DeepSeek 官方峰谷价格估算 token 费用（元）。
+    """按阿里云百炼官方价格估算 token 费用（元）。
 
-    优先用 usage_by_hour 分时桶逐桶查价（精确峰谷对账）；
-    旧报告无分时数据时，用 ts_hint（报告时间戳，"YYYY-MM-DD HH:MM:SS"）
-    判断该次诊断所处时段按单一时段价计算；无 ts_hint 按高峰价（上界）。
+    优先用 usage_by_hour 分时桶逐桶查价（旧报告数据兼容）；
+    旧报告无分时数据时，用 ts_hint（报告时间戳，"YYYY-MM-DD HH:MM:SS"）。
+    百炼不分峰谷，两表同值。
     无缓存细分按全部未命中计价（上界，不会低估成本）。
     """
     if not tu:
@@ -165,19 +161,24 @@ class AIEngine:
     """LLM驱动的语义分析引擎"""
 
     def __init__(self, base_url: str, api_key: str, model: str,
-                 temperature: float = 0, timeout: int = 60, max_retries: int = 2):
+                 temperature: float = 0, timeout: int = 60, max_retries: int = 2,
+                 enable_search: bool = False, enable_thinking: bool = False):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
         self.max_retries = max_retries
+        # 联网搜索开关：开启后 LLM 调用可实时联网核实品牌/百科等外部信息（百炼支持）
+        self.enable_search = enable_search
+        # 深度思考开关：开启思维链推理（qwen3.8-flash 思考/非思考同价）
+        self.enable_thinking = enable_thinking
         self._cache = {}
         # 缓存开关：consensus 多轮判定时第 2..n 轮关闭缓存，确保真调 LLM 而非复读第 1 轮结果
         self._cache_enabled = True
         # 原始 LLM 调用留痕：[{system, user, response}]，供快照落盘取证
         self.raw_log = []
-        # Token 用量累计（每次成功调用 DeepSeek 都累加 usage 字段），用于报告成本展示
+        # Token 用量累计（每次成功调用 LLM 都累加 usage 字段），用于报告成本展示
         self.token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "calls": 0}
         # AI 深度检查页数预算（A2 决议）：全站爬取后规则类检查覆盖全站，
         # LLM 深度分析最多评估 8 个不同页面，防止成本随站点规模膨胀
@@ -213,7 +214,9 @@ class AIEngine:
         self.token_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
         self.token_usage["completion_tokens"] += usage.get("completion_tokens", 0)
         self.token_usage["total_tokens"] += usage.get("total_tokens", 0)
-        hit = usage.get("prompt_cache_hit_tokens") or 0
+        # 缓存命中字段：DeepSeek 用 prompt_cache_hit_tokens；百炼用 prompt_tokens_details.cached_tokens
+        hit = (usage.get("prompt_cache_hit_tokens")
+               or (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0)
         miss = usage.get("prompt_cache_miss_tokens")
         if miss is None:
             miss = max(usage.get("prompt_tokens", 0) - hit, 0)
@@ -252,6 +255,9 @@ class AIEngine:
             "temperature": self.temperature,
             "max_tokens": 2000,
             "response_format": {"type": "json_object"},
+            **({"enable_search": True} if self.enable_search else {}),
+            # 百炼 qwen3.8 系列默认开思考，关闭须显式传 false，不传等于没关
+            **({"enable_thinking": bool(self.enable_thinking)} if self.enable_search else {}),
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",

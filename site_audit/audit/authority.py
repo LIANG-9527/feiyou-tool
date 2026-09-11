@@ -93,9 +93,11 @@ class AuthorityChecker(BaseChecker):
         # ICP 备案号可能由 JS 动态渲染，直接在原始 HTML 中搜索
         # 格式：[省份简称]ICP备XXXXXXXX号[-数字]，不限定省份，兜底所有变体
         has_icp = bool(re.search(r"ICP备\d+号", raw_html))
-        # 工信部备案号为省简称+ICP备+8位数字+可选-序号；位数不符则工信部查不到，等于无效备案
+        # 备案号为省简称+ICP备+数字+可选-序号。
+        # 2026-09-11 修正：工信部号码已扩展——老站 8 位（如 11044640），新站 10 位（如 2025459413），
+        # 原「必须 8 位」会把新号误判为异常，故放宽为 8~10 位。
         icp_nums = re.findall(r"[京津沪渝冀晋辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云陕甘青蒙宁新藏]ICP备(\d+)号(?:-\d+)?", raw_html)
-        bad_icp = [n for n in icp_nums if len(n) != 8]
+        bad_icp = [n for n in icp_nums if len(n) not in (8, 10)]
 
         # 版权年份过期只作提示、不扣分：AI 评估企业活跃度时会往"可能停运"方向推一小步
         current_year = time.localtime().tm_year
@@ -150,7 +152,7 @@ class AuthorityChecker(BaseChecker):
             signals.append("隐私政策")
 
         icp_note = ("检测到 ICP 备案号位数异常（" + "、".join(bad_icp)
-                    + "），工信部备案号为 8 位数字，位数不对会查不到、等于无效备案，请核对是否粘贴错误"
+                    + "），工信部备案号为 8 位（老站）或 10 位（新站）数字，位数不对会查不到，请核对"
                     if bad_icp else None)
         notes = "；".join(n for n in (privacy_note, feature_note, icp_note, copyright_note) if n)
 

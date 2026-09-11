@@ -137,10 +137,12 @@ def _create_ai_engine(llm_config: dict = None) -> AIEngine | None:
         return AIEngine(
             base_url=llm_config["base_url"],
             api_key=llm_config["api_key"],
-            model=llm_config.get("model", "deepseek-chat"),
+            model=llm_config.get("model", "qwen3.8-flash"),
             temperature=0,
             timeout=llm_config.get("timeout", 60),
             max_retries=llm_config.get("max_retries", 2),
+            enable_search=llm_config.get("enable_search", False),
+            enable_thinking=llm_config.get("enable_thinking", False),
         )
     except Exception as e:
         logger.warning(f"AI引擎初始化失败: {e}")
@@ -257,7 +259,7 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
                               site_brand=site_brand,
                               crawl_stats=getattr(crawler, "crawl_stats", {}),
                               light_scan_meta=light_scan_meta)
-        # 按 DeepSeek 官方价格折算本次诊断费用（元）
+        # 按阿里云百炼官方价格折算本次诊断费用（元）
         if report.token_usage:
             report.token_usage["cost_cny"] = estimate_cost_cny(report.token_usage)
 

@@ -1220,7 +1220,7 @@ def generate_html_report(report: AuditReport) -> str:
       <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.912 5.813h6.113l-4.943 3.587 1.888 5.813L12 14.626l-4.97 3.587 1.888-5.813L3.975 8.813h6.113z"/></svg>
       <span>30 秒看懂这份报告</span>
     </div>
-    <p style="font-size:18px;font-weight:700;color:var(--jl-neutral-900);line-height:1.7;">{e(headline)}</p>
+    <p style="font-size:14px;font-weight:700;color:var(--jl-neutral-900);line-height:1.7;">{e(headline)}</p>
   </section>
 
   {light_scan_panel_html}

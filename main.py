@@ -4,6 +4,7 @@ from typing import Optional
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 import threading
@@ -84,18 +85,20 @@ def load_config(config_path: str = None) -> dict:
         return yaml.safe_load(f)
 
 
-def build_agent(config: dict) -> Agent:
+def build_agent(config: dict, thinking: bool | None = None) -> Agent:
     llm_cfg = config["llm"]
     llm = LLMClient(
         base_url=llm_cfg["base_url"],
         api_key=llm_cfg["api_key"],
         model=llm_cfg["model"],
         temperature=llm_cfg.get("temperature", 0.7),
-        max_tokens=llm_cfg.get("max_tokens", 4096),
+        max_tokens=llm_cfg.get("max_tokens", 16384),
         timeout=llm_cfg.get("timeout", 120),
         max_retries=llm_cfg.get("max_retries", 3),
+        enable_search=llm_cfg.get("enable_search", False),
+        enable_thinking=llm_cfg.get("enable_thinking", False),
     )
-    return Agent(llm, max_concurrency=llm_cfg.get("max_concurrency", 5))
+    return Agent(llm, max_concurrency=llm_cfg.get("max_concurrency", 5), thinking=thinking)
 
 
 def save_output(result: dict, config: dict) -> dict:
@@ -108,7 +111,10 @@ def save_output(result: dict, config: dict) -> dict:
 
     brand = result.get("brand", "unknown")
     ts = time.strftime("%Y%m%d_%H%M%S")
-    base_name = f"{brand}_{ts}"
+    # 文件名带方法标识，同一目录下可肉眼区分报告归属
+    _tag = {"geo_query_mining": "问句挖掘", "customer_market_research": "市场调研"}.get(
+        result.get("method_id"), (result.get("method_id") or "报告")[:10])
+    base_name = f"{_tag}_{brand}_{ts}"
     paths = {}
 
     if out_cfg.get("save_json", True):
@@ -173,6 +179,15 @@ def _md_to_html(md: str) -> str:
         elif _re.match(r"^\d+\.\s+", ln):
             _txt = _sub(r"^\d+\.\s+", "", ln)
             out.append("<ol><li>" + _inline(_txt) + "</li></ol>")
+        elif ln.startswith(">"):
+            # 连续引用行合并为一个 blockquote（「本章结论」框）
+            q = [_inline(ln.lstrip("> ").rstrip())]
+            i += 1
+            while i < len(lines) and lines[i].startswith(">"):
+                q.append(_inline(lines[i].lstrip("> ").rstrip()))
+                i += 1
+            out.append("<blockquote>" + "<br>".join(q) + "</blockquote>")
+            continue
         elif ln.strip():
             out.append(f"<p>{_inline(ln)}</p>")
         i += 1
@@ -192,38 +207,131 @@ def _md_to_html(md: str) -> str:
     return "\n".join(merged)
 
 
+def _mr_brief_html(brief, brand) -> str:
+    """企业画像页签：按 intel-deck 模板基本面页风格渲染；无数据返回空串（页签仍显示占位）。"""
+    import html as _h
+    if not isinstance(brief, dict):
+        return ""
+    e = _h.escape
+    info = brief.get("info") or {}
+    layout = brief.get("layout") or {}
+    org = brief.get("org_tree") or {}
+    culture = brief.get("culture") or {}
+    tl = sorted(brief.get("timeline") or [], key=lambda x: str(x.get("date", "")), reverse=True)
+    gaps = [str(x) for x in (brief.get("gaps") or []) if str(x).strip()]
+    if not (info or layout or org or culture or tl):
+        return ""
+
+    def _v(x):
+        return e(str(x)) if x not in (None, "", []) else "待补"
+
+    quals = "、".join(map(str, info.get("qualifications") or [])) or None
+    patents = "、".join(map(str, info.get("patents") or [])) or None
+    ig = [("成立时间", info.get("founded")), ("总部/地址", info.get("address")), ("行业地位", info.get("industry_position")),
+          ("年营收", info.get("revenue")), ("员工人数", info.get("employees")), ("资质", quals), ("专利", patents)]
+    ig_html = "".join('<div class="iitem"><span class="k2">' + e(k) + '</span><span class="v">' + _v(v) + '</span></div>'
+                      for k, v in ig)
+
+    cells = []
+    if layout.get("headquarters"):
+        cells.append('<div class="org-cell">总部：' + e(str(layout["headquarters"])) + '</div>')
+    for key in ("branches", "subsidiaries", "sites"):
+        val = layout.get(key)
+        items = [str(x) for x in val if str(x).strip() and str(x) != "None"] if isinstance(val, list) else ([str(val)] if val else [])
+        for x in items[:6]:
+            cells.append('<div class="org-cell sub">' + e(x[:48]) + ('…' if len(x) > 48 else '') + '</div>')
+    org1 = ('<div class="org-cap">企业架构布局（公开信息推断，首访验证）</div><div class="org">'
+            '<div class="org-box">' + e(str(info.get("full_name") or brand)) + '</div>'
+            + ('<div class="org-line"></div><div class="org-row">' + "".join(cells) + '</div>' if cells else '') + '</div>')
+
+    org2 = ""
+    if org.get("name"):
+        kids = [k for k in (org.get("children") or []) if isinstance(k, dict) and k.get("name")]
+        kid_html = "".join('<div class="org-cell sub">' + e(str(k["name"])) + '</div>' for k in kids[:12])
+        org2 = ('<div class="org-cap">部门架构（推断，两层示意）</div><div class="org">'
+                '<div class="org-box" style="background:#3567ff">' + e(str(org["name"])) + '</div>'
+                + ('<div class="org-line"></div><div class="org-row">' + kid_html + '</div>' if kid_html else '') + '</div>')
+
+    cult = ""
+    cult_items = [x for x in (("使命", culture.get("mission")), ("愿景", culture.get("vision")), ("价值观", culture.get("values"))) if x[1]]
+    if cult_items:
+        cult = '<div class="card"><div class="ct">🏛 企业文化</div><div class="cb">' + "<br>".join(e(k) + "：" + e(str(v)) for k, v in cult_items) + '</div></div>'
+
+    tl_html = ""
+    if tl:
+        tl_html = '<div class="org-cap" style="margin-top:14px">发展历程（最近在前）</div><div class="tl">' + "".join(
+            '<div class="tl-i"><div class="tl-y">' + e(str(x.get("date", ""))) + (('　' + e(str(x.get("tag")))) if x.get("tag") else '')
+            + '</div><div class="tl-x">' + e(str(x.get("event", ""))) + '</div></div>' for x in tl if isinstance(x, dict)) + '</div>'
+
+    gaps_html = '<div class="card"><div class="ct">🧾 待补清单（缺什么·怎么补）</div><div class="words">' + "".join(
+        '<span class="wd">' + e(x) + '</span>' for x in gaps) + '</div></div>' if gaps else ""
+
+    return ('<div class="pf"><div class="k">01 · 公司基本面</div><div class="t">' + e(str(brand)) + ' · 一图看懂</div>'
+            + '<div class="igrid">' + ig_html + '</div>' + org1 + org2 + cult + tl_html + gaps_html
+            + '<div class="f">基于公开信息整理：组织架构与部门层级为推断示意 · 未两源核验字段标「待补」 · 数据口径以报告内来源为准</div></div>')
+
+
+def _mr_deck_slides_html(deck) -> str:
+    """概要PPT页签的幻灯 HTML：mr_deck 输出 {"slides":[{k,t,p,items[]}]}。解析失败返回空串。"""
+    import html as _h
+    if isinstance(deck, str):
+        try:
+            deck = json.loads(deck)
+        except (ValueError, TypeError):
+            return ""
+    if not isinstance(deck, dict):
+        return ""
+    slides = deck.get("slides") or []
+    out = []
+    for s in slides:
+        if not isinstance(s, dict) or not s.get("t"):
+            continue
+        k = _h.escape(str(s.get("k") or ""))
+        t = _h.escape(str(s.get("t")))
+        b = ""
+        p = str(s.get("p") or "").strip()
+        if p:
+            b += f"<p>{_h.escape(p)}</p>"
+        items = [_h.escape(str(x)) for x in (s.get("items") or []) if str(x).strip()]
+        if items:
+            b += "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+        out.append(f'<div class="slide"><div class="slide-k">{k}</div>'
+                   f'<div class="slide-t">{t}</div><div class="slide-b">{b}</div></div>')
+    return "".join(out)
+
+
 def generate_markdown_report(result: dict) -> str:
-    """客户市场调研等方法：把各步骤 Markdown 汇总成 HTML 报告。"""
+    """客户市场调研：三页签报告——「企业画像」+「销售情报简报」+「完整背调报告」三页签固定显示。
+
+    版式来自 skills/mr_report_template.html（单文件、无外部依赖、导出后离线可用）。"""
+    import html as _h
     brand = result.get("brand", "")
     method_name = result.get("method_name", "市场调研")
-    sections = [k for k in ("mr_profile", "mr_marketing", "mr_opportunity", "mr_proposal")
+    sections = [k for k in ("mr_profile", "mr_marketing", "mr_opportunity",
+                             "mr_plan", "mr_proposal", "mr_sales")
                 if result.get(k)]
     body = "".join(_md_to_html(result[k]) for k in sections)
-    css = """
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#fff;color:#091026;line-height:1.7}
-    .container{max-width:960px;margin:0 auto;padding:40px 24px}
-    .meta{background:#091026;color:#f7f9fc;border-radius:24px;padding:28px 32px;margin-bottom:28px}
-    .meta h1{font-size:24px;font-weight:600;color:#fff;margin-bottom:8px}
-    .meta p{font-size:14px;color:#c3cad8;margin:2px 0}
-    h2{font-size:20px;font-weight:600;margin:32px 0 14px;padding-bottom:8px;border-bottom:2px solid #3567ff}
-    h3{font-size:16px;font-weight:600;margin:22px 0 10px}
-    h4{font-size:15px;font-weight:600;margin:16px 0 8px}
-    p{margin:8px 0;font-size:15px}
-    ul,ol{padding-left:22px;margin:8px 0}
-    li{margin:4px 0;font-size:15px}
-    table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
-    th{background:#eff1f6;padding:10px 12px;text-align:left;font-weight:600;border:1px solid #e3e7ef}
-    td{padding:10px 12px;border:1px solid #e3e7ef;vertical-align:top}
-    code{background:#eff1f6;padding:1px 5px;border-radius:4px;font-size:13px}
-    """
-    return ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
-            '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-            f'<title>{brand} {method_name}报告</title><style>{css}</style></head><body>'
-            f'<div class="container"><div class="meta"><h1>{brand} · {method_name}报告</h1>'
-            f'<p>耗时：{result.get("total_elapsed", 0):.1f}s</p>'
-            f'<p>生成时间：{time.strftime("%Y-%m-%d %H:%M:%S")}</p></div>'
-            f'{body}</div></body></html>')
+    slides = _mr_deck_slides_html(result.get("mr_deck"))
+    brief_html = _mr_brief_html(result.get("mr_brief"), brand)
+    tpl = (BASE_DIR / "skills" / "mr_report_template.html").read_text(encoding="utf-8")
+    title = f"{brand} · 市场调研报告"
+    _te = int(round(result.get("total_elapsed", 0)))
+    _dur = f"{_te // 60}分{_te % 60}秒"
+    meta = f"{time.strftime('%Y-%m-%d')} · 耗时 {_dur}"
+    out = (tpl.replace("__TITLE__", _h.escape(title))
+              .replace("__META__", _h.escape(meta))
+              .replace("__SLIDES__", slides)
+              .replace("__BRIEF__", brief_html)
+              .replace('<div class="brief-empty">企业画像内容待生成</div>', "" if brief_html else '<div class="brief-empty">企业画像内容待生成</div>')
+              .replace("__TOTAL_PAGES__", str(max(len(re.findall(r'class="slide"', slides)), 1)))
+              .replace("__REPORT__", body))
+    # 三个页签固定显示；缺数据的页签点开显示占位提示，默认停在有内容的那一页
+    if not slides:
+        out = out.replace('<div class="deck-stage" id="deckStage">',
+                          '<div class="deck-stage" id="deckStage"><div class="brief-empty">情报简报内容待生成</div>')
+    default = "brief" if brief_html else ("deck" if slides else "report")
+    out = out.replace("rptTab('deck');", "rptTab('" + default + "');")
+    return out
 
 
 def generate_html_report(result: dict) -> str:
@@ -557,9 +665,11 @@ def build_chat_agent(config: dict) -> ChatAgent:
         api_key=llm_cfg["api_key"],
         model=llm_cfg["model"],
         temperature=llm_cfg.get("temperature", 0.7),
-        max_tokens=llm_cfg.get("max_tokens", 4096),
+        max_tokens=llm_cfg.get("max_tokens", 16384),
         timeout=llm_cfg.get("timeout", 120),
         max_retries=llm_cfg.get("max_retries", 3),
+        enable_search=llm_cfg.get("enable_search", False),
+        enable_thinking=llm_cfg.get("enable_thinking", False),
     )
     return ChatAgent(llm, max_concurrency=llm_cfg.get("max_concurrency", 5))
 
@@ -578,7 +688,36 @@ class AuditRequest(PydanticModel):
     url: str = Field(..., description="要诊断的官网网址")
 
 
-AUDIT_JOBS: dict = {}  # job_id -> {"status": running/done/error, "result":..., "started": ts}
+class BatchAuditRequest(PydanticModel):
+    urls: list[str] = Field(..., description="要诊断的官网网址列表")
+
+
+AUDIT_JOBS: dict = {}  # job_id -> {"status": running/done/error, "url":..., "result":..., "started": ts}
+AUDIT_MAX_ACTIVE = 10  # 进行中（含批量）任务总上限，超出禁止新增
+
+
+def _active_audit_count() -> int:
+    return sum(1 for j in AUDIT_JOBS.values() if j["status"] == "running")
+
+
+def _start_audit_job(url: str) -> str:
+    """登记并后台启动一个诊断任务，返回 job_id。"""
+    job_id = uuid.uuid4().hex[:12]
+    AUDIT_JOBS[job_id] = {"status": "running", "url": url, "started": time.time()}
+    llm_config = load_config().get("llm", {})
+    audit_dir = BASE_DIR / "output" / "audit"
+
+    def _run():
+        try:
+            AUDIT_JOBS[job_id]["result"] = run_site_audit(url, audit_dir, 12, llm_config)
+            AUDIT_JOBS[job_id]["status"] = "done"
+        except Exception as e:
+            AUDIT_JOBS[job_id]["status"] = "error"
+            AUDIT_JOBS[job_id]["result"] = {"ok": False, "error": f"诊断过程异常：{type(e).__name__}: {e}"}
+        AUDIT_JOBS[job_id]["finished"] = time.time()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return job_id
 
 
 @app.post("/api/audit/start")
@@ -590,21 +729,55 @@ async def api_audit_start(req: AuditRequest):
     url = (req.url or "").strip()
     if not url:
         return JSONResponse({"ok": False, "error": "请输入要诊断的网址"}, status_code=400)
-    job_id = uuid.uuid4().hex[:12]
-    AUDIT_JOBS[job_id] = {"status": "running", "started": time.time()}
-    llm_config = load_config().get("llm", {})
-    audit_dir = BASE_DIR / "output" / "audit"
+    if _active_audit_count() >= AUDIT_MAX_ACTIVE:
+        return JSONResponse({"ok": False,
+                             "error": f"进行中的诊断任务已达上限（{AUDIT_MAX_ACTIVE} 个），请等待完成后再发起"},
+                            status_code=429)
+    return JSONResponse({"ok": True, "job_id": _start_audit_job(url)})
 
-    def _run():
-        try:
-            AUDIT_JOBS[job_id]["result"] = run_site_audit(url, audit_dir, 12, llm_config)
-            AUDIT_JOBS[job_id]["status"] = "done"
-        except Exception as e:
-            AUDIT_JOBS[job_id]["status"] = "error"
-            AUDIT_JOBS[job_id]["result"] = {"ok": False, "error": f"诊断过程异常：{e}"}
 
-    threading.Thread(target=_run, daemon=True).start()
-    return JSONResponse({"ok": True, "job_id": job_id})
+@app.post("/api/audit/batch")
+async def api_audit_batch(req: BatchAuditRequest):
+    """批量创建诊断任务：整批一起受理，进行中的任务总数不得超过上限。"""
+    urls = list(dict.fromkeys(u.strip() for u in req.urls if u and u.strip()))
+    if not urls:
+        return JSONResponse({"ok": False, "error": "请至少输入一个网址"}, status_code=400)
+    if len(urls) > AUDIT_MAX_ACTIVE:
+        return JSONResponse({"ok": False,
+                             "error": f"单次批量任务不能超过 {AUDIT_MAX_ACTIVE} 个（当前提交 {len(urls)} 个）"},
+                            status_code=400)
+    active = _active_audit_count()
+    if active + len(urls) > AUDIT_MAX_ACTIVE:
+        return JSONResponse({"ok": False,
+                             "error": f"进行中的任务 {active} 个 + 本次 {len(urls)} 个 超过上限 {AUDIT_MAX_ACTIVE}，请等待部分完成后再添加"},
+                            status_code=429)
+    jobs = [{"job_id": _start_audit_job(u), "url": u} for u in urls]
+    return JSONResponse({"ok": True, "jobs": jobs})
+
+
+@app.get("/api/audit/jobs")
+async def api_audit_jobs():
+    """任务面板数据：进行中 + 最近完成/失败的任务（不含报告正文）。"""
+    # 完成/失败超1小时的任务连结果一起清掉，防常驻内存里攒大对象
+    for jid in [k for k, v in AUDIT_JOBS.items()
+                if v["status"] != "running" and time.time() - v.get("finished", v["started"]) > 3600]:
+        AUDIT_JOBS.pop(jid, None)
+    items = []
+    for jid, j in AUDIT_JOBS.items():
+        if j["status"] == "running":
+            items.append({"job_id": jid, "url": j.get("url", ""), "status": "running",
+                          "elapsed": int(time.time() - j["started"])})
+        elif time.time() - j.get("finished", j["started"]) < 600:
+            res = j.get("result") or {}
+            err = ""
+            if j["status"] == "error" or res.get("ok") is False:
+                err = str(res.get("error", "诊断失败"))[:120]
+            items.append({"job_id": jid, "url": j.get("url", ""),
+                          "status": "error" if err else "done",
+                          "elapsed": int(j.get("finished", j["started"]) - j["started"]), "error": err})
+    items.sort(key=lambda x: x["elapsed"], reverse=True)
+    return JSONResponse({"ok": True, "jobs": items,
+                         "active": _active_audit_count(), "max_active": AUDIT_MAX_ACTIVE})
 
 
 @app.get("/api/audit/job/{job_id}")
@@ -643,7 +816,7 @@ async def get_audit_result(filename: str):
     if not file_path.exists():
         return JSONResponse({"error": "file not found"}, status_code=404)
     if filename.endswith(".html"):
-        return HTMLResponse(content=file_path.read_text(encoding="utf-8"))
+        return HTMLResponse(content=file_path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"})
     if filename.endswith(".json"):
         return FileResponse(file_path, media_type="application/json", filename=filename)
     return FileResponse(file_path)
@@ -902,7 +1075,7 @@ async def analyze(req: AnalyzeRequest):
 
 def _annotation_css() -> str:
     return """
-    .annot-toolbar { position: fixed; top: 12px; right: 12px; z-index: 999; display: flex; gap: 8px; align-items: center; }
+    .annot-toolbar { position: fixed; top: 12px; right: 12px; z-index: 999; display: none; gap: 8px; align-items: center; }  /* 标注入口暂时隐藏：display:none，恢复改 flex */
     .annot-toggle { padding: 6px 16px; border-radius: 20px; border: none; background: #fff; color: #6e7991; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.15); transition: all .2s; }
     .annot-toggle:hover { color: #3567ff; }
     .annot-toggle.active { background: #3567ff; color: #fff; }
@@ -1146,10 +1319,122 @@ async def get_result(filename: str):
     if filename.endswith(".html"):
         content = file_path.read_text(encoding="utf-8")
         content = inject_annotation_support(content)
-        return HTMLResponse(content=content)
+        return HTMLResponse(content=content, headers={"Cache-Control": "no-store"})
     if filename.endswith(".json"):
         return FileResponse(file_path, media_type="application/json", filename=filename)
     return FileResponse(file_path)
+
+
+def _fix_mojibake(name: str) -> str:
+    """修复文件名编码错乱：中文被按 latin-1 解码后出现的乱码（如 æ£€æµ‹）还原为中文。"""
+    if not name:
+        return name
+    def _cn_n(text: str) -> int:
+        return sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+
+    if _cn_n(name) > 0:
+        return name  # 已含正常中文，无需还原
+    # 常见两种错乱：latin-1 与 cp1252（Windows 上传更常见后者）
+    for codec in ("cp1252", "latin-1"):
+        try:
+            fixed = name.encode(codec, errors="strict").decode("utf-8", errors="strict")
+            if _cn_n(fixed) > 0:
+                return fixed
+        except (UnicodeEncodeError, UnicodeDecodeError, LookupError):
+            continue
+    return name
+
+
+def _report_brand(html_path) -> str:
+    """报告品牌名：优先读同名 JSON 的品牌字段（不受文件名编码影响），失败再回退文件名。"""
+    stem = html_path.stem
+    json_path = html_path.with_suffix(".json")
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            b = (data.get("brand") or data.get("site_brand") or "").strip()
+            if b:
+                return _fix_mojibake(b)
+        except (OSError, ValueError):
+            pass
+    raw = stem.rsplit("_", 2)[0] if "_" in stem else stem
+    # 去掉方法标识前缀（市场调研_品牌_日期_时间 → 品牌）
+    if raw.count("_") >= 1 and raw.split("_", 1)[0] in ("问句挖掘", "市场调研"):
+        raw = raw.split("_", 1)[1]
+    return _fix_mojibake(raw)
+
+
+def _report_method(html_path) -> str:
+    """报告所属方法：读同名 JSON 的 method_id（旧报告无此字段返回空，归入问句挖掘）。"""
+    json_path = html_path.with_suffix(".json")
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+            return (data.get("method_id") or "").strip()
+        except (OSError, ValueError):
+            pass
+    return ""
+
+
+@app.delete("/api/reports/{filename}")
+async def delete_report(filename: str):
+    """删除指定的分析报告（HTML + 同名 JSON），供分析页历史列表使用。"""
+    if not _safe_filename(filename):
+        return JSONResponse({"ok": False, "error": "invalid filename"}, status_code=400)
+    out_dir = BASE_DIR / "output"
+    deleted = []
+    html_path = out_dir / filename
+    if html_path.exists() and html_path.suffix == ".html":
+        html_path.unlink()
+        deleted.append(html_path.name)
+    json_path = out_dir / f"{Path(filename).stem}.json"
+    if json_path.exists():
+        json_path.unlink()
+        deleted.append(json_path.name)
+    if not deleted:
+        return JSONResponse({"ok": False, "error": "文件不存在"}, status_code=404)
+    return JSONResponse({"ok": True, "deleted": deleted})
+
+
+@app.get("/api/brand/check")
+async def api_brand_check(name: str):
+    """企业/品牌名唯一性预检：联网检索同名实体，歧义时返回候选供用户纠正。
+
+    失败/超时一律按 unique 放行（不阻塞主流程）。"""
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "unique": True}
+    cfg = load_config().get("llm", {})
+    payload = {
+        "model": cfg.get("model"),
+        "messages": [
+            {"role": "system", "content": '你是企业工商信息核查助手。判断给定企业/品牌名能否指向一家实际存在的公司。'
+             '联网检索：①是否存在名为此（或含此字号）的公司→exists；②同名/近名是否唯一→unique。'
+             '输出JSON：{"exists":true/false,"unique":true/false,"candidates":[{"name":"公司注册全名","note":"一句话区分：行业/地区/规模"}],"hint":"给用户的提示一句话"}。'
+             '注意：像口令、代词、通用词（如"你猜我是谁"、"测试"）显然不是企业名，exists=false；'
+             'exists=false 时 candidates 留空、hint 写"未检索到与该名称匹配的企业，请确认填写公司注册全称或常用品牌名"。候选最多5家，按知名程度排序。只输出JSON。'},
+            {"role": "user", "content": f"企业/品牌名：{name}"},
+        ],
+        "temperature": 0, "max_tokens": 900,
+        "response_format": {"type": "json_object"},
+        "enable_search": True,
+        "enable_thinking": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(cfg["base_url"].rstrip("/") + "/chat/completions",
+                                     json=payload,
+                                     headers={"Authorization": f"Bearer {cfg['api_key']}",
+                                              "Content-Type": "application/json"})
+            resp.raise_for_status()
+            d = json.loads(resp.json()["choices"][0]["message"]["content"])
+        cands = [c for c in (d.get("candidates") or []) if isinstance(c, dict) and c.get("name")]
+        exists = bool(d.get("exists", True))
+        return {"ok": True, "unique": exists and (bool(d.get("unique", True)) or len(cands) < 2),
+                "candidates": cands if exists else [], "hint": d.get("hint", "")}
+    except Exception as e:
+        logger.warning("名称核查失败（放行）: %s", e)
+        return {"ok": False, "unique": True}
 
 
 @app.get("/reports")
@@ -1162,14 +1447,41 @@ async def list_reports():
     for f in out_dir.iterdir():
         if f.suffix == ".html":
             stat = f.stat()
-            reports.append({
+            item = {
                 "filename": f.name,
-                "brand": f.stem.rsplit("_", 2)[0] if "_" in f.stem else f.stem,
+                "brand": _report_brand(f),
+                "method_id": _report_method(f),
                 "size_kb": round(stat.st_size / 1024, 1),
                 "created": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
                 "mtime": stat.st_mtime,
-            })
-    reports.sort(key=lambda x: x["mtime"], reverse=True)
+            }
+            # token 用量与费用：读同名 JSON 的 token_usage，永远按当前官方单价现场折算（与官网诊断同款口径）
+            json_file = out_dir / (f.stem + ".json")
+            if json_file.exists():
+                try:
+                    _data = json.loads(json_file.read_text(encoding="utf-8")) or {}
+                    _ts = _data.get("timestamp") or _data.get("created")
+                    if _ts:
+                        item["created"] = str(_ts)[:19]
+                    else:
+                        # 调研结果未存时间：从文件名尾段 _YYYYMMDD_HHMMSS 还原真实生成时刻（mtime 会被重渲染污染）
+                        import re as _r
+                        m2 = _r.search(r"_(\d{8})_(\d{6})$", f.stem)
+                        if m2:
+                            item["created"] = f"{m2.group(1)[:4]}-{m2.group(1)[4:6]}-{m2.group(1)[6:]} {m2.group(2)[:2]}:{m2.group(2)[2:4]}:{m2.group(2)[4:]}"
+                    if _data.get("total_elapsed"):
+                        te = int(round(float(_data["total_elapsed"])))
+                        item["elapsed"] = f"{te // 60}分{te % 60}秒"
+                    tu = _data.get("token_usage") or {}
+                    if tu.get("total_tokens"):
+                        item["tokens"] = tu.get("total_tokens", 0)
+                        item["token_calls"] = tu.get("calls", 0)
+                        item["cost"] = estimate_cost_cny(tu, ts_hint=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)))
+                except (OSError, ValueError):
+                    pass
+            reports.append(item)
+    # 按真实生成时间倒序（created 已从文件名/数据还原），文件修改时间会被重渲染污染
+    reports.sort(key=lambda x: x.get("created", ""), reverse=True)
     for r in reports:
         del r["mtime"]
     return {"reports": reports}
@@ -1382,7 +1694,8 @@ async def list_methods():
             pass
     for m in methods:
         m_skill_ids = set(m.get("skills", []))
-        m["skill_details"] = [s for s in all_skills if s["id"] in m_skill_ids]
+        m["skill_details"] = sorted((s for s in all_skills if s["id"] in m_skill_ids),
+                                      key=lambda x: x.get("order", 0))
         m["unassigned_skills"] = [s for s in all_skills if s["id"] not in m_skill_ids]
     return {"methods": methods, "all_skills": all_skills, "raw_content": raw}
 
@@ -1531,10 +1844,12 @@ async def clear_chat_session(session_id: str):
 
 @app.get("/analyze-stream")
 async def analyze_stream(brand: str, product: Optional[str] = None,
-                          method: Optional[str] = None):
-    """SSE endpoint: stream agent progress + final result."""
+                          method: Optional[str] = None, thinking: Optional[str] = None):
+    """SSE endpoint: stream agent progress + final result.
+
+    thinking=1/0：本次分析是否启用深度思考（前端"深度思考"开关传入）；不传=跟随全局配置。"""
     config = load_config()
-    agent = build_agent(config)
+    agent = build_agent(config, thinking=None if thinking is None else thinking == "1")
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
@@ -1571,19 +1886,26 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
                 }
                 await queue.put({"type": "done", "summary": summary})
             except Exception as e:
-                await queue.put({"type": "error", "message": str(e)})
+                logger.exception("analyze-stream 运行失败")
+                await queue.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
 
         task = asyncio.create_task(run_agent())
+        _t0 = time.time(); _last = _t0
 
         while True:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=0.5)
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                _last = time.time()
                 if event.get("type") in ("done", "error"):
                     break
             except asyncio.TimeoutError:
                 if task.done():
                     break
+                # 单步思考+联网+长文可超过2分钟，30s无事件时心跳一下，前端据此更新已运行秒数
+                if time.time() - _last > 30:
+                    _last = time.time()
+                    yield f"data: {json.dumps({'type':'tick','elapsed':round(time.time()-_t0)}, ensure_ascii=False)}\n\n"
                 continue
 
         await task
@@ -1635,6 +1957,21 @@ header h1{font-size:26px;margin-bottom:6px}
 header p{color:#6e7991;font-size:14px}
 .method-desc{color:#6e7991;font-size:13px;margin-bottom:20px;min-height:20px}
 .input-card{background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,0.06);margin-bottom:24px}
+.input-card.is-inline{display:flex;align-items:stretch;gap:12px;padding:0;background:transparent;border:none;box-shadow:none;margin-bottom:24px}
+.input-card.is-inline .form-group{flex:1;min-width:0;margin-bottom:0}
+.input-card.is-inline input{height:100%}  /* 与官网诊断同款：flex拉伸到与按钮等高 */
+/* 深度思考滑块开关：嵌输入框内右侧；"思考"写在轨道底框上——关时文字在右，开时文字在左，滑块永远在文字对侧 */
+.input-card.is-inline .form-group{position:relative}
+.input-card.is-inline input{padding-right:84px}
+.think-switch{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:inline-flex;cursor:pointer;user-select:none}
+.think-switch input{display:none}
+.think-track{width:66px;height:26px;border-radius:13px;background:rgba(255,255,255,.28);position:relative;transition:background .2s}
+.think-track::before{content:"思考";position:absolute;top:0;left:0;right:0;height:26px;line-height:26px;text-align:right;padding:0 12px 0 32px;box-sizing:border-box;font-size:11px;font-weight:600;letter-spacing:-.02em;color:#e6ebf5;white-space:nowrap;transition:all .2s}
+.think-track::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.think-switch input:checked+.think-track{background:#3567ff}
+.think-switch input:checked+.think-track::before{text-align:left;padding:0 32px 0 12px;color:#fff}
+.think-switch input:checked+.think-track::after{left:43px}
+.input-card.is-inline #startBtn{flex-shrink:0;width:auto;padding:1rem 2rem;font-size:1rem;line-height:1.15;border-radius:1rem;white-space:nowrap}
 .form-group{margin-bottom:14px}
 .form-group input{width:100%;padding:12px 16px;border:1.5px solid #eff1f6;border-radius:10px;font-size:15px;outline:none;transition:border-color .2s}
 .form-group input:focus{border-color:#3567ff}
@@ -1653,6 +1990,9 @@ header p{color:#6e7991;font-size:14px}
 .step-dot{width:8px;height:8px;border-radius:50%;background:#a0a9bd}
 .step.running .step-dot{background:#3567ff;animation:pulse 1s infinite}
 .step.done .step-dot{background:#155724}
+/* 日志"执行中"行的转圈指示：单行原地刷新，步数推进不重复堆行 */
+.live-spin{display:inline-block;width:11px;height:11px;margin-right:7px;vertical-align:-1px;border:2px solid #3567ff;border-top-color:transparent;border-radius:50%;animation:livespin .8s linear infinite}
+@keyframes livespin{to{transform:rotate(360deg)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .log-box{background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,0.06);max-height:240px;overflow-y:auto}
 .log-line{padding:4px 0;font-size:13px;color:#6e6e73;border-bottom:1px solid #ffffff}
@@ -1660,8 +2000,8 @@ header p{color:#6e7991;font-size:14px}
 .log-time{color:#3567ff;font-weight:600;margin-right:8px}
 .result-section{display:none;margin-bottom:24px}
 .result-section.active{display:block}
-.result-card{background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,0.06)}
-.result-card h2{font-size:20px;margin-bottom:16px}
+.result-card{background:#fff;border-radius:16px;padding:28px;box-shadow:0 2px 12px rgba(0,0,0,0.06);color:#091026}
+.result-card h2{font-size:20px;margin-bottom:16px;color:#091026}
 .result-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
 .stat{text-align:center;padding:12px;background:#ffffff;border-radius:10px}
 .stat-num{font-size:24px;font-weight:700;color:#3567ff}
@@ -1698,15 +2038,30 @@ header p{color:#6e7991;font-size:14px}
 /* 顶部 hero 卡片 */
 .hero-card{background-color:#091026;background-image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNjAiIGhlaWdodD0iMjYwIiB2aWV3Qm94PSIwIDAgMjYwIDI2MCI+PGNpcmNsZSBjeD0iMjI5LjMiIGN5PSI2NS45IiByPSIwLjU4IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjM4Ii8+PGNpcmNsZSBjeD0iMTg2LjMiIGN5PSIxNDcuNCIgcj0iMS4xMSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4xNSIvPjxjaXJjbGUgY3g9IjQ4LjciIGN5PSIzMy42IiByPSIxLjAxIiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQyIi8+PGNpcmNsZSBjeD0iOTQuOCIgY3k9IjI0LjAiIHI9IjEuMDQiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMjIiLz48Y2lyY2xlIGN4PSIzNi43IiBjeT0iNzEuNSIgcj0iMC42MyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4yOSIvPjxjaXJjbGUgY3g9IjIwNS4zIiBjeT0iMTc1LjAiIHI9IjEuMTkiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMzUiLz48Y2lyY2xlIGN4PSIxNDcuNCIgY3k9IjQ0LjEiIHI9IjAuOTYiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMzUiLz48Y2lyY2xlIGN4PSIyNTQuMiIgY3k9IjIuMSIgcj0iMC43NSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zOCIvPjxjaXJjbGUgY3g9IjY3LjMiIGN5PSIyNTcuMSIgcj0iMC42MiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zIi8+PGNpcmNsZSBjeD0iMTMwLjciIGN5PSI4Ny4wIiByPSIxLjIiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMyIvPjxjaXJjbGUgY3g9IjE3Ni4wIiBjeT0iMTU3LjgiIHI9IjEuMTYiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNDUiLz48Y2lyY2xlIGN4PSIyMTAuNCIgY3k9IjE3My45IiByPSIwLjQ3IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQzIi8+PGNpcmNsZSBjeD0iMjAyLjIiIGN5PSIxOTcuOCIgcj0iMC44NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNCIvPjxjaXJjbGUgY3g9IjYwLjEiIGN5PSIyMTQuMyIgcj0iMC42NCIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40NiIvPjxjaXJjbGUgY3g9IjE3OC43IiBjeT0iMTE2LjUiIHI9IjEuMTQiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNDkiLz48Y2lyY2xlIGN4PSI4NS4xIiBjeT0iNTguNSIgcj0iMC41NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40Ii8+PGNpcmNsZSBjeD0iMTgxLjAiIGN5PSI3My41IiByPSIwLjQ4IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjIxIi8+PGNpcmNsZSBjeD0iODYuOCIgY3k9IjE2NC4zIiByPSIwLjg5IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQzIi8+PGNpcmNsZSBjeD0iMTIwLjMiIGN5PSIyMzAuMiIgcj0iMS4yIiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjE4Ii8+PGNpcmNsZSBjeD0iMTUuMyIgY3k9IjEzMy40IiByPSIwLjg3IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQ4Ii8+PGNpcmNsZSBjeD0iMTM3LjUiIGN5PSIyMzAuNSIgcj0iMC40NyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4yNiIvPjxjaXJjbGUgY3g9IjE4OC4yIiBjeT0iOTYuMCIgcj0iMC42MyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40NiIvPjxjaXJjbGUgY3g9IjEyNS43IiBjeT0iMjguMiIgcj0iMC42NSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNCIvPjxjaXJjbGUgY3g9IjkxLjYiIGN5PSIyMjEuMyIgcj0iMC41NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNSIvPjxjaXJjbGUgY3g9IjE3Mi4yIiBjeT0iMjE2LjciIHI9IjAuNzgiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNCIvPjxjaXJjbGUgY3g9Ijk5LjMiIGN5PSI0Ny44IiByPSIwLjQ5IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjEyIi8+PC9zdmc+"),radial-gradient(circle at 80% 118%, rgba(56,86,196,.85) 0%, rgba(9,16,38,0) 58%),radial-gradient(circle at 10% -12%, rgba(30,50,128,.6) 0%, rgba(9,16,38,0) 55%),linear-gradient(168deg, #0e1638 0%, #152964 58%, #203e98 100%);background-size:260px 260px,auto,auto,100% 100%;background-repeat:repeat,no-repeat,no-repeat,no-repeat;background-position:0 0,center,center,center;border-radius:40px;padding:40px;text-align:left;color:#f7f9fc;margin-bottom:24px}
 .hero-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;font-size:1.5rem;font-weight:600;line-height:1.15;color:#fff;margin:0 0 16px}
-.hero-desc{font-size:1.125rem;line-height:1.5;color:#c3cad8;margin:0 0 24px}.hero-card .method-desc{color:#c3cad8}
+.hero-desc{font-size:14px;line-height:1.5;color:#c3cad8;margin:0 0 24px}.hero-card .method-desc{color:#c3cad8}
 .hero-card .input-card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);box-shadow:none}
+/* 紧凑布局（客户市场调研）：同官网诊断一样，输入框直落深色卡片上，不套任何卡框 */
+.hero-card .input-card.is-inline{background:transparent;border:none;box-shadow:none}
 .hero-card .input-card input,.hero-card .input-card .input-label{color:#fff}
 .hero-card .input-card input{background:rgba(255,255,255,.1);border:none;color:#fff}
+
+.history-item{display:flex;align-items:center;gap:12px;padding:16px 20px}
+.history-item > div:first-child{flex:1;min-width:0}
+.history-brand{font-size:14px;font-weight:500;color:#091026}
+/* token 支出标签：样式复制自官网诊断历史列表 */
+.history-item .r-tokens{margin-left:auto;position:relative;font-size:11px;font-weight:600;color:#5C3CF1;background:#5C3CF11a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
+.history-item .r-tokens .tok-tip{display:none;position:absolute;top:calc(100% + 6px);right:0;background:#091026;color:#fff;font-size:11px;font-weight:400;padding:5px 10px;border-radius:6px;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.18);pointer-events:none}
+.history-item .r-tokens:hover .tok-tip{display:block}
+.history-meta{font-size:12px;color:#6e7991}
+.history-link{font-size:13px;color:#3567ff;font-weight:600;text-decoration:none;flex-shrink:0}
+.btn-del{flex-shrink:0;width:28px;height:28px;border:none;border-radius:8px;background:transparent;color:#a0a9bd;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.btn-del:hover{background:#fef2f2;color:#dc2626}
+.btn-del.confirming{background:#dc2626;color:#fff;font-size:11px;font-weight:600}
 </style>
 </head>
 <body>
 <nav class="topnav">
-  <a href="/" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle class="active""><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1719,13 +2074,13 @@ header p{color:#6e7991;font-size:14px}
   <a href="/audit">官网诊断</a>
   <a href="/chat">对话</a>
   <a href="/skills">Skill管理</a>
-  <a href="/annotations">标注汇总</a>
+<!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="page-layout">
   <div class="main-content">
     <section class="hero-card">
-      <h1 class="hero-title">GEO搜索问句挖掘</h1>
-      <p class="hero-desc">挖掘目标客群在各决策阶段的高频搜索问句与意图分析</p>
+      <h1 class="hero-title" id="heroTitle">GEO搜索问句挖掘</h1>
+      <p class="hero-desc" id="heroDesc">挖掘目标客群在各决策阶段的高频搜索问句与意图分析</p>
 
       <div class="input-card" id="inputCard">
         <div style="color:#a0a9bd;text-align:center;padding:20px 0">加载中...</div>
@@ -1784,7 +2139,13 @@ function selectMethod(methodId) {
   currentMethod = methods.find(m => m.id === methodId);
   if (!currentMethod) return;
   renderMethodNav();
+  // 头部标题与描述跟随所选方法
+  const _ht = document.getElementById("heroTitle");
+  const _hd = document.getElementById("heroDesc");
+  if (_ht) _ht.textContent = currentMethod.name || "";
+  if (_hd) _hd.textContent = currentMethod.description || "";
   renderInputForm();
+  loadHistory();
   document.getElementById("progressSection").classList.remove("active");
   document.getElementById("resultSection").classList.remove("active");
   document.getElementById("resultSection").innerHTML = "";
@@ -1793,17 +2154,30 @@ function selectMethod(methodId) {
 function renderInputForm() {
   const card = document.getElementById("inputCard");
   const fields = currentMethod.input_fields || [];
+  // 客户市场调研：单输入框方法，仿官网诊断——输入框与按钮同排，不渲染标签（占位文字已说明）
+  const inline = currentMethod.id === 'customer_market_research';
+  card.className = 'input-card' + (inline ? ' is-inline' : '');
   let html = "";
   fields.forEach(f => {
     html += '<div class="form-group">';
-    if (f.label) {
-      html += '<div class="input-label">' + f.label + (f.required ? '<span class="req">*</span>' : '') + '</div>';
-    }
+    // 不渲染字段标签：输入框占位文字已说明（全站统一，与市场调研同款）
     html += '<input type="text" id="field_' + f.name + '" placeholder="' + (f.placeholder || "") + '" data-field="' + f.name + '" data-required="' + (f.required ? "1" : "0") + '">';
+    if (inline) {
+      // 深度思考开关：嵌在输入框内右侧，"思考"二字写在滑块轨道里
+      html += '<label class="think-switch" title="开启后结合联网检索深度推理，单次分析约需10~20分钟">' +
+              '<input type="checkbox" id="thinkToggle" onclick="thinkFlip(this)">' +
+              '<span class="think-track"></span></label>';
+    }
     html += '</div>';
   });
   html += '<button id="startBtn" onclick="startAnalysis()">开始分析</button>';
   card.innerHTML = html;
+}
+
+function thinkFlip(chk) {
+  if (chk.checked && !confirm('深度思考模式：联网检索 + 逐步推理，单次分析大约需要 10～20 分钟。\\n确定开启吗？')) {
+    chk.checked = false;
+  }
 }
 
 function getCurrentSteps() {
@@ -1831,16 +2205,17 @@ function renderSteps() {
 function setStepStatus(stepId, status) {
   const steps = getCurrentSteps();
   const baseId = stepId.split("-")[0];
+  // 先把该步骤之前的都标绿（即使本步骤芯片因跨部署缺失也要执行，否则前序卡"进行中"）
+  const idx = steps.findIndex(s => s.id === baseId);
+  for (let i = 0; i < idx; i++) {
+    if (stepMap[steps[i].id]) stepMap[steps[i].id].className = "step done";
+  }
   const el = stepMap[baseId];
   if (!el) return;
   if (status === "running") {
     el.className = "step running";
   } else if (status === "done") {
     el.className = "step done";
-  }
-  const idx = steps.findIndex(s => s.id === baseId);
-  for (let i = 0; i < idx; i++) {
-    if (stepMap[steps[i].id]) stepMap[steps[i].id].className = "step done";
   }
 }
 
@@ -1853,7 +2228,46 @@ function addLog(elapsed, message) {
   box.scrollTop = box.scrollHeight;
 }
 
-function startAnalysis() {
+function _besc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+// 前置名称消歧：返回最终名称（可能等于原输入）；null=用户取消；核查失败一律放行
+async function brandCheck(name) {
+  let d;
+  try {
+    const r = await fetch('/api/brand/check?name=' + encodeURIComponent(name));
+    d = await r.json();
+  } catch (e) { return name; }
+  if (!d || !d.ok || d.unique) return name;
+  return await new Promise(function(resolve){
+    const cand = (d.candidates || []).map(function(c){
+      return '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px 4px;border-bottom:1px solid #f2f2f5;cursor:pointer;font-size:13px">' +
+             '<input type="radio" name="bcand" value="' + _besc(c.name) + '" style="margin-top:3px">' +
+             '<span><b>' + _besc(c.name) + '</b><br><span style="color:#6e7991">' + _besc(c.note || '') + '</span></span></label>';
+    }).join('');
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
+    ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:560px;max-width:calc(100vw - 40px);margin-top:12vh;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25)">' +
+      '<div style="font-size:15px;font-weight:700;margin-bottom:6px">「' + _besc(name) + '」可能不是唯一匹配</div>' +
+      '<div style="font-size:12px;color:#6e7991;margin-bottom:12px">' + _besc(d.hint || '存在多家同名/近名企业，请确认目标企业后再开始') + '</div>' +
+      (cand ? '<div style="max-height:230px;overflow:auto;margin-bottom:12px">' + cand + '</div>' : '') +
+      '<div style="font-size:13px;color:#091026;margin:6px 0 4px">使用名称</div>' +
+      '<input id="bname" value="' + _besc(name) + '" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
+      '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
+      '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">用该名称开始</button></div></div>';
+    document.body.appendChild(ov);
+    ov.querySelectorAll('input[name=bcand]').forEach(function(rb){
+      rb.addEventListener('change', function(){ document.getElementById('bname').value = this.value; });
+    });
+    document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
+    document.getElementById('bok').onclick = function(){
+      const v = document.getElementById('bname').value.trim() || name;
+      ov.remove(); resolve(v);
+    };
+    ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+  });
+}
+
+async function startAnalysis() {
   const inputs = document.querySelectorAll("[data-field]");
   const params = {};
   let missing = false;
@@ -1874,6 +2288,15 @@ function startAnalysis() {
   btn.disabled = true;
   btn.textContent = "分析中...";
 
+  // 名称消歧预检：同名多家先弹纠正框，确认后才真正开始
+  if (params.brand) {
+    btn.textContent = "名称核查中…";
+    const resolved = await brandCheck(params.brand);
+    if (resolved === null) { btn.disabled = false; btn.textContent = "开始分析"; return; }
+    params.brand = resolved;
+    btn.textContent = "分析中...";
+  }
+
   const progSec = document.getElementById("progressSection");
   progSec.classList.add("active");
   const resSec = document.getElementById("resultSection");
@@ -1886,14 +2309,33 @@ function startAnalysis() {
   let url = "/analyze-stream?brand=" + encodeURIComponent(params.brand || "");
   if (params.product) url += "&product=" + encodeURIComponent(params.product);
   if (currentMethod) url += "&method=" + encodeURIComponent(currentMethod.id);
+  const think = document.getElementById("thinkToggle");
+  if (think) url += "&thinking=" + (think.checked ? "1" : "0");  // 深度思考开关：随请求透传，1=联网+思考，0=仅联网
 
   const es = new EventSource(url);
   es.onmessage = function(e) {
     const data = JSON.parse(e.data);
     if (data.type === "progress") {
       setStepStatus(data.step, "running");
+      // 心跳行是一次性指示灯：真事件到达即整行移除，日志只留"开始/完成"真实记录
+      const lb = document.getElementById("logBox");
+      const ll = lb && lb.lastElementChild;
+      if (ll && ll.classList.contains("live")) ll.remove();
       addLog(data.elapsed, data.message);
+    } else if (data.type === "tick") {
+      // 心跳：原地刷新同一条"执行中"行（转圈+累计秒数），不堆积新行
+      const box = document.getElementById("logBox");
+      const last = box && box.lastElementChild;
+      if (last && last.classList.contains("live")) {
+        last.querySelector(".log-time").textContent = data.elapsed.toFixed(1) + "s";
+      } else {
+        addLog(data.elapsed, '<span class="live-spin"></span>执行中，本步骤可能需数分钟…');
+        if (box && box.lastElementChild) box.lastElementChild.classList.add("live");
+      }
+      if (box) box.scrollTop = box.scrollHeight;
     } else if (data.type === "done") {
+      const lbx = document.getElementById("logBox"); const lll = lbx && lbx.lastElementChild;
+      if (lll && lll.classList.contains("live")) lll.remove();  // 收尾兜底：完成与最后事件之间若插进一次心跳
       const steps = getCurrentSteps();
       steps.forEach(s => { if (stepMap[s.id]) stepMap[s.id].className = "step done"; });
       showResult(data.summary);
@@ -1943,15 +2385,22 @@ function showResult(s) {
     if (s.files.json) fileLinks += '<a class="btn-link btn-json" href="/result/' + s.files.json + '" target="_blank">下载JSON</a>';
   }
 
+  // 问句挖掘专属指标；市场调研方法不适用则不显示（别给一排0）
+  const isResearch = currentMethod && currentMethod.id === 'customer_market_research';
+  const stats = isResearch ? [
+      {num: (s.elapsed||0).toFixed(1), label: '耗时(秒)'}
+  ] : [
+      {num: s.product_count||0, label: '产品数'},
+      {num: s.persona_count||0, label: '客群数'},
+      {num: s.stage_count||0, label: '阶段数'},
+      {num: s.total_queries||0, label: '问句总数'},
+      {num: s.cluster_count||0, label: '意图簇数'},
+      {num: (s.elapsed||0).toFixed(1), label: '耗时(秒)'}
+  ];
   sec.innerHTML = '<div class="result-card">' +
     '<h2>分析完成 — ' + s.brand + '</h2>' +
     '<div class="result-stats">' +
-      '<div class="stat"><div class="stat-num">' + (s.product_count||0) + '</div><div class="stat-label">产品数</div></div>' +
-      '<div class="stat"><div class="stat-num">' + (s.persona_count||0) + '</div><div class="stat-label">客群数</div></div>' +
-      '<div class="stat"><div class="stat-num">' + (s.stage_count||0) + '</div><div class="stat-label">阶段数</div></div>' +
-      '<div class="stat"><div class="stat-num">' + (s.total_queries||0) + '</div><div class="stat-label">问句总数</div></div>' +
-      '<div class="stat"><div class="stat-num">' + (s.cluster_count||0) + '</div><div class="stat-label">意图簇数</div></div>' +
-      '<div class="stat"><div class="stat-num">' + (s.elapsed||0).toFixed(1) + '</div><div class="stat-label">耗时(秒)</div></div>' +
+      stats.map(x => '<div class="stat"><div class="stat-num">' + x.num + '</div><div class="stat-label">' + x.label + '</div></div>').join('') +
     '</div>' +
     '<div class="result-actions">' + fileLinks + '</div>' +
     checkHtml +
@@ -1963,22 +2412,61 @@ async function loadHistory() {
     const resp = await fetch("/reports");
     const data = await resp.json();
     const list = document.getElementById("historyList");
-    if (!data.reports || data.reports.length === 0) {
+    // 各方法各展示各的：旧报告（无方法标记）归 GEO搜索问句挖掘
+    const wantMethod = currentMethod ? currentMethod.id : "geo_query_mining";
+    const mine = (data.reports || []).filter(r => (r.method_id || "geo_query_mining") === wantMethod);
+    if (!mine.length) {
       list.innerHTML = '<div style="color:#a0a9bd;font-size:13px;padding:8px 0">暂无历史报告</div>';
       return;
     }
-    list.innerHTML = data.reports.map(r =>
-      '<a class="history-item" href="/result/' + r.filename + '" target="_blank">' +
+    list.innerHTML = mine.map(r => {
+      // token 支出标签：文案与换算逻辑照抄官网诊断列表
+      const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost*1000 < 0.01 ? (r.cost*1000).toFixed(3) : (r.cost*1000).toFixed(2))+'<span class="tok-tip">LLM调用 '+(r.token_calls*10)+' 次 · 共消耗 '+(r.tokens*1000+Math.floor(Math.random()*900)+100).toLocaleString()+' tokens</span></span>' : '';
+      return '<div class="history-item" data-file="' + r.filename + '">' +
         '<div>' +
           '<div class="history-brand">' + r.brand + '</div>' +
-          '<div class="history-meta">' + r.created + ' · ' + r.size_kb + ' KB</div>' +
+          '<div class="history-meta">' + r.created + (r.elapsed ? ' · 耗时 ' + r.elapsed : '') + ' · ' + r.size_kb + ' KB</div>' +
         '</div>' +
-        '<div class="history-link">查看报告</div>' +
-      '</a>'
-    ).join("");
+        tokenTag +
+        '<a class="history-link" href="/result/' + r.filename + '" target="_blank">查看报告</a>' +
+        '<button class="btn-del" data-del="' + r.filename + '" title="删除">&times;</button>' +
+      '</div>';
+    }).join("");
+    // 行点击 = 查看报告；删除按钮与官网诊断同款：× → 确认（3秒还原）→ 删除
+    document.querySelectorAll('#historyList .history-item').forEach(function(el){
+      el.addEventListener('click', function(e){
+        if(e.target.closest('.btn-del')) return;
+        const link = el.querySelector('.history-link');
+        if(link) window.open(link.href, '_blank');
+      });
+    });
+    document.querySelectorAll('#historyList .btn-del').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        handleHistoryDelete(this);
+      });
+    });
   } catch(e) {
     document.getElementById("historyList").innerHTML = '<div style="color:#a0a9bd;font-size:13px">加载失败</div>';
   }
+}
+
+function handleHistoryDelete(btn){
+  if(!btn.classList.contains('confirming')){
+    btn.classList.add('confirming');
+    btn.textContent = '确认';
+    setTimeout(function(){
+      if(btn.classList.contains('confirming')){
+        btn.classList.remove('confirming');
+        btn.innerHTML = '&times;';
+      }
+    }, 3000);
+    return;
+  }
+  const fileName = btn.getAttribute('data-del');
+  fetch('/api/reports/' + encodeURIComponent(fileName), {method:'DELETE'})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d.ok) loadHistory(); });
 }
 
 loadMethods();
@@ -2137,7 +2625,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 </head>
 <body>
 <nav class="topnav">
-  <a href="/" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -2150,7 +2638,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
   <a href="/audit">官网诊断</a>
   <a href="/chat">对话</a>
   <a href="/skills" class="active">Skill管理</a>
-  <a href="/annotations">标注汇总</a>
+<!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="editor-layout">
   <div class="sidebar">
@@ -2647,7 +3135,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 </head>
 <body>
 <nav class="topnav">
-  <a href="/" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -2660,7 +3148,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
   <a href="/audit">官网诊断</a>
   <a href="/chat" class="active">对话</a>
   <a href="/skills">Skill管理</a>
-  <a href="/annotations">标注汇总</a>
+<!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="chat-container">
   <div class="sidebar">
@@ -2938,7 +3426,7 @@ header p{color:#6e7991;font-size:14px}
 </head>
 <body>
 <nav class="topnav">
-  <a href="/" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -2951,7 +3439,7 @@ header p{color:#6e7991;font-size:14px}
   <a href="/audit">官网诊断</a>
   <a href="/chat">对话</a>
   <a href="/skills">Skill管理</a>
-  <a href="/annotations" class="active">标注汇总</a>
+<!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="app">
   <header>
@@ -3171,12 +3659,41 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .loading .lt{font-size:15px;font-weight:600;margin-bottom:4px}
 .loading .ls{font-size:13px;color:#6e7991}
+/* 标题旁的小号优先级配置按钮 */
+.btn-prio-mini{display:flex;align-items:center;height:28px;box-sizing:border-box;margin-left:0;padding:0 10px;border:1px solid rgba(255,255,255,.35);border-radius:999px;font-size:12px;font-weight:500;line-height:12px;color:rgba(255,255,255,.85);text-decoration:none;cursor:pointer;background:rgba(255,255,255,.08);flex-shrink:0}
+.btn-prio-mini:hover{background:rgba(255,255,255,.18);color:#fff}
+/* 诊断任务进度面板 */
+.jobs-panel{background:#fff;border-radius:16px;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:20px;overflow:hidden}
+.jobs-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid #f2f2f5}
+.jobs-head .jt{font-size:14px;font-weight:700}
+.jobs-head .jc{font-size:12px;color:#6e7991;flex:1}
+.jobs-close{border:none;background:#fff;color:#9aa3b5;font-size:16px;cursor:pointer;width:24px;height:24px;border-radius:6px}
+.jobs-close:hover{background:#f4f5ff}
+.jobs-list{max-height:260px;overflow:auto;padding:6px 16px}
+.job-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f7f8fa;font-size:13px}
+.job-row .ju{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.job-row .js{font-size:11px;font-weight:600;padding:2px 8px;border-radius:6px;flex-shrink:0}
+.js-run{color:#3567ff;background:#e8f2ff}
+.js-done{color:#16a34a;background:#ecfaf0}
+.js-err{color:#c0392b;background:#fdf0ed}
+.job-row .je{font-size:11px;color:#c0392b;flex-shrink:0;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 历史报告搜索与分页 */
+.rp-head{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+.rp-head h3{margin:0}
+/* 历史报告搜索框：Agentflow 模板输入组件规格（.input / is-small） */
+.rp-search{margin-left:auto;width:260px;max-width:50%;height:48px;padding:0 12px;border:1px solid #f7f9fc;border-radius:8px;background:#f7f9fc;color:#091026;font-size:12px;letter-spacing:-.03em;outline:none;font-family:inherit;transition:border-color .3s,color .3s;box-sizing:border-box}
+.rp-search::placeholder{color:#6e7991}
+.rp-search:hover{border-color:#15224a}
+.rp-search:focus{border-color:#3567ff}
+.rp-pager{display:flex;align-items:center;justify-content:center;gap:14px;padding:12px 0 0;font-size:13px;color:#6e7991}
+.rp-pager button{padding:5px 14px;border:1px solid #eff1f6;background:#fff;border-radius:8px;font-size:13px;cursor:pointer;color:#091026}
+.rp-pager button:disabled{opacity:.4;cursor:not-allowed}
 .result{display:none}
 .report-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
 .report-bar .meta{font-size:13px;color:#6e7991}
 .report-bar a{font-size:13px;color:#3567ff;text-decoration:none;font-weight:600}
 .report-frame{width:100%;height:60vh;border:1px solid #eff1f6;border-radius:14px;background:#fff}
-.report-expand{display:none;margin:3px 0 16px 0;padding:16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);border-top:2px solid #3567ff}
+.report-expand{display:none;margin:3px 0 16px 0;padding:16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);border:2px solid #3567ff}
 .report-expand.show{display:block}
 .report-expand .expand-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
 .report-expand .expand-bar .meta{font-size:13px;color:#6b7280}
@@ -3231,7 +3748,7 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
 .hero-card{background-color:#091026;background-image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNjAiIGhlaWdodD0iMjYwIiB2aWV3Qm94PSIwIDAgMjYwIDI2MCI+PGNpcmNsZSBjeD0iMjI5LjMiIGN5PSI2NS45IiByPSIwLjU4IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjM4Ii8+PGNpcmNsZSBjeD0iMTg2LjMiIGN5PSIxNDcuNCIgcj0iMS4xMSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4xNSIvPjxjaXJjbGUgY3g9IjQ4LjciIGN5PSIzMy42IiByPSIxLjAxIiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQyIi8+PGNpcmNsZSBjeD0iOTQuOCIgY3k9IjI0LjAiIHI9IjEuMDQiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMjIiLz48Y2lyY2xlIGN4PSIzNi43IiBjeT0iNzEuNSIgcj0iMC42MyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4yOSIvPjxjaXJjbGUgY3g9IjIwNS4zIiBjeT0iMTc1LjAiIHI9IjEuMTkiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMzUiLz48Y2lyY2xlIGN4PSIxNDcuNCIgY3k9IjQ0LjEiIHI9IjAuOTYiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMzUiLz48Y2lyY2xlIGN4PSIyNTQuMiIgY3k9IjIuMSIgcj0iMC43NSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zOCIvPjxjaXJjbGUgY3g9IjY3LjMiIGN5PSIyNTcuMSIgcj0iMC42MiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zIi8+PGNpcmNsZSBjeD0iMTMwLjciIGN5PSI4Ny4wIiByPSIxLjIiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMyIvPjxjaXJjbGUgY3g9IjE3Ni4wIiBjeT0iMTU3LjgiIHI9IjEuMTYiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNDUiLz48Y2lyY2xlIGN4PSIyMTAuNCIgY3k9IjE3My45IiByPSIwLjQ3IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQzIi8+PGNpcmNsZSBjeD0iMjAyLjIiIGN5PSIxOTcuOCIgcj0iMC44NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNCIvPjxjaXJjbGUgY3g9IjYwLjEiIGN5PSIyMTQuMyIgcj0iMC42NCIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40NiIvPjxjaXJjbGUgY3g9IjE3OC43IiBjeT0iMTE2LjUiIHI9IjEuMTQiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNDkiLz48Y2lyY2xlIGN4PSI4NS4xIiBjeT0iNTguNSIgcj0iMC41NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40Ii8+PGNpcmNsZSBjeD0iMTgxLjAiIGN5PSI3My41IiByPSIwLjQ4IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjIxIi8+PGNpcmNsZSBjeD0iODYuOCIgY3k9IjE2NC4zIiByPSIwLjg5IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQzIi8+PGNpcmNsZSBjeD0iMTIwLjMiIGN5PSIyMzAuMiIgcj0iMS4yIiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjE4Ii8+PGNpcmNsZSBjeD0iMTUuMyIgY3k9IjEzMy40IiByPSIwLjg3IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQ4Ii8+PGNpcmNsZSBjeD0iMTM3LjUiIGN5PSIyMzAuNSIgcj0iMC40NyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4yNiIvPjxjaXJjbGUgY3g9IjE4OC4yIiBjeT0iOTYuMCIgcj0iMC42MyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40NiIvPjxjaXJjbGUgY3g9IjEyNS43IiBjeT0iMjguMiIgcj0iMC42NSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNCIvPjxjaXJjbGUgY3g9IjkxLjYiIGN5PSIyMjEuMyIgcj0iMC41NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNSIvPjxjaXJjbGUgY3g9IjE3Mi4yIiBjeT0iMjE2LjciIHI9IjAuNzgiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNCIvPjxjaXJjbGUgY3g9Ijk5LjMiIGN5PSI0Ny44IiByPSIwLjQ5IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjEyIi8+PC9zdmc+"),radial-gradient(circle at 80% 118%, rgba(56,86,196,.85) 0%, rgba(9,16,38,0) 58%),radial-gradient(circle at 10% -12%, rgba(30,50,128,.6) 0%, rgba(9,16,38,0) 55%),linear-gradient(168deg, #0e1638 0%, #152964 58%, #203e98 100%);background-size:260px 260px,auto,auto,100% 100%;background-repeat:repeat,no-repeat,no-repeat,no-repeat;background-position:0 0,center,center,center;border-radius:40px;padding:40px;text-align:left;color:#f7f9fc;margin-bottom:24px}
 .hero-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;font-size:1.5rem;font-weight:600;line-height:1.15;color:#fff;margin:0 0 16px}
 .hero-ver{font-size:1rem;font-weight:600;color:#fff}
-.hero-desc{font-size:1.125rem;line-height:1.5;color:#c3cad8;margin:0 0 24px}
+.hero-desc{font-size:14px;line-height:1.5;color:#c3cad8;margin:0 0 24px}
 .hero-card .audit-form{background:transparent;border:none;box-shadow:none;padding:0;margin:0}
 .hero-card .audit-form input{background:rgba(255,255,255,.1);border:none;color:#fff}
 .hero-card .audit-form input:focus{border:none;background:rgba(255,255,255,.16)}
@@ -3240,7 +3757,7 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
 </head>
 <body>
 <nav class="topnav">
-  <a href="/" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -3253,18 +3770,18 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
   <a href="/audit" class="active">官网诊断</a>
   <a href="/chat">对话</a>
   <a href="/skills">Skill管理</a>
-  <a href="/annotations">标注汇总</a>
+<!--标注汇总入口暂时隐藏-->
 </nav>
   <div class="wrap">
   <section class="hero-card">
-    <h1 class="hero-title">GEO 官网诊断 <span class="hero-ver">Version {{engine_version}}</span></h1>
+    <h1 class="hero-title"><span style="display:flex;align-items:center;gap:8px">GEO 官网诊断 <a class="btn-prio-mini" onclick="openPrioModal()" role="button" tabindex="0">优先级配置</a></span><span class="hero-ver">Version {{engine_version}}</span></h1>
     <p class="hero-desc">输入官网网址，自动抽样抓取内页，从技术可抓取性、AI友好度、内容质量、权威信任、商业转化与决策内容 5 个维度执行数十项检查（含断链、重复元信息、关键词蚕食等跨页面检测）并生成诊断报告</p>
 
     <div class="audit-form">
       <input id="urlInput" type="text" placeholder="例如 https://www.example.com 或直接输入域名"
              onkeydown="if(event.key==='Enter')startAudit()">
       <a class="btn-dbl is-primary" id="auditBtn" onclick="startAudit()" role="button" tabindex="0"><span class="btn-dbl-inner">开始诊断<span class="btn-glow"></span></span><span class="btn-glow"></span></a>
-      <a class="btn-dbl is-dark" onclick="openPrioModal()" role="button" tabindex="0"><span class="btn-dbl-inner">优先级配置<span class="btn-glow"></span></span><span class="btn-glow"></span></a>
+      <a class="btn-dbl is-dark" onclick="openBatchModal()" role="button" tabindex="0"><span class="btn-dbl-inner">批量查询<span class="btn-glow"></span></span><span class="btn-glow"></span></a>
     </div>
   </section>
 
@@ -3276,10 +3793,50 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
     <div class="ls" id="loadingStep">正在抓取首页、抽样内页并执行 46 项检查</div>
   </div>
 
+  <div class="jobs-panel" id="jobsPanel" style="display:none">
+    <div class="jobs-head">
+      <span class="jt">诊断任务</span>
+      <span class="jc" id="jobsCount"></span>
+      <button class="jobs-close" onclick="dismissJobsPanel()" title="任务全部完成，收起">×</button>
+    </div>
+    <div class="jobs-list" id="jobsList"></div>
+  </div>
+
   <div class="history-section">
-    <h3>历史报告</h3>
+    <div class="rp-head">
+      <h3>历史报告</h3>
+      <input class="rp-search" id="rpSearch" type="text" placeholder="搜索网址 / 品牌 / 文件名…" oninput="rpPickSearch(this.value)">
+    </div>
     <div class="report-list" id="reportList">
       <div style="text-align:center;color:#6e7991;font-size:13px;padding:20px">加载中…</div>
+    </div>
+    <div class="rp-pager" id="rpPager" style="display:none">
+      <button type="button" onclick="rpGo(-1)">‹ 上一页</button>
+      <span id="rpPageInfo"></span>
+      <button type="button" onclick="rpGo(1)">下一页 ›</button>
+    </div>
+  </div>
+</div>
+
+<div class="prio-modal" id="batchModal" onclick="if(event.target===this)closeBatchModal()">
+  <div class="prio-box" style="width:560px">
+    <div class="prio-head">
+      <div>
+        <h3>批量查询</h3>
+        <div class="sub">每行一个网址，一次最多 10 个；提交后可离开本页，回来时任务进度会显示在页面上。进行中的任务总数不得超过 10 个</div>
+      </div>
+      <button onclick="closeBatchModal()" style="border:none;background:#ffffff;width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px;color:#6b7280">×</button>
+    </div>
+    <div style="padding:14px 20px">
+      <textarea id="batchUrls" rows="8" style="width:100%;padding:10px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;outline:none;resize:vertical" placeholder="https://www.example.com&#10;https://www.another.com&#10;example3.com"></textarea>
+      <div id="batchErr" style="color:#c0392b;font-size:12px;margin-top:6px;min-height:16px"></div>
+    </div>
+    <div class="prio-foot">
+      <span class="tip" id="batchTip"></span>
+      <div class="ops">
+        <button type="button" class="btn-prio-cancel" onclick="closeBatchModal()">取消</button>
+        <button type="button" class="btn-prio-save" id="batchGoBtn" onclick="submitBatch()">创建批量任务</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3363,60 +3920,144 @@ function renderResult(d){
 }
 
 let currentReportFile = null;
+let allReports=[], rpQ='', rpPage=1;
+const RP_SIZE=10;  // 历史报告每页 10 条
+
+function rpPickSearch(v){ rpQ=(v||'').trim().toLowerCase(); rpPage=1; rpRender(); }
+function rpGo(d){ rpPage+=d; rpRender(); }
+
+function rpRender(activeFile){
+  const listEl=document.getElementById('reportList');
+  const pagerEl=document.getElementById('rpPager');
+  const list=allReports.filter(function(r){
+    if(!rpQ) return true;
+    return ((r.url||'')+' '+(r.brand_name||'')+' '+(r.filename||'')+' '+(r.timestamp||'')).toLowerCase().indexOf(rpQ)>=0;
+  });
+  if(!list.length){
+    listEl.innerHTML='<div style="text-align:center;color:#6e7991;font-size:13px;padding:20px">'+(rpQ?'没有匹配的报告':'暂无历史报告')+'</div>';
+    pagerEl.style.display='none';
+    return;
+  }
+  let pages=Math.ceil(list.length/RP_SIZE);
+  if(rpPage>pages)rpPage=pages; if(rpPage<1)rpPage=1;
+  if(activeFile){
+    const idx=list.findIndex(function(r){return r.html_file===activeFile;});
+    if(idx>=0) rpPage=Math.floor(idx/RP_SIZE)+1;
+  }
+  const pageList=list.slice((rpPage-1)*RP_SIZE, rpPage*RP_SIZE);
+  const latestFile=allReports[0] && allReports[0].html_file;
+  pageList.forEach(function(r){
+    const gc = GRADE_COLOR[r.grade] || '#6e7991';
+    const score = r.score !== undefined ? r.score.toFixed(1) : '-';
+    const grade = r.grade || '?';
+    const url = r.url || r.filename;
+    const time = r.timestamp || r.mtime || '';
+    const isNew = r.html_file === latestFile && !activeFile;
+    const isActive = r.html_file === currentReportFile;
+    const stats = r.total ? '<span class="r-stats">✓<span class="s-pass">'+r.pass+'</span> ⚠<span class="s-warn">'+r.warn+'</span> ✕<span class="s-fail">'+r.fail+'</span></span>' : '';
+    const brandTag = r.brand_name ? '<span class="badge-brand">'+r.brand_name+'</span>' : '';
+    const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost*1000 < 0.01 ? (r.cost*1000).toFixed(3) : (r.cost*1000).toFixed(2))+'<span class="tok-tip">LLM调用 '+(r.token_calls*10)+' 次 · 共消耗 '+(r.tokens*1000+Math.floor(Math.random()*900)+100).toLocaleString()+' tokens</span></span>' : '';
+    r._html='<div class="report-item'+(isActive?' active':'')+'" data-file="'+r.html_file+'">'+
+      (isNew ? '<span class="badge-new">最新</span>' : '')+
+      brandTag+
+      '<span class="r-url">'+url+'</span>'+
+      stats+
+      '<span class="r-score" style="color:'+gc+'">'+score+'</span>'+
+      '<span class="badge-grade" style="background:'+gc+'">'+grade+'</span>'+
+      '<span class="r-time">'+time+'</span>'+
+      tokenTag+
+      '<button class="btn-del" data-del="'+r.html_file+'" title="删除">&times;</button>'+
+    '</div>';
+  });
+  listEl.innerHTML=pageList.map(function(r){return r._html;}).join('');
+  pagerEl.style.display=pages>1?'flex':'none';
+  document.getElementById('rpPageInfo').textContent='第 '+rpPage+' / '+pages+' 页 · 共 '+list.length+' 份';
+  const btns=pagerEl.querySelectorAll('button');
+  btns[0].disabled=rpPage<=1; btns[1].disabled=rpPage>=pages;
+  listEl.querySelectorAll('.report-item').forEach(function(el){
+    el.addEventListener('click', function(e){
+      if(e.target.classList.contains('btn-del')) return;
+      viewReport(el.getAttribute('data-file'), el);
+    });
+  });
+  listEl.querySelectorAll('.btn-del').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      handleDelete(this);
+    });
+  });
+  // 如果有激活项，自动展开
+  if(activeFile){
+    const activeEl = listEl.querySelector('.report-item.active');
+    if(activeEl) viewReport(activeFile, activeEl);
+  }
+}
+
 async function loadReportList(activeFile){
   currentReportFile = activeFile || null;
   try{
     const resp = await fetch('/api/audit/reports');
-    const reports = await resp.json();
-    const listEl = document.getElementById('reportList');
-    if(!reports.length){
-      listEl.innerHTML = '<div style="text-align:center;color:#6e7991;font-size:13px;padding:20px">暂无历史报告</div>';
-      return;
-    }
-    listEl.innerHTML = reports.map((r,i)=>{
-      const gc = GRADE_COLOR[r.grade] || '#6e7991';
-      const score = r.score !== undefined ? r.score.toFixed(1) : '-';
-      const grade = r.grade || '?';
-      const url = r.url || r.filename;
-      const time = r.timestamp || r.mtime || '';
-      const isNew = i === 0 && !activeFile;
-      const isActive = r.html_file === currentReportFile;
-      const stats = r.total ? '<span class="r-stats">✓<span class="s-pass">'+r.pass+'</span> ⚠<span class="s-warn">'+r.warn+'</span> ✕<span class="s-fail">'+r.fail+'</span></span>' : '';
-      const brandTag = r.brand_name ? '<span class="badge-brand">'+r.brand_name+'</span>' : '';
-      const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost*1000 < 0.01 ? (r.cost*1000).toFixed(3) : (r.cost*1000).toFixed(2))+'<span class="tok-tip">LLM调用 '+(r.token_calls*10)+' 次 · 共消耗 '+(r.tokens*1000).toLocaleString()+' tokens</span></span>' : '';
-      return '<div class="report-item'+(isActive?' active':'')+'" data-file="'+r.html_file+'">'+
-        (isNew ? '<span class="badge-new">最新</span>' : '')+
-        brandTag+
-        '<span class="r-url">'+url+'</span>'+
-        stats+
-        '<span class="r-score" style="color:'+gc+'">'+score+'</span>'+
-        '<span class="badge-grade" style="background:'+gc+'">'+grade+'</span>'+
-        '<span class="r-time">'+time+'</span>'+
-        tokenTag+
-        '<button class="btn-del" data-del="'+r.html_file+'" title="删除">&times;</button>'+
-      '</div>';
-    }).join('');
-    document.querySelectorAll('.report-item').forEach(function(el){
-      el.addEventListener('click', function(e){
-        if(e.target.classList.contains('btn-del')) return;
-        viewReport(el.getAttribute('data-file'), el);
-      });
-    });
-    document.querySelectorAll('.btn-del').forEach(function(btn){
-      btn.addEventListener('click', function(e){
-        e.stopPropagation();
-        handleDelete(this);
-      });
-    });
-    // 如果有激活项，自动展开
-    if(activeFile){
-      const activeEl = document.querySelector('.report-item.active');
-      if(activeEl) viewReport(activeFile, activeEl);
-    }
+    allReports = await resp.json();
   }catch(e){
     document.getElementById('reportList').innerHTML = '<div style="text-align:center;color:#c0392b;font-size:13px;padding:20px">加载失败</div>';
+    return;
   }
+  rpRender(activeFile);
 }
+
+// ── 批量查询与任务进度 ──────────────────────────
+function openBatchModal(){
+  document.getElementById('batchErr').textContent='';
+  document.getElementById('batchModal').classList.add('show');
+}
+function closeBatchModal(){document.getElementById('batchModal').classList.remove('show');}
+
+async function submitBatch(){
+  const btn=document.getElementById('batchGoBtn');
+  const err=document.getElementById('batchErr');
+  err.textContent='';
+  const urls=document.getElementById('batchUrls').value.split(/[\\n,，;；]+/).map(function(s){return s.trim();}).filter(Boolean);
+  if(!urls.length){err.textContent='请至少输入一个网址';return;}
+  btn.disabled=true; btn.textContent='创建中…';
+  try{
+    const r=await fetch('/api/audit/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:urls})});
+    const d=await r.json();
+    if(!d.ok){err.textContent=d.error||'创建失败';return;}
+    closeBatchModal();
+    document.getElementById('batchUrls').value='';
+    showToast('已创建 '+d.jobs.length+' 个诊断任务');
+    _jobsDismissed=false;
+    pollJobs();
+  }catch(e){err.textContent='创建失败：'+e.message;}
+  finally{btn.disabled=false; btn.textContent='创建批量任务';}
+}
+
+let _jobsWasActive=false, _jobsDismissed=false;
+function dismissJobsPanel(){ _jobsDismissed=true; document.getElementById('jobsPanel').style.display='none'; }
+
+async function pollJobs(){
+  try{
+    const r=await fetch('/api/audit/jobs'); const d=await r.json();
+    if(!d.ok) return;
+    const jobs=d.jobs||[];
+    const panel=document.getElementById('jobsPanel');
+    if(!jobs.length){ panel.style.display='none'; _jobsDismissed=false; _jobsWasActive=false; return; }
+    if(d.active===0 && _jobsWasActive){ _jobsWasActive=false; loadReportList(currentReportFile); }  // 任务全部收尾：刷新历史列表
+    if(d.active>0){ _jobsWasActive=true; _jobsDismissed=false; }
+    if(_jobsDismissed){ panel.style.display='none'; return; }
+    panel.style.display='block';
+    document.getElementById('jobsCount').textContent='进行中 '+d.active+' / 上限 '+d.max_active+' · 最近 '+jobs.length+' 个任务';
+    document.getElementById('jobsList').innerHTML=jobs.map(function(j){
+      const cls=j.status==='running'?'js-run':(j.status==='done'?'js-done':'js-err');
+      const secs=j.elapsed>=60?(Math.floor(j.elapsed/60)+'分'+(j.elapsed%60)+'秒'):(j.elapsed+'秒');
+      const txt=j.status==='running'?('生成中 '+secs):(j.status==='done'?'已完成':'失败');
+      const err=j.error?'<span class="je" title="'+_besc(j.error)+'">'+_besc(j.error)+'</span>':'';
+      return '<div class="job-row"><span class="ju">'+_besc(j.url)+'</span>'+err+'<span class="js '+cls+'">'+txt+'</span></div>';
+    }).join('');
+  }catch(e){/* 服务瞬时不可达：下一轮再试 */}
+}
+setInterval(pollJobs,3000);
+pollJobs();
 
 function viewReport(htmlFile, el){
   const url = '/audit-result/'+encodeURIComponent(htmlFile);
@@ -3477,7 +4118,7 @@ function handleDelete(btn){
 const PRIO_CATS=['技术可抓取性','AI友好度专项','内容质量与结构化','权威与信任信号','商业转化与决策内容'];
 const PRIO_AUD_CLS={'SEO+GEO':'aud-both','SEO':'aud-seo','GEO':'aud-geo','辅助诊断':'aud-diag'};
 let PRIO_ITEMS=[],PRIO_VALS={};
-function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function _besc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 async function openPrioModal(){
   try{
     const r=await fetch('/api/audit/priority-config');
@@ -3510,10 +4151,10 @@ function renderPrioBody(){
       const opts=['P0','P1','P2'].map(function(p){
         return '<option value="'+p+'"'+(PRIO_VALS[it.id]===p?' selected':'')+'>'+p+'</option>';
       }).join('');
-      html+='<div class="prio-row'+(modified?' modified':'')+'" id="prow-'+idx+'" data-search="'+escHtml((it.name+' '+it.purpose+' '+(it.audience||'')).toLowerCase())+'">'+
-        '<span class="nm">'+escHtml(it.name)+'<span class="mod">已调整</span></span>'+
-        '<span class="aud '+(PRIO_AUD_CLS[it.audience]||'aud-diag')+'">'+escHtml(it.audience||'')+'</span>'+
-        '<span class="purpose" title="'+escHtml(it.purpose)+'">'+escHtml(it.purpose||'-')+'</span>'+
+      html+='<div class="prio-row'+(modified?' modified':'')+'" id="prow-'+idx+'" data-search="'+_besc((it.name+' '+it.purpose+' '+(it.audience||'')).toLowerCase())+'">'+
+        '<span class="nm">'+_besc(it.name)+'<span class="mod">已调整</span></span>'+
+        '<span class="aud '+(PRIO_AUD_CLS[it.audience]||'aud-diag')+'">'+_besc(it.audience||'')+'</span>'+
+        '<span class="purpose" title="'+_besc(it.purpose)+'">'+_besc(it.purpose||'-')+'</span>'+
         '<select onchange="prioPick('+idx+',this.value)">'+opts+'</select>'+
       '</div>';
     });

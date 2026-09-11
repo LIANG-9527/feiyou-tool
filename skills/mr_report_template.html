@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>__TITLE__ 报告模板</title>
+<style>
+/* 本文件：客户市场调研报告的三页签模板（企业画像 / 销售情报简报 / 完整背调报告），单文件离线可用。
+   注入点（后端替换，勿在本注释中原样书写）：TITLE / META / SLIDES / TOTAL_PAGES / REPORT 五个带双下划线的占位标记。
+   SLIDES 处注入若干张幻灯 div（class slide，内含 slide-k 页标签 / slide-t 观点标题 / slide-b 正文）；
+   REPORT 处为完整报告正文（h2/h3/table/ul/blockquote 等） */
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none!important}  /* 覆盖下面给 main 定的 display，否则切换页签时概览不隐藏 */
+body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f7f9fc;color:#091026;line-height:1.7}
+.rpt-header{background:#091026;padding:20px 24px}
+.rpt-header-inner{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.rpt-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.rpt-header .t{min-width:0}
+.rpt-header h1{font-size:20px;font-weight:700;color:#fff;margin:0;display:flex;align-items:baseline;gap:12px}
+.rpt-header h1 .tail{font-size:13px;font-weight:400;color:#c3cad8;white-space:nowrap;margin-left:auto}
+.rpt-tabs{display:flex;border:1px solid rgba(255,255,255,.35);border-radius:12px;overflow:hidden;flex-shrink:0}
+.rpt-tabs button{appearance:none;border:none;background:transparent;color:#fff;font-size:13px;font-weight:600;padding:9px 18px;cursor:pointer;font-family:inherit}
+.rpt-tabs button.on{background:#fff;color:#091026}
+#view-deck{min-height:calc(100vh - 84px);background:#091026;color:#fff;display:flex;align-items:center;justify-content:center;padding:20px 20px 84px}
+.deck-stage{width:min(100%,1080px);height:min(calc(100vh - 150px),calc((100vw - 40px) * 0.5625));position:relative}
+@media (max-aspect-ratio:16/9){.deck-stage{height:56.25vw}}
+.slide{display:none;position:absolute;inset:0;border-radius:14px;padding:6% 7%;background:radial-gradient(circle at 85% 12%,rgba(53,103,255,.28),transparent 55%),linear-gradient(150deg,#0e1638 0%,#152964 58%,#203e98 100%);flex-direction:column;justify-content:center;overflow:auto}
+.slide.on{display:flex}
+.slide-k{font-size:clamp(10px,1.1vw,13px);letter-spacing:.18em;color:#8ea6ff;margin-bottom:1.2em;text-transform:uppercase}
+.slide-t{font-size:clamp(17px,2.6vw,32px);font-weight:700;line-height:1.3;color:#fff;margin-bottom:1em}
+.slide-b{font-size:clamp(11px,1.25vw,16px);color:#dbe4f5}
+.slide-b p{margin:.45em 0}
+.slide-b ul{padding-left:1.3em;margin:.45em 0}
+.slide-b li{margin:.3em 0}
+.deck-nav{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;display:none;align-items:center;gap:14px;background:rgba(17,17,17,.85);border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:6px 14px;color:#fff;font-size:13px;z-index:40}
+body.deck-active .deck-nav{display:flex}
+.deck-nav button{border:none;background:rgba(255,255,255,.14);color:#fff;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1}
+.deck-nav button:hover{background:rgba(255,255,255,.28)}
+#view-report{max-width:960px;margin:0 auto;padding:40px 24px;background:#fff;border-radius:0 0 24px 24px}
+#view-report h2{font-size:20px;font-weight:600;margin:32px 0 14px;padding-bottom:8px;border-bottom:2px solid #3567ff}
+#view-report h3{font-size:16px;font-weight:600;margin:22px 0 10px}
+#view-report h4{font-size:15px;font-weight:600;margin:16px 0 8px}
+#view-report p{margin:8px 0;font-size:15px}
+#view-report ul,#view-report ol{padding-left:22px;margin:8px 0}
+#view-report li{margin:4px 0;font-size:15px}
+#view-report table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+#view-report th{background:#eff1f6;padding:10px 12px;text-align:left;font-weight:600;border:1px solid #e3e7ef}
+#view-report td{padding:10px 12px;border:1px solid #e3e7ef;vertical-align:top}
+#view-report blockquote{margin:12px 0;padding:12px 16px;background:#f2f6ff;border-left:3px solid #3567ff;border-radius:0 10px 10px 0;font-size:15px}
+#view-report code{background:#eff1f6;padding:1px 5px;border-radius:4px;font-size:13px}
+.brief{max-width:1080px;margin:0 auto;padding:48px 24px 80px}
+.brief-hero{background:radial-gradient(circle at 85% 10%,rgba(53,103,255,.35),transparent 55%),linear-gradient(150deg,#0e1638 0%,#152964 58%,#203e98 100%);border-radius:20px;padding:44px 40px;color:#fff;margin-bottom:32px}
+.brief-hero .bn{font-size:26px;font-weight:700;margin-bottom:6px}
+.brief-hero .bt{font-size:14px;color:#c3cad8}
+.brief-sec{background:#fff;border-radius:16px;padding:24px 26px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.brief-sec h3{font-size:16px;font-weight:700;color:#091026;margin:0 0 16px;padding-left:10px;border-left:3px solid #3567ff}
+.brief-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:#eff1f6;border:1px solid #eff1f6;border-radius:12px;overflow:hidden}
+.brief-fact{background:#fff;padding:14px 16px}
+.brief-fact .k{font-size:12px;color:#6e7991;margin-bottom:4px}
+.brief-fact .v{font-size:14px;font-weight:600;color:#091026}
+.brief-text{font-size:14px;color:#091026;white-space:pre-wrap;line-height:1.8}
+.brief-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.brief-cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.brief-card2{border:1px solid #eff1f6;border-radius:10px;padding:10px 14px;font-size:13px}
+.brief-card2 b{display:block;margin-bottom:2px}
+.brief-card2 span{color:#6e7991}
+.brief{--line:#dfe4ee}
+.brief-tl{list-style:none;padding-left:18px;border-left:2px solid var(--line)}
+.brief-tl li{position:relative;padding:0 0 18px 18px}
+.brief-tl li:last-child{padding-bottom:0}
+.brief-tl li::before{content:"";position:absolute;left:-26px;top:5px;width:10px;height:10px;border-radius:50%;background:#3567ff;border:2px solid #fff;box-shadow:0 0 0 2px #3567ff}
+.brief-tl .td{font-size:13px;font-weight:700;color:#3567ff;margin-bottom:2px}
+.brief-tl .te{font-size:13px;color:#091026}
+.brief-empty{max-width:960px;margin:60px auto;padding:40px;background:#fff;border-radius:16px;text-align:center;color:#6e7991;font-size:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.tree,.tree ul{margin:0;padding:0;list-style:none}
+.tree ul{margin-left:9px;padding-left:20px;border-left:1px solid var(--line)}
+.tree li{position:relative;padding:5px 0;font-size:14px;line-height:1.5}
+.tree ul li::before{content:"";position:absolute;left:-20px;top:15px;width:16px;height:1px;background:var(--line)}
+.tree b{display:inline-block;background:#f2f6ff;border:1px solid #dbe6ff;color:#091026;border-radius:8px;padding:3px 10px;font-weight:600}.rpt-footer{margin-top:40px;padding-top:20px;text-align:center;font-size:12px;color:#6e7991}
+.rpt-export{display:flex;align-items:center;gap:6px;padding:8px 14px;font-size:13px;font-weight:600;color:#334155;background:#fff;border:1px solid #e2e8f0;border-radius:10px;cursor:pointer;transition:all .15s;flex-shrink:0;text-decoration:none}
+
+/* 企业画像：intel-deck 模板风（选择器全部限定在 .pf 内，避免与正文样式冲突） */
+#view-brief{background:#f2f4f8;padding:26px 16px;min-height:calc(100vh - 84px)}
+#view-brief .brief{max-width:none;padding:0;margin:0}
+#view-brief .pf{max-width:960px;margin:0 auto;background:#fff;border:1px solid #e8ecf3;border-radius:14px;padding:40px 48px;overflow:hidden}
+#view-brief .pf .k{font-size:12px;color:#8a93a6;letter-spacing:1.5px;margin-bottom:6px}
+#view-brief .pf>.t{font-size:22px;font-weight:700;margin-bottom:18px;color:#1a1d29}
+#view-brief .pf .igrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+#view-brief .pf .iitem{display:flex;justify-content:space-between;gap:8px;padding:9px 12px;background:#f7f9fc;border-radius:8px;border:1px solid #e8ecf3}
+#view-brief .pf .iitem .k2{font-size:11px;color:#8a93a6;white-space:nowrap}
+#view-brief .pf .iitem .v{font-size:12px;font-weight:600;text-align:right;color:#1a1d29}
+#view-brief .pf .org{display:flex;flex-direction:column;align-items:center;gap:0;margin:6px 0 14px}
+#view-brief .pf .org-box{background:#1d2b53;color:#fff;border-radius:8px;padding:7px 18px;font-size:12.5px;font-weight:600}
+#view-brief .pf .org-line{width:1px;height:14px;background:#c9d2e0}
+#view-brief .pf .org-row{display:flex;gap:10px;position:relative;padding-top:14px;flex-wrap:wrap;justify-content:center}
+#view-brief .pf .org-row::before{content:'';position:absolute;top:0;left:12%;right:12%;height:1px;background:#c9d2e0}
+#view-brief .pf .org-cell{background:#fff;border:1.5px solid #3567ff;border-radius:8px;padding:6px 12px;font-size:11.5px;font-weight:600;color:#1d2b53;text-align:center;max-width:280px}
+#view-brief .pf .org-cell.sub{border-color:#c9d2e0;color:#556;font-weight:500;font-size:11px}
+#view-brief .pf .org-cap{font-size:11px;color:#8a93a6;margin-bottom:4px}
+#view-brief .pf .tl{position:relative;padding-left:22px;margin:4px 0 10px}
+#view-brief .pf .tl::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:linear-gradient(#3567ff,#8b5cf6);border-radius:2px}
+#view-brief .pf .tl-i{position:relative;margin-bottom:10px}
+#view-brief .pf .tl-i::before{content:'';position:absolute;left:-21px;top:5px;width:8px;height:8px;border-radius:50%;background:#3567ff;border:2px solid #fff}
+#view-brief .pf .tl-y{font-size:11px;color:#3567ff;font-weight:700}
+#view-brief .pf .tl-x{font-size:12px;color:#445}
+#view-brief .pf .card{border:1px solid #e8ecf3;border-radius:12px;padding:14px;margin-top:14px}
+#view-brief .pf .card .ct{font-size:13px;font-weight:700;margin-bottom:8px;color:#1a1d29}
+#view-brief .pf .card .cb{font-size:12.5px;color:#445;line-height:1.8}
+#view-brief .pf .words{display:flex;flex-wrap:wrap;gap:6px}
+#view-brief .pf .wd{padding:3px 11px;border-radius:14px;font-size:11.5px;background:#fdf6e3;color:#9a6b00;border:1px solid #f0e3c0}
+#view-brief .pf .f{font-size:11px;color:#a0a9bd;margin-top:16px;padding-top:14px;border-top:1px dashed #e8ecf3}
+@media (max-width:720px){#view-brief .pf{padding:26px 20px}#view-brief .pf .igrid{grid-template-columns:1fr 1fr}}
+#view-brief .brief-empty{background:#fff;color:#6e7991;border:1px solid #e8ecf3;border-radius:14px;padding:40px;text-align:center;font-size:14px}
+
+/* 情报简报：打单提案模板风（白底、结论句大标题、要点链式行；作用域限定 #view-deck） */
+#view-deck{background:#fff;color:#111}
+#view-brief~main{}
+#view-deck .slide{background:#fff;border:none;padding:48px 56px;justify-content:center}
+#view-deck .slide-k{font-size:12px;color:#999;letter-spacing:1.5px;margin-bottom:12px;text-transform:none}
+#view-deck .slide-t{font-size:24px;font-weight:600;line-height:32px;color:#111;margin-bottom:20px}
+#view-deck .slide-b{color:#444;font-size:15px;line-height:24px}
+#view-deck .slide-b p{margin:0 0 14px}
+#view-deck .slide-b ul{padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+#view-deck .slide-b li{display:grid;grid-template-columns:10px 1fr;gap:12px;align-items:center;border:1px solid #e5e5e5;border-radius:10px;padding:12px 14px;font-size:14px;color:#333;background:#fff}
+#view-deck .slide-b li::before{content:'';width:8px;height:8px;border-radius:50%;background:#c0392b}
+#view-deck .slide-b li:nth-child(2)::before{background:#e6a23c}
+#view-deck .slide-b li:nth-child(3)::before{background:#bbb}
+#view-deck .slide-b li:nth-child(4)::before{background:#bbb}
+#view-deck .slide-b li:nth-child(5)::before{background:#bbb}
+#view-deck .deck-stage{width:min(100%,1080px);height:auto;min-height:calc(100vh - 160px)}
+@media (max-width:640px){#view-deck .slide{padding:28px 20px}#view-deck .slide-t{font-size:20px;line-height:28px}}
+</style>
+</head>
+<body>
+<header class="rpt-header"><div class="rpt-header-inner">
+  <div class="rpt-actions">
+  <nav class="rpt-tabs">
+    <button type="button" data-view="brief" onclick="rptTab('brief')">企业画像</button>
+    <button type="button" class="on" data-view="deck" onclick="rptTab('deck')">情报简报</button>
+    <button type="button" data-view="report" onclick="rptTab('report')">完整背调报告</button>
+  </nav>
+  <button type="button" class="rpt-export" title="把本报告保存为本地 HTML 文件（离线可看，双击即开）" onclick="downloadReport()">
+    <svg style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>导出报告</button>
+  </div>
+  <div class="t"><h1>__TITLE__<span class="tail">__META__</span></h1></div>
+</div></header>
+<main id="view-brief" hidden><div class="brief">__BRIEF__<div class="brief-empty">企业画像内容待生成</div></div></main>
+<main id="view-deck"><div class="deck-stage" id="deckStage">__SLIDES__</div></main>
+<main id="view-report" hidden>__REPORT__</main>
+<div class="deck-nav"><button type="button" onclick="deckGo(-1)" aria-label="上一页">‹</button><span id="deckInd">1 / __TOTAL_PAGES__</span><button type="button" onclick="deckGo(1)" aria-label="下一页">›</button></div>
+<script>
+let deckCur=0;
+function deckSlides(){return Array.prototype.slice.call(document.querySelectorAll('.slide'));}
+function deckRender(){const s=deckSlides();s.forEach((el,i)=>el.classList.toggle('on',i===deckCur));const ind=document.getElementById('deckInd');if(ind)ind.textContent=(deckCur+1)+' / '+s.length;}
+function deckGo(d){const s=deckSlides();if(!s.length)return;deckCur=Math.min(Math.max(deckCur+d,0),s.length-1);deckRender();}
+function rptTab(v){
+  ['brief','deck','report'].forEach(x=>document.getElementById('view-'+x).hidden=(x!==v));
+  document.body.classList.toggle('deck-active',v==='deck');
+  document.querySelectorAll('.rpt-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
+  if(v==='deck')deckRender();
+}
+document.addEventListener('keydown',e=>{if(!document.body.classList.contains('deck-active'))return;if(e.key==='ArrowRight')deckGo(1);if(e.key==='ArrowLeft')deckGo(-1);});
+function downloadReport(){
+  const html='<!DOCTYPE html>\n'+document.documentElement.outerHTML;
+  const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  const title=(document.querySelector('title')||{textContent:'调研报告'}).textContent.trim().replace(/[\\/:*?"<>|]/g,'_');
+  a.download=title+'.html';document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),3000);
+}
+rptTab('deck');
+</script>
+</body>
+</html>

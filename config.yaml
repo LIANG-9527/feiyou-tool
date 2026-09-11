@@ -1,12 +1,14 @@
 llm:
-  # DeepSeek API (OpenAI-compatible)
-  base_url: "https://api.deepseek.com/v1"
-  api_key: "sk-4f2004eba0f2425eb1beeb6675b2bb97"
-  model: "deepseek-chat"
+  # 阿里云百炼（OpenAI 兼容模式）
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  api_key: "sk-ws-H.PDYLYMH.f9UX.MEUCIEKuaL4mhnfB6Gh-XDctHzkkWknGJuRRgNlmPskAnteDAiEAwLGc-BhUiusGWfijWrGiYqMcuFNP5SyGkIrmCOaT-oc"
+  model: "qwen3.8-flash"
   temperature: 0.7
-  max_tokens: 4096
-  timeout: 120
+  max_tokens: 16384
+  timeout: 600  # 思考+联网+长文输出，调研类单步可超2分钟，120会误杀（2026-09-11 实测第3步撞满3次重试）
   max_retries: 3
+  enable_search: true  # 联网搜索总开关：调用模型时允许其联网检索验证外部信息
+  enable_thinking: true  # 深度思考总开关：开启思维链推理（qwen3.8-flash 思考/非思考同价）
   max_concurrency: 5  # 并行LLM调用上限(Step2/Step4多线并发时)
 
 server:

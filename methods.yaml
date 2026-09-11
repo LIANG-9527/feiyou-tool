@@ -24,19 +24,19 @@ methods:
         required: false
         placeholder: 目标产品/服务（可选，不填则自动选择）
   - id: customer_market_research
-    name: 客户市场调研
-    description: 调研目标行业的市场规模、竞争格局、客户痛点与采购关注点
+    name: 客户市场调研分析
+    description: 联网六轮采集+交叉验证，输出8章调研报告（客户画像与决策链、痛点诊断、营销现状评估含门店维度、竞品对标、机会缺口、分层优化方案含门店级GEO模块、预算容量与ROI、提案切入与附录）及多方向销售话术方案
     skills:
       - mr_profile
       - mr_marketing
       - mr_opportunity
+      - mr_plan
       - mr_proposal
+      - mr_sales
+      - mr_deck
+      - mr_brief
     input_fields:
       - name: brand
         label: 企业/品牌名称
         required: true
         placeholder: 企业/品牌名称（必填）
-      - name: product
-        label: 目标行业/产品方向
-        required: false
-        placeholder: 目标行业/产品方向（可选）

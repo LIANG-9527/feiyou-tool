@@ -18,8 +18,10 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class Agent:
-    def __init__(self, llm: LLMClient, max_concurrency: int = 5):
+    def __init__(self, llm: LLMClient, max_concurrency: int = 5, thinking: bool | None = None):
         self.llm = llm
+        # 本次任务是否启用深度思考：None=跟随全局配置；True/False=按请求覆盖（如市场调研的开关）
+        self.thinking = thinking
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.skills = self._load_skills()
         self.methods = self._load_methods()
@@ -168,6 +170,7 @@ class Agent:
                 on_progress(sid, f"完成: {sname}", time.time() - t0)
 
         ctx["total_elapsed"] = time.time() - t0
+        ctx["token_usage"] = getattr(self.llm, "token_usage", None)
         ctx["self_check"] = self._gen_self_check(ctx, skills)
         return ctx
 
@@ -200,14 +203,34 @@ class Agent:
             {"role": "user", "content": prompt},
         ]
         async with self.semaphore:
-            return await self.llm.chat(messages, expect_json=expect_json)
+            return await self.llm.chat(messages, expect_json=expect_json, thinking=self.thinking)
+
+    @staticmethod
+    def _clean_md_output(text):
+        """清洗调研正文：联网模式下模型偶发把检索计划/伪工具调用当正文输出（qwen3.8 实测）。
+        删除成对 tool_call 块与 function=/parameter= 标签行；从第一个 # 标题起截取正文。"""
+        import re
+        if not isinstance(text, str):
+            return text
+        text = re.sub("<tool_call[^>]*>[\\s\\S]*?</tool_call>", "", text)
+        text = re.sub("^(?:\\s*)</?(?:tool_call|function[=>][^>]*|parameter[=>][^>]*).*$", "", text, flags=re.M)
+        m = re.search("^#{1,4} ", text, flags=re.M)
+        if m:
+            text = text[m.start():]
+        return text.strip() + "\
+"
 
     async def _exec_single(self, skill: dict, ctx: dict) -> Any:
         context = self._build_context(skill, ctx)
         prompt = self._render(skill["prompt"], context)
         # format: markdown 的 skill（如市场调研）需返回纯文本，不做 JSON 解析
         as_text = skill.get("format") == "markdown"
-        return await self._llm_call(prompt, expect_json=not as_text)
+        if as_text:
+            prompt += "\n\n（直接从 # 标题开始输出正文；禁止开场白、计划陈述和任何工具调用文本）"
+        result = await self._llm_call(prompt, expect_json=not as_text)
+        if as_text:
+            result = self._clean_md_output(result)
+        return result
 
     async def _exec_parallel(self, skill: dict, ctx: dict,
                              on_progress, t0) -> Any:
