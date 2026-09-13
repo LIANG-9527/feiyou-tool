@@ -32,7 +32,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .slide-b p{margin:.45em 0}
 .slide-b ul{padding-left:1.3em;margin:.45em 0}
 .slide-b li{margin:.3em 0}
-.deck-nav{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;display:none;align-items:center;gap:14px;background:rgba(17,17,17,.85);border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:6px 14px;color:#fff;font-size:13px;z-index:40}
+.deck-nav{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;display:none;align-items:center;gap:14px;background:rgba(9,16,38,.82);border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:6px 14px;color:#fff;font-size:13px;z-index:40}
 body.deck-active .deck-nav{display:flex}
 .deck-nav button{border:none;background:rgba(255,255,255,.14);color:#fff;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1}
 .deck-nav button:hover{background:rgba(255,255,255,.28)}
@@ -82,10 +82,15 @@ body.deck-active .deck-nav{display:flex}
 /* 企业画像：intel-deck 模板风（选择器全部限定在 .pf 内，避免与正文样式冲突） */
 #view-brief{background:#f2f4f8;padding:26px 16px;min-height:calc(100vh - 84px)}
 #view-brief .brief{max-width:none;padding:0;margin:0}
-#view-brief .pf{max-width:960px;margin:0 auto;background:#fff;border:1px solid #e8ecf3;border-radius:14px;padding:40px 48px;overflow:hidden}
+#view-brief .pf{max-width:960px;margin:0 auto;padding:0}
+#view-brief .pf-head{background:#fff;border:1px solid #e8ecf3;border-radius:14px;padding:22px 26px;margin-bottom:16px}
+#view-brief .pf-card{background:#fff;border:1px solid #e8ecf3;border-radius:14px;padding:22px 26px;margin-bottom:16px;overflow:hidden}
 #view-brief .pf .k{font-size:12px;color:#8a93a6;letter-spacing:1.5px;margin-bottom:6px}
-#view-brief .pf>.t{font-size:22px;font-weight:700;margin-bottom:18px;color:#1a1d29}
+#view-brief .pf-head .t{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1d29}
 #view-brief .pf .igrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+#view-brief .pf .info-table{width:100%;border-collapse:collapse;margin-bottom:16px}
+#view-brief .pf .info-table th{width:120px;background:#f2f5fa;color:#667;font-weight:600;text-align:left;padding:9px 12px;border:1px solid #e3e7ef;font-size:12px;white-space:nowrap;vertical-align:top}
+#view-brief .pf .info-table td{padding:9px 12px;border:1px solid #e3e7ef;color:#1a1d29;font-size:12.5px;line-height:1.6}
 #view-brief .pf .iitem{display:flex;justify-content:space-between;gap:8px;padding:9px 12px;background:#f7f9fc;border-radius:8px;border:1px solid #e8ecf3}
 #view-brief .pf .iitem .k2{font-size:11px;color:#8a93a6;white-space:nowrap}
 #view-brief .pf .iitem .v{font-size:12px;font-weight:600;text-align:right;color:#1a1d29}
@@ -112,23 +117,71 @@ body.deck-active .deck-nav{display:flex}
 @media (max-width:720px){#view-brief .pf{padding:26px 20px}#view-brief .pf .igrid{grid-template-columns:1fr 1fr}}
 #view-brief .brief-empty{background:#fff;color:#6e7991;border:1px solid #e8ecf3;border-radius:14px;padding:40px;text-align:center;font-size:14px}
 
-/* 情报简报：打单提案模板风（白底、结论句大标题、要点链式行；作用域限定 #view-deck） */
-#view-deck{background:#fff;color:#111}
-#view-brief~main{}
-#view-deck .slide{background:#fff;border:none;padding:48px 56px;justify-content:center}
-#view-deck .slide-k{font-size:12px;color:#999;letter-spacing:1.5px;margin-bottom:12px;text-transform:none}
-#view-deck .slide-t{font-size:24px;font-weight:600;line-height:32px;color:#111;margin-bottom:20px}
-#view-deck .slide-b{color:#444;font-size:15px;line-height:24px}
+
+/* 情报简报：深蓝配色 + 提案版式（链式要点卡；仅作用域覆盖列表组件，页面背景/渐变卡不变） */
+#view-deck .slide-t{font-size:18px;line-height:1.4;margin-bottom:24px}
+#view-deck .slide-b>*:first-child{margin-top:0}
+#view-deck .slide-k{font-size:32px;line-height:1.2;letter-spacing:2px;margin-bottom:.6em}
 #view-deck .slide-b p{margin:0 0 14px}
-#view-deck .slide-b ul{padding:0;margin:0;list-style:none;display:flex;flex-direction:column;gap:8px}
-#view-deck .slide-b li{display:grid;grid-template-columns:10px 1fr;gap:12px;align-items:center;border:1px solid #e5e5e5;border-radius:10px;padding:12px 14px;font-size:14px;color:#333;background:#fff}
-#view-deck .slide-b li::before{content:'';width:8px;height:8px;border-radius:50%;background:#c0392b}
-#view-deck .slide-b li:nth-child(2)::before{background:#e6a23c}
-#view-deck .slide-b li:nth-child(3)::before{background:#bbb}
-#view-deck .slide-b li:nth-child(4)::before{background:#bbb}
-#view-deck .slide-b li:nth-child(5)::before{background:#bbb}
-#view-deck .deck-stage{width:min(100%,1080px);height:auto;min-height:calc(100vh - 160px)}
-@media (max-width:640px){#view-deck .slide{padding:28px 20px}#view-deck .slide-t{font-size:20px;line-height:28px}}
+#view-deck .slide-b ul{display:flex;flex-direction:column;gap:8px;padding-left:0}
+#view-deck .slide-b li{display:grid;grid-template-columns:10px 1fr;gap:12px;align-items:center;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);border-radius:10px;padding:12px 14px;font-size:14px;line-height:22px;color:#e6ecf8;min-height:60px}
+#view-deck .slide-b li::before{content:'';width:8px;height:8px;border-radius:50%;background:#ff6b6b}
+#view-deck .slide-b li:nth-child(2)::before{background:#ffd166}
+#view-deck .slide-b li:nth-child(n+3)::before{background:#8ea6ff}
+#view-deck .deck-stage{height:600px}
+#view-deck .slide-t,#view-deck .slide-b{margin:0 24px}
+#view-deck .slide-t{margin-bottom:24px}
+@media (max-width:640px){#view-deck .slide-t,#view-deck .slide-b{margin:0 20px}}
+
+/* 情报简报幻灯构件（blocks 块型协议，规格见 docs/简报版式对齐规格.md；深蓝配色） */
+#view-deck .sb{margin:0 0 12px}
+#view-deck .sb-ct{font-size:13px;font-weight:700;color:#fff;margin-bottom:6px}
+#view-deck .sb-card{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);border-radius:12px;padding:12px 14px;min-width:0}
+#view-deck .sb-two,#view-deck .sb-media{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#view-deck .sb-two.single{grid-template-columns:1fr}
+#view-deck .sb-r{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,.12);font-size:12.5px;line-height:1.6}
+#view-deck .sb-r:last-child{border-bottom:none}
+#view-deck .sb-r .rk{color:#8ea6ff;font-weight:600;white-space:nowrap}
+#view-deck .sb-r .rv{color:#e6ecf8;text-align:right}
+#view-deck .sb-tl{position:relative;padding-left:18px;border-left:2px solid rgba(142,166,255,.45)}
+#view-deck .sb-ti{position:relative;padding:0 0 10px 12px}
+#view-deck .sb-ti:last-child{padding-bottom:0}
+#view-deck .sb-ti::before{content:'';position:absolute;left:-25px;top:5px;width:8px;height:8px;border-radius:50%;background:#8ea6ff;border:2px solid #152964}
+#view-deck .sb-ty{font-size:12px;font-weight:700;color:#8ea6ff}
+#view-deck .sb-tx{font-size:13px;color:#dbe4f5;line-height:1.6}
+#view-deck .sb-words{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#view-deck .sb-wd{display:inline-flex;align-items:center;gap:5px;padding:2px 10px;margin:0 6px 6px 0;border-radius:14px;font-size:12px}
+#view-deck .sb-wd.pos{background:rgba(34,197,94,.16);color:#7ee2a8;border:1px solid rgba(34,197,94,.38)}
+#view-deck .sb-wd.neg{background:rgba(239,68,68,.16);color:#ff9d9d;border:1px solid rgba(239,68,68,.38)}
+#view-deck .sb-wd.mid{background:rgba(255,255,255,.08);color:#dbe4f5;border:1px solid rgba(255,255,255,.18)}
+#view-deck .sb-wd i{font-style:normal;font-size:10px;color:#8ea6ff}
+#view-deck .sb-tablewrap{border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:8px 10px;background:rgba(255,255,255,.04);overflow:auto}
+#view-deck .sb-tablewrap table{width:100%;border-collapse:collapse;font-size:12px}
+#view-deck .sb-tablewrap th{background:rgba(53,103,255,.25);color:#fff;text-align:left;padding:7px 9px;border:1px solid rgba(255,255,255,.14);font-weight:600;white-space:nowrap}
+#view-deck .sb-tablewrap td{padding:7px 9px;border:1px solid rgba(255,255,255,.12);color:#dbe4f5;line-height:1.55}
+#view-deck .sb-bars{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+#view-deck .sb-bc{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);border-radius:10px;padding:10px}
+#view-deck .sb-bc .bn{font-size:12.5px;font-weight:700;color:#fff}
+#view-deck .sb-bc .bd{font-size:11px;color:#a9b7d8;margin:2px 0 6px;line-height:1.5}
+#view-deck .sb-bbg{height:5px;background:rgba(255,255,255,.12);border-radius:3px;overflow:hidden}
+#view-deck .sb-bbg div{height:100%;border-radius:3px;background:linear-gradient(90deg,#3567ff,#6d94ff)}
+#view-deck .sb-bc .bp{font-size:10px;color:#8ea6ff;margin-top:4px;text-align:right}
+#view-deck .sb-mr{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,.12);font-size:12.5px;color:#e6ecf8}
+#view-deck .sb-mr:last-child{border-bottom:none}
+#view-deck .sb-st{font-size:10.5px;padding:1px 8px;border-radius:10px;white-space:nowrap}
+#view-deck .sb-st.y{background:rgba(34,197,94,.18);color:#7ee2a8}
+#view-deck .sb-st.n{background:rgba(255,255,255,.1);color:#a9b7d8}
+#view-deck .sb-st.q{background:rgba(255,209,102,.16);color:#ffd166}
+#view-deck .sb-kws{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+#view-deck .sb-kw{border-radius:10px;padding:10px 12px;border:1px solid transparent}
+#view-deck .sb-kw.d1{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35)}
+#view-deck .sb-kw.d2{background:rgba(53,103,255,.14);border-color:rgba(109,148,255,.4)}
+#view-deck .sb-kw.d3{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.35)}
+#view-deck .sb-kw .kn{font-size:12.5px;font-weight:700;color:#fff}
+#view-deck .sb-kw .kd{font-size:10.5px;color:#a9b7d8;margin-bottom:8px}
+#view-deck .sb-note{border:1px solid rgba(142,166,255,.4);background:rgba(53,103,255,.12);border-radius:10px;padding:10px 14px;font-size:13px;line-height:1.7;color:#e6ecf8}
+#view-deck .sb-src{font-size:11px;color:#8ea6ff;margin-top:auto;padding-top:10px}
+@media (max-width:640px){#view-deck .sb-two,#view-deck .sb-media,#view-deck .sb-words{grid-template-columns:1fr}#view-deck .sb-bars{grid-template-columns:1fr 1fr}#view-deck .sb-kws{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -147,6 +200,7 @@ body.deck-active .deck-nav{display:flex}
 <main id="view-brief" hidden><div class="brief">__BRIEF__<div class="brief-empty">企业画像内容待生成</div></div></main>
 <main id="view-deck"><div class="deck-stage" id="deckStage">__SLIDES__</div></main>
 <main id="view-report" hidden>__REPORT__</main>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <div class="deck-nav"><button type="button" onclick="deckGo(-1)" aria-label="上一页">‹</button><span id="deckInd">1 / __TOTAL_PAGES__</span><button type="button" onclick="deckGo(1)" aria-label="下一页">›</button></div>
 <script>
 let deckCur=0;
@@ -169,6 +223,34 @@ function downloadReport(){
   setTimeout(()=>URL.revokeObjectURL(a.href),3000);
 }
 rptTab('deck');
+/* 企业画像·组织架构：ECharts 径向树（数据来自 #orgData；CDN 未加载成功则保留静态 CSS 版） */
+(function(){
+  const el=document.getElementById('orgData');
+  if(!el||typeof echarts==='undefined')return;
+  let tree;try{tree=JSON.parse(el.textContent)}catch(e){return}
+  if(!tree||!tree.length||!tree[0].children||!tree[0].children.length)return;
+  const st=document.getElementById('orgStatic');if(st)st.hidden=true;
+  const gd=document.getElementById('orgGraph');gd.hidden=false;
+  gd.insertAdjacentHTML('beforebegin','<div class="org-cap">组织架构图（粉色圆点=有下级，点击展开/收起；青色=明细；悬停看说明）</div>');
+  const chart=echarts.init(gd);
+  chart.setOption({
+    backgroundColor:'transparent',
+    tooltip:{trigger:'item',triggerOn:'mousemove',
+      formatter:(p)=>p.data.value?p.data.name+'<br/>'+p.data.value:p.data.name},
+    series:[{
+      type:'tree',data:tree,
+      top:'5%',left:'28%',bottom:'5%',right:'30%',
+      symbol:'circle',symbolSize:10,edgeShape:'curve',initialTreeDepth:1,
+      itemStyle:{color:'#17BEBB',borderColor:'#0e1638'},
+      lineStyle:{color:'#C0C0C0',width:1},
+      label:{color:'#2078B4',fontSize:13,position:'left',verticalAlign:'middle',align:'right',backgroundColor:'#fff',padding:[2,4],borderRadius:3},
+      leaves:{label:{color:'#091026',fontSize:12,position:'right',verticalAlign:'middle',align:'left',backgroundColor:'#fff',padding:[2,4],borderRadius:3}},
+      expandAndCollapse:true,animationDuration:400,animationDurationUpdate:600
+    }]
+  });
+  window.addEventListener('resize',()=>chart.resize());
+})();
+
 </script>
 </body>
 </html>

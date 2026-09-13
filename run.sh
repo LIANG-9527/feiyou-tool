@@ -16,4 +16,7 @@ if [ ! -f "$PYTHON" ]; then
 fi
 
 cd "$SCRIPT_DIR"
-exec "$PYTHON" main.py "$@"
+# macOS 上防止空闲睡眠(caffeinate)；Linux 服务器没有该命令，直接运行
+CAFF=""
+if [[ "$(uname)" == "Darwin" ]]; then CAFF="caffeinate -is"; fi
+exec $CAFF "$PYTHON" main.py "$@"

@@ -14,7 +14,8 @@ class LLMClient:
     def __init__(self, base_url: str, api_key: str, model: str,
                  temperature: float = 0.7, max_tokens: int = 4096,
                  timeout: int = 120, max_retries: int = 3,
-                 enable_search: bool = False, enable_thinking: bool = False):
+                 enable_search: bool = False, enable_thinking: bool = False,
+                 search_engine: list | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
@@ -23,6 +24,7 @@ class LLMClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.enable_search = enable_search
+        self.search_engine = search_engine  # 联网检索优先引擎（如 ["baidu"]），None=跟随平台默认
         self.enable_thinking = enable_thinking
         # token 用量累计（与官网诊断 AIEngine 同口径字段，直接喂 estimate_cost_cny）
         self.token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
@@ -50,6 +52,8 @@ class LLMClient:
         payload = {}
         if self.enable_search:
             payload["enable_search"] = True
+            if self.search_engine:
+                payload["search_options"] = {"search_engine": self.search_engine}
             eff = thinking if thinking is not None else self.enable_thinking
             payload["enable_thinking"] = bool(eff)
         return payload

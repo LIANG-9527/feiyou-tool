@@ -25,6 +25,9 @@ from site_audit.runner import run_site_audit
 from site_audit.core.ai_engine import estimate_cost_cny
 from site_audit.report.html_report import ENGINE_VERSION
 
+# 市场调研引擎版本：生成逻辑/报告模板每次改动必须 +1（日期.当日序号）
+MR_ENGINE_VERSION = "2026.09.13.1"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -207,7 +210,7 @@ def _md_to_html(md: str) -> str:
     return "\n".join(merged)
 
 
-def _mr_brief_html(brief, brand) -> str:
+def _mr_brief_html(brief, brand, mr_org=None) -> str:
     """企业画像页签：按 intel-deck 模板基本面页风格渲染；无数据返回空串（页签仍显示占位）。"""
     import html as _h
     if not isinstance(brief, dict):
@@ -223,14 +226,20 @@ def _mr_brief_html(brief, brand) -> str:
         return ""
 
     def _v(x):
-        return e(str(x)) if x not in (None, "", []) else "待补"
+        return e(str(x)) if x not in (None, "", [], "None", "none", "null", "待补") else "待补"
 
     quals = "、".join(map(str, info.get("qualifications") or [])) or None
     patents = "、".join(map(str, info.get("patents") or [])) or None
+    org_valid = isinstance(mr_org, dict) and mr_org.get("tree") and mr_org.get("nodes")
+    seed = None
+    if isinstance(mr_org, dict):
+        _nodes_by_id = {n["id"]: n for n in (mr_org.get("nodes") or [])}
+        seed = _nodes_by_id.get(mr_org.get("seed_key"))
     ig = [("成立时间", info.get("founded")), ("总部/地址", info.get("address")), ("行业地位", info.get("industry_position")),
-          ("年营收", info.get("revenue")), ("员工人数", info.get("employees")), ("资质", quals), ("专利", patents)]
-    ig_html = "".join('<div class="iitem"><span class="k2">' + e(k) + '</span><span class="v">' + _v(v) + '</span></div>'
-                      for k, v in ig)
+          ("年营收", info.get("revenue")), ("员工人数", info.get("employees")), ("资质", quals), ("专利", patents),
+          ("法定代表人", seed.get("legal_person") if seed else None), ("创始人/实控人", seed.get("founder") if seed else None)]
+    ig_html = ('<table class="info-table">' + "".join(
+        '<tr><th>' + e(k) + '</th><td>' + _v(v) + '</td></tr>' for k, v in ig) + '</table>')
 
     cells = []
     if layout.get("headquarters"):
@@ -242,20 +251,126 @@ def _mr_brief_html(brief, brand) -> str:
             cells.append('<div class="org-cell sub">' + e(x[:48]) + ('…' if len(x) > 48 else '') + '</div>')
     org1 = ('<div class="org-cap">企业架构布局（公开信息推断，首访验证）</div><div class="org">'
             '<div class="org-box">' + e(str(info.get("full_name") or brand)) + '</div>'
-            + ('<div class="org-line"></div><div class="org-row">' + "".join(cells) + '</div>' if cells else '') + '</div>')
+            + ('<div class="org-line"></div><div class="org-row">' + "".join(cells) + '</div>' if cells else '') + '</div>') if not org_valid else "" 
 
     org2 = ""
-    if org.get("name"):
+    if org.get("name") and not org_valid:
         kids = [k for k in (org.get("children") or []) if isinstance(k, dict) and k.get("name")]
         kid_html = "".join('<div class="org-cell sub">' + e(str(k["name"])) + '</div>' for k in kids[:12])
         org2 = ('<div class="org-cap">部门架构（推断，两层示意）</div><div class="org">'
                 '<div class="org-box" style="background:#3567ff">' + e(str(org["name"])) + '</div>'
                 + ('<div class="org-line"></div><div class="org-row">' + kid_html + '</div>' if kid_html else '') + '</div>')
 
+    # ECharts 径向树组织架构数据（嵌套树）：CDN 加载成功时替换静态 CSS 版，离线/失败回落静态版
+    def _tn(name, pos):
+        # 长名规整：括号说明并入说明行；"类型：内容"拆开——类型做节点名，内容进悬停说明
+        name = str(name)
+        extra = ""
+        for sep in ("（", "("):
+            if sep in name:
+                name, _, tail = name.partition(sep)
+                extra = tail.rstrip("）)")
+                break
+        for sep in ("：", ":"):
+            if sep in name and len(name) > 8:
+                head, _, tail = name.partition(sep)
+                if len(head) <= 6:
+                    extra = tail.strip() + ("；" + extra if extra else "")
+                    name = head
+                break
+        name = name.strip()[:24]
+        return {"name": name, "value": " · ".join(x for x in (str(pos or ""), extra) if x)}
+
+    if org_valid:
+        # 工商实名数据优先：母公司→目标企业→控股子公司，参股不进树
+        _children_map = {}
+        for _e in mr_org["tree"]:
+            _children_map.setdefault(_e["parent"], []).append(_e["child"])
+        _tree_by_child = {e["child"]: e for e in mr_org["tree"]}
+
+        def _from_org(nid, seen):
+            n = _nodes_by_id.get(nid) or {}
+            item = _tn(n.get("name") or nid, "")
+            te = _tree_by_child.get(nid)
+            if nid == mr_org.get("seed_key"):
+                v = "目标企业" + ((" · " + str(seed.get("status"))) if seed and seed.get("status") else "")
+            elif nid in (mr_org.get("roots") or []):
+                v = "母公司"
+            else:
+                v = "子公司" + ((" · " + str(te["signal"])) if te and te.get("signal") else "")
+                if te and te.get("confidence") == "low":
+                    v += " · 待核实"
+            item["value"] = v
+            kid = []
+            for c in _children_map.get(nid, []):
+                if c != nid and c not in seen:
+                    seen.add(c)
+                    kid.append(_from_org(c, seen))
+            if kid:
+                item["children"] = kid
+            return item
+
+        _roots = [r for r in (mr_org.get("roots") or []) if r in _nodes_by_id]
+        _seen_all = set()
+        forest = []
+        for _r in _roots:
+            if _r in _seen_all:
+                continue
+            _seen_all.add(_r)
+            forest.append(_from_org(_r, _seen_all))
+        if not forest:
+            forest = [_tn(brand, "目标企业")]
+        tree_root = forest[0] if len(forest) == 1 else forest
+    else:
+        tree_root = _tn(info.get("full_name") or brand, "公司主体")
+        kids = tree_root["children"] = []
+        if layout.get("headquarters"):
+            kids.append(_tn(layout["headquarters"], "总部"))
+        for key, label in (("branches", "分支"), ("subsidiaries", "子公司"), ("sites", "基地")):
+            val = layout.get(key)
+            items = [str(x) for x in val if str(x).strip() and str(x) != "None"] if isinstance(val, list) else ([str(val)] if val else [])
+            for x in items[:6]:
+                kids.append(_tn(x, label))
+        if org.get("name"):
+            dept = _tn(org["name"], "部门架构")
+            dept["children"] = [_tn(k["name"], str(k.get("role") or "部门"))
+                                for k in (org.get("children") or [])[:12]
+                                if isinstance(k, dict) and k.get("name")]
+            kids.append(dept)
+
+    def _mark_expandable(node):
+        if isinstance(node, list):
+            for t in node:
+                _mark_expandable(t)
+            return node
+        if node.get("children"):
+            node["itemStyle"] = {"color": "#E36397"}
+            node["value"] = (node.get("value") or "") + " · 有下级，点击展开/收起"
+            for c in node["children"]:
+                _mark_expandable(c)
+        return node
+    tree_root = _mark_expandable(tree_root)
+    org_json = json.dumps(tree_root if isinstance(tree_root, list) else [tree_root],
+                          ensure_ascii=False).replace("</", "<\\/")
+    org_note = ('<div class="org-cap" style="color:#9a6b00">⚠️ 二级及以下股权关系未获检索数据，完整性待首访核实</div>'
+                if org_valid and isinstance(mr_org, dict) and mr_org.get("depth2_empty") else "")
+    org_graph = ('<div id="orgStatic">' + org1 + org2 + '</div>'
+                 + org_note
+                 + '<div id="orgGraph" hidden style="height:560px"></div>'
+                 '<script id="orgData" type="application/json">' + org_json + '</script>')
+
     cult = ""
     cult_items = [x for x in (("使命", culture.get("mission")), ("愿景", culture.get("vision")), ("价值观", culture.get("values"))) if x[1]]
     if cult_items:
-        cult = '<div class="card"><div class="ct">🏛 企业文化</div><div class="cb">' + "<br>".join(e(k) + "：" + e(str(v)) for k, v in cult_items) + '</div></div>'
+        cult = '<div class="pf-card"><div class="ct">🏛 企业文化</div><div class="cb">' + "<br>".join(e(k) + "：" + e(str(v)) for k, v in cult_items) + '</div></div>'
+
+    weak_html = ""
+    if org_valid:
+        _weak_names = [_nodes_by_id[w["child"]]["name"] for w in (mr_org.get("weak") or [])
+                       if w["child"] in _nodes_by_id]
+        if _weak_names:
+            weak_html = ('<div class="pf-card"><div class="ct">🤝 参股企业（未达控股，不进组织图）</div><div class="words">'
+                         + "".join('<span class="wd">' + e(x) + '</span>' for x in _weak_names[:10]) + '</div></div>')
 
     tl_html = ""
     if tl:
@@ -263,17 +378,114 @@ def _mr_brief_html(brief, brand) -> str:
             '<div class="tl-i"><div class="tl-y">' + e(str(x.get("date", ""))) + (('　' + e(str(x.get("tag")))) if x.get("tag") else '')
             + '</div><div class="tl-x">' + e(str(x.get("event", ""))) + '</div></div>' for x in tl if isinstance(x, dict)) + '</div>'
 
-    gaps_html = '<div class="card"><div class="ct">🧾 待补清单（缺什么·怎么补）</div><div class="words">' + "".join(
+    if org_valid:
+        gaps += ["组织检索存疑：" + str(u.get("claim", ""))[:40] for u in (mr_org.get("uncertain") or [])[:6]]
+    gaps_html = '<div class="pf-card"><div class="ct">🧾 待补清单（缺什么·怎么补）</div><div class="words">' + "".join(
         '<span class="wd">' + e(x) + '</span>' for x in gaps) + '</div></div>' if gaps else ""
 
-    return ('<div class="pf"><div class="k">01 · 公司基本面</div><div class="t">' + e(str(brand)) + ' · 一图看懂</div>'
-            + '<div class="igrid">' + ig_html + '</div>' + org1 + org2 + cult + tl_html + gaps_html
-            + '<div class="f">基于公开信息整理：组织架构与部门层级为推断示意 · 未两源核验字段标「待补」 · 数据口径以报告内来源为准</div></div>')
+    return ('<div class="pf">'
+            + '<div class="pf-head"><div class="k">01 · 公司基本面</div><div class="t">' + e(str(brand)) + ' · 一图看懂</div></div>'
+            + '<div class="pf-card">' + ig_html + '</div>'
+            + '<div class="pf-card">' + org_graph + '</div>'
+            + cult + weak_html
+            + '<div class="pf-card">' + tl_html + '</div>'
+            + gaps_html
+            + '<div class="pf-card"><div class="f">基于公开信息整理：组织架构与部门层级为推断示意 · 未两源核验字段标「待补」 · 数据口径以报告内来源为准</div></div>'
+            + '</div>')
 
 
 def _mr_deck_slides_html(deck) -> str:
-    """概要PPT页签的幻灯 HTML：mr_deck 输出 {"slides":[{k,t,p,items[]}]}。解析失败返回空串。"""
+    """概要PPT页签的幻灯 HTML：mr_deck 输出 {"slides":[{k,t,p?,blocks[]}]}，
+    块型协议见 docs/简报版式对齐规格.md（two_col/timeline/words/table/bars/media/kws/note/src）。
+    旧格式（items 列表）继续渲染为要点卡；解析失败返回空串。"""
     import html as _h
+
+    def esc(x):
+        return _h.escape(str(x))
+
+    def b_two_col(b, _h=esc):
+        cs = []
+        for c in (b.get("cards") or [])[:2]:
+            rows = "".join(f'<div class="sb-r"><span class="rk">{_h(r[0])}</span>'
+                           f'<span class="rv">{_h(r[1] if len(r) > 1 else "")}</span></div>'
+                           for r in (c.get("rows") or []) if isinstance(r, (list, tuple)) and r)
+            cs.append(f'<div class="sb-card"><div class="sb-ct">{_h(c.get("title") or "")}</div>{rows}</div>')
+        cls = "sb sb-two" + ("" if len(cs) == 2 else " single")
+        return f'<div class="{cls}">' + "".join(cs) + "</div>"
+
+    def b_timeline(b, _h=esc):
+        items = "".join(f'<div class="sb-ti"><div class="sb-ty">{_h(x[0])}</div>'
+                        f'<div class="sb-tx">{_h(x[1] if len(x) > 1 else "")}</div></div>'
+                        for x in (b.get("items") or []) if isinstance(x, (list, tuple)) and x)
+        return f'<div class="sb sb-tl">{items}</div>'
+
+    def _chips(chips, tone, _h=esc):
+        out = []
+        for ch in (chips or [])[:10]:
+            w, src = (ch, "") if isinstance(ch, str) else (ch.get("w", ""), ch.get("src", ""))
+            if not str(w).strip():
+                continue
+            tag = f'<i>{_h(src)}</i>' if src.strip() else ""
+            out.append(f'<span class="sb-wd {tone}">{_h(w)}{tag}</span>')
+        return "".join(out)
+
+    def b_words(b, _h=esc):
+        cols = []
+        tones = ("pos", "neg", "mid")
+        for i, c in enumerate(b.get("cols") or []):
+            cols.append(f'<div class="sb-wcol"><div class="sb-ct">{_h(c.get("title") or "")}</div>'
+                        f'<div>{_chips(c.get("chips"), tones[min(i, 2)], _h)}</div></div>')
+        return '<div class="sb sb-words">' + "".join(cols) + "</div>"
+
+    def b_table(b, _h=esc):
+        head = b.get("head") or []
+        th = "<tr>" + "".join(f"<th>{_h(x)}</th>" for x in head) + "</tr>" if head else ""
+        trs = "".join("<tr>" + "".join(f"<td>{_h(c)}</td>" for c in (r or [])) + "</tr>"
+                      for r in (b.get("rows") or [])[:6])
+        return f'<div class="sb sb-tablewrap"><table>{th}{trs}</table></div>'
+
+    def b_bars(b, _h=esc):
+        items = []
+        for it in (b.get("items") or [])[:6]:
+            name, desc, note = _h(it.get("name") or ""), _h(it.get("desc") or ""), _h(it.get("note") or "")
+            sc = it.get("score")
+            if isinstance(sc, (int, float)) and not isinstance(sc, bool):
+                sc = max(0, min(100, int(sc)))
+                bar, lab = f'<div style="width:{sc}%"></div>', f"适配度 {sc} · {note}" if note else f"适配度 {sc}"
+            else:
+                bar, lab = "", f"待补充 · {note}" if note else "待补充"
+            items.append(f'<div class="sb-bc"><div class="bn">{name}</div>'
+                         f'<div class="bd">{desc}</div>'
+                         f'<div class="sb-bbg">{bar}</div><div class="bp">{lab}</div></div>')
+        return '<div class="sb sb-bars">' + "".join(items) + "</div>"
+
+    def b_media(b, _h=esc):
+        gs = []
+        for g in (b.get("groups") or [])[:2]:
+            rows = "".join(
+                f'<div class="sb-mr"><span>{_h(r[0])}</span>'
+                f'<span class="sb-st {_h(r[1] if r[1] in ("y", "n", "q") else "q")}">{_h(r[2] if len(r) > 2 else "")}</span></div>'
+                for r in (g.get("rows") or []) if isinstance(r, (list, tuple)) and r)
+            gs.append(f'<div class="sb-card"><div class="sb-ct">{_h(g.get("title") or "")}</div>{rows}</div>')
+        return '<div class="sb sb-media">' + "".join(gs) + "</div>"
+
+    def b_kws(b, _h=esc):
+        tones = ("d1", "d2", "d3")
+        cs = []
+        for i, c in enumerate(b.get("cols") or []):
+            cs.append(f'<div class="sb-kw {tones[min(i, 2)]}"><div class="kn">{_h(c.get("tier") or "")}</div>'
+                      f'<div class="kd">{_h(c.get("desc") or "")}</div><div>{_chips(c.get("chips"), "mid", _h)}</div></div>')
+        return '<div class="sb sb-kws">' + "".join(cs) + "</div>"
+
+    def b_note(b, _h=esc):
+        return f'<div class="sb sb-note">{_h(b.get("text") or "")}</div>'
+
+    def b_src(b, _h=esc):
+        return f'<div class="sb sb-src">{_h(b.get("text") or "")}</div>'
+
+    _BLOCKS = {"two_col": b_two_col, "timeline": b_timeline, "words": b_words, "table": b_table,
+               "bars": b_bars, "media": b_media, "kws": b_kws, "note": b_note, "src": b_src}
+
     if isinstance(deck, str):
         try:
             deck = json.loads(deck)
@@ -281,20 +493,25 @@ def _mr_deck_slides_html(deck) -> str:
             return ""
     if not isinstance(deck, dict):
         return ""
-    slides = deck.get("slides") or []
     out = []
-    for s in slides:
+    for s in deck.get("slides") or []:
         if not isinstance(s, dict) or not s.get("t"):
             continue
-        k = _h.escape(str(s.get("k") or ""))
-        t = _h.escape(str(s.get("t")))
+        k = esc(s.get("k") or "")
+        t = esc(s.get("t"))
         b = ""
         p = str(s.get("p") or "").strip()
         if p:
-            b += f"<p>{_h.escape(p)}</p>"
-        items = [_h.escape(str(x)) for x in (s.get("items") or []) if str(x).strip()]
-        if items:
-            b += "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+            b += f"<p>{esc(p)}</p>"
+        for blk in s.get("blocks") or []:
+            if not isinstance(blk, dict):
+                continue
+            fn = _BLOCKS.get(str(blk.get("type") or ""))
+            b += fn(blk) if fn else b_note({**blk, "text": blk.get("text") or blk.get("note") or "未知内容块"})
+        if not (s.get("blocks")):  # 旧格式兼容：纯 items 要点卡
+            items = [esc(x) for x in (s.get("items") or []) if str(x).strip()]
+            if items:
+                b += "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
         out.append(f'<div class="slide"><div class="slide-k">{k}</div>'
                    f'<div class="slide-t">{t}</div><div class="slide-b">{b}</div></div>')
     return "".join(out)
@@ -312,7 +529,7 @@ def generate_markdown_report(result: dict) -> str:
                 if result.get(k)]
     body = "".join(_md_to_html(result[k]) for k in sections)
     slides = _mr_deck_slides_html(result.get("mr_deck"))
-    brief_html = _mr_brief_html(result.get("mr_brief"), brand)
+    brief_html = _mr_brief_html(result.get("mr_brief"), brand, result.get("mr_org"))
     tpl = (BASE_DIR / "skills" / "mr_report_template.html").read_text(encoding="utf-8")
     title = f"{brand} · 市场调研报告"
     _te = int(round(result.get("total_elapsed", 0)))
@@ -331,6 +548,8 @@ def generate_markdown_report(result: dict) -> str:
                           '<div class="deck-stage" id="deckStage"><div class="brief-empty">情报简报内容待生成</div>')
     default = "brief" if brief_html else ("deck" if slides else "report")
     out = out.replace("rptTab('deck');", "rptTab('" + default + "');")
+    # 隐藏版本标识（仅源码可见），排查问题时区分报告由哪一版引擎生成；逻辑或模板改动须 +1
+    out = out.replace("</head>", f"<!-- 市场调研引擎版本: {MR_ENGINE_VERSION} ｜ 生成时间: {meta} -->\n</head>", 1)
     return out
 
 
@@ -1014,9 +1233,133 @@ async def list_audit_reports():
     return JSONResponse(reports)
 
 
+_MR_DECK_SPEC = [
+    # 八页各自的必备块型（顺序对位 slides）；None=块存在即可，函数=内容达标条件
+    (["two_col", "note"], {"two_col": lambda b: len(b.get("cards") or []) >= 2}),
+    (["two_col", "timeline", "note"], {}),
+    (["bars", "note"], {"bars": lambda b: len(b.get("items") or []) >= 2}),
+    (["words", "note"], {"words": lambda b: len(b.get("cols") or []) >= 2}),
+    (["table", "note"], {}),
+    (["media", "note"], {"media": lambda b: len(b.get("groups") or []) >= 2}),
+    (["table", "note"], {}),
+    (["kws", "note"], {"kws": lambda b: len(b.get("cols") or []) >= 3}),
+]
+_MR_DECK_PAGE_SRC = ["第一章画像", "第一章画像", "第一章画像", "第二三章现状",
+                     "第四五章竞品", "第三/七章渠道预算", "第四五章竞品", "第六七章方案"]
+
+
+def _deck_missing_report(deck) -> list[dict]:
+    """机检简报八页：返回缺块清单 [{"i","k","missing":[...]}]。deck 可为 str/dict。"""
+    if isinstance(deck, str):
+        try:
+            deck = json.loads(deck)
+        except (ValueError, TypeError):
+            return []
+    slides = (deck or {}).get("slides") if isinstance(deck, dict) else None
+    out = []
+    for i, (req, conds) in enumerate(_MR_DECK_SPEC):
+        if not slides or i >= len(slides) or not isinstance(slides[i], dict):
+            continue
+        blocks = [b for b in (slides[i].get("blocks") or []) if isinstance(b, dict)]
+        types = [str(b.get("type") or "") for b in blocks]
+        miss = [t for t in req if t not in types]
+        for t, ok in conds.items():
+            b = next((b for b in blocks if str(b.get("type")) == t), None)
+            if b is not None and not ok(b):
+                miss.append(f"{t}内容不全")
+        if "src" not in types:
+            miss.append("src")
+        if miss:
+            out.append({"i": i, "k": slides[i].get("k", ""), "missing": miss})
+    return out
+
+
+async def ensure_org_graph(result: dict, config: dict):
+    """市场调研落盘前：组织架构实名图（LLM+内置联网搜索，种子标准化+BFS股权展开）。
+    种子层无果或异常时返回 None，回落画像自产组织数据，不阻塞报告。"""
+    if result.get("method_id") != "customer_market_research" or result.get("mr_org"):
+        return
+    from org_graph import build_org_graph
+    brand = result.get("brand") or ""
+    brief_info = ((result.get("mr_brief") or {}).get("info") or {}) if isinstance(result.get("mr_brief"), dict) else {}
+    company = brief_info.get("full_name") or brand
+    if not company:
+        return
+    llm_cfg = config["llm"]
+    llm = LLMClient(base_url=llm_cfg["base_url"], api_key=llm_cfg["api_key"],
+                    model=llm_cfg["model"], temperature=llm_cfg.get("temperature", 0.7),
+                    max_tokens=llm_cfg.get("max_tokens", 16384), timeout=llm_cfg.get("timeout", 120),
+                    max_retries=llm_cfg.get("max_retries", 3),
+                    enable_search=True, enable_thinking=False,
+                    search_engine=["baidu"])
+    org = await build_org_graph(llm, company)
+    if org and org.get("tree"):
+        result["mr_org"] = org
+        _seedn = next((n for n in org["nodes"] if n["id"] == org["seed_key"]), {})
+        logger.info(f"组织架构实名图完成: {len(org['nodes'])}节点/{len(org['tree'])}控股边/{len(org['weak'])}参股, "
+                    f"法人={_seedn.get('legal_person')}")
+    else:
+        logger.info("组织架构实名检索无果，回落画像自产组织数据")
+
+
+async def ensure_deck_complete(result: dict, config: dict):
+    """出报告前的兜底：机检简报缺块 → 查调研正文有据则调 LLM 补齐 → 复检不过则放弃。
+    只处理客户市场调研结果；无缺块零开销。"""
+    if result.get("method_id") != "customer_market_research" or not result.get("mr_deck"):
+        return
+    deck = result["mr_deck"]
+    if isinstance(deck, str):
+        try:
+            deck = json.loads(deck)
+        except (ValueError, TypeError):
+            return
+    missing = _deck_missing_report(deck)
+    if not missing:
+        return
+    logger.info(f"简报完整性机检发现缺失: {missing}")
+    llm_cfg = config["llm"]
+    llm = LLMClient(base_url=llm_cfg["base_url"], api_key=llm_cfg["api_key"],
+                    model=llm_cfg["model"], temperature=llm_cfg.get("temperature", 0.7),
+                    max_tokens=llm_cfg.get("max_tokens", 16384), timeout=llm_cfg.get("timeout", 120),
+                    max_retries=llm_cfg.get("max_retries", 3),
+                    enable_search=llm_cfg.get("enable_search", False),
+                    enable_thinking=llm_cfg.get("enable_thinking", False))
+    agent = Agent(llm, max_concurrency=1)
+    ctx = {k: result.get(k) for k in ("brand", "mr_profile", "mr_marketing",
+                                      "mr_opportunity", "mr_plan", "mr_proposal", "mr_sales")}
+    prompt = agent._render(
+        "你是销售情报分析员。简报八页已生成，但机检发现以下页缺块：\n{missing}\n\n"
+        "当前对应页现状(JSON)：\n{cur}\n\n"
+        "调研正文（唯一数据来源，禁止编造；无据内容在文本里写「待补：<怎么补>」）：\n"
+        "【第一章 画像】{{mr_profile}}\n【第二三章 痛点与营销现状】{{mr_marketing}}\n"
+        "【第四五章 竞品与机会】{{mr_opportunity}}\n【第六七章 方案与预算】{{mr_plan}}\n"
+        "【第八章与附录】{{mr_proposal}}\n【销售话术】{{mr_sales}}\n\n"
+        "## 任务\n对每个缺块页，输出该页**完整**的 blocks 数组（原块原样保留，只补缺的块；"
+        "补 two_col 缺卡时把缺的卡补成第二张卡，数据从调研正文对应章节搬，禁止编造数字）。\n"
+        "块型协议：two_col/timeline/words/table/bars/media/kws/note/src。\n\n"
+        "## 输出格式（仅输出JSON）\n"
+        '[{"i":0,"blocks":[{"type":"...","...":"..."}]}]', 
+        {"missing": json.dumps(missing, ensure_ascii=False),
+         "cur": json.dumps([{"i": m["i"], "k": m["k"],
+                             "blocks": (deck.get("slides") or [])[m["i"]].get("blocks")}
+                            for m in missing], ensure_ascii=False)})
+    try:
+        patch = await agent._llm_call(prompt, expect_json=True)
+        assert isinstance(patch, list)
+    except Exception as e:
+        logger.warning(f"简报补齐调用失败，保留原简报: {e}")
+        return
+    for p in patch:
+        i, blocks = p.get("i"), p.get("blocks")
+        if isinstance(i, int) and isinstance(blocks, list) and 0 <= i < len(deck["slides"]) and blocks:
+            deck["slides"][i]["blocks"] = blocks
+    left = _deck_missing_report(deck)
+    result["mr_deck"] = deck
+    logger.info(f"简报补齐完成，复检{'通过' if not left else f'仍有缺失(放弃): {left}'}")
+
+
 @app.delete("/api/audit/reports/{filename}")
 async def delete_audit_report(filename: str):
-    """删除指定的诊断报告（HTML + JSON）。"""
     audit_dir = BASE_DIR / "output" / "audit"
     deleted = []
     # 删除 HTML
@@ -1050,6 +1393,8 @@ async def analyze(req: AnalyzeRequest):
 
     result = await agent.run(req.brand, req.product, on_progress=on_progress,
                              method_id=req.method)
+    await ensure_org_graph(result, config)
+    await ensure_deck_complete(result, config)
     files = save_output(result, config)
 
     # Return summary (full data is in the saved files)
@@ -1313,6 +1658,8 @@ def inject_annotation_support(html: str) -> str:
 async def get_result(filename: str):
     """View/download a previously generated result file."""
     out_dir = BASE_DIR / "output"
+    if not filename or (out_dir / filename).is_dir():
+        return JSONResponse({"error": "用法: /result/<报告文件名.html>"}, status_code=404)
     file_path = out_dir / filename
     if not file_path.exists():
         return JSONResponse({"error": "file not found"}, status_code=404)
@@ -1861,6 +2208,7 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
             try:
                 result = await agent.run(brand, product, on_progress=on_progress,
                                          method_id=method)
+                await ensure_deck_complete(result, config)
                 files = save_output(result, config)
                 # Extract just filenames for URLs
                 file_urls = {}
@@ -2124,6 +2472,7 @@ async function loadMethods() {
   }
 }
 
+var MR_ENGINE_VERSION = '__mr_ver__';
 function renderMethodNav() {
   const c = document.getElementById("methodNav");
   if (!c) return;
@@ -2139,10 +2488,13 @@ function selectMethod(methodId) {
   currentMethod = methods.find(m => m.id === methodId);
   if (!currentMethod) return;
   renderMethodNav();
-  // 头部标题与描述跟随所选方法
+  // 头部标题与描述跟随所选方法；客户市场调研显示显性版本号（同官网诊断）
   const _ht = document.getElementById("heroTitle");
   const _hd = document.getElementById("heroDesc");
-  if (_ht) _ht.textContent = currentMethod.name || "";
+  if (_ht) _ht.innerHTML = (currentMethod.name || "") +
+    (currentMethod.id === 'customer_market_research'
+      ? '<span style="font-size:1rem;font-weight:600;color:#fff">Version ' + MR_ENGINE_VERSION + '</span>'
+      : "");
   if (_hd) _hd.textContent = currentMethod.description || "";
   renderInputForm();
   loadHistory();
@@ -2493,8 +2845,7 @@ loadHistory();
 })();
 </script>
 </body>
-</html>'''
-
+</html>'''.replace('__mr_ver__', MR_ENGINE_VERSION)
 
 @app.get("/", response_class=HTMLResponse)
 async def ui():
