@@ -8,14 +8,23 @@ llm:
   timeout: 600  # 思考+联网+长文输出，调研类单步可超2分钟，120会误杀（2026-09-11 实测第3步撞满3次重试）
   max_retries: 3
   enable_search: true  # 联网搜索总开关：调用模型时允许其联网检索验证外部信息
-  enable_thinking: true  # 深度思考总开关：开启思维链推理（qwen3.8-flash 思考/非思考同价）
+  enable_thinking: false  # 深度思考总开关：开启思维链推理（qwen3.8-flash 思考/非思考同价）
   max_concurrency: 5  # 并行LLM调用上限(Step2/Step4多线并发时)
+  search_price_per_call: 0.0  # 百炼联网搜索每次单价(元)：0=不计费但 search_calls 次数照常记录；核实账单单价后填入即计入费用汇总
+
+web_fetcher:
+  # 网页全文抓取层：解决百炼enable_search只有摘要、信息不全的问题
+  # 纯 Requests 方案：UA 池轮换 + 自动重试 + Referer 伪装，轻量稳定
+  enable: true  # 总开关：false时退回纯百炼搜索模式
+  max_search_results: 3  # 每次搜索最多抓取几个页面的全文
+  min_text_length: 100  # 正文少于此字数视为抓取失败，降级
+  cache_ttl: 3600  # 同一URL缓存时间（秒）
 
 server:
   host: "0.0.0.0"
   port: 8777
 
 output:
-  dir: "./output"
+  dir: "./var/output"
   save_json: true
   save_html: true

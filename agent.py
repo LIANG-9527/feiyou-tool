@@ -7,12 +7,15 @@ Agent — 通用编排器
 from __future__ import annotations
 import asyncio
 import json
+import logging
 import re
 import time
 import yaml
 from pathlib import Path
 from typing import Optional, Callable, Any
 from llm_client import LLMClient
+
+logger = logging.getLogger("geo-agent")
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -131,10 +134,47 @@ class Agent:
         """Public static method for use by main.py summary."""
         return Agent._extract_queries(stage_data)
 
+    @staticmethod
+    def _load_step4_from_cache(brand: str) -> Optional[dict]:
+        """从历史报告JSON中读取step4_topics缓存。
+
+        遍历output目录下的所有JSON文件，找到brand匹配的文件，
+        读取step4_topics字段。如果找到且非空，返回该字典；否则返回None。
+        """
+        import json
+        from pathlib import Path
+
+        from paths import OUTPUT_DIR as output_dir
+        if not output_dir.exists():
+            return None
+
+        # 标准化brand用于匹配（去除空格、转小写）
+        brand_norm = brand.replace(" ", "").lower()
+
+        for json_file in sorted(output_dir.glob("*.json"), reverse=True):
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # 检查brand是否匹配
+                file_brand = str(data.get("brand", "")).replace(" ", "").lower()
+                if file_brand == brand_norm or brand_norm in file_brand or file_brand in brand_norm:
+                    step4_topics = data.get("step4_topics")
+                    if step4_topics and isinstance(step4_topics, dict) and len(step4_topics) > 0:
+                        logger.info(f"Step4 cache hit: {json_file.name}")
+                        return step4_topics
+            except Exception as e:
+                logger.debug(f"Failed to read cache file {json_file.name}: {e}")
+                continue
+
+        return None
+
     async def run(self, brand: str, product: Optional[str] = None,
                   on_progress: Callable = None,
-                  method_id: str = None) -> dict:
+                  method_id: str = None,
+                  known_facts: str = None) -> dict:
         ctx: dict[str, Any] = {"brand": brand, "product": product}
+        if known_facts:
+            ctx["known_facts"] = known_facts
         if product:
             ctx["product_hint"] = f"用户特别关注产品/服务: {product}"
         else:
@@ -197,13 +237,27 @@ class Agent:
             result.append({"item": label, "status": "pass" if has_data else "fail"})
         return result
 
-    async def _llm_call(self, prompt: str, expect_json: bool = True) -> Any:
+    async def _llm_call(self, prompt: str, expect_json: bool = True,
+                        label: str = "call") -> Any:
+        """单次 LLM 调用（含 llm_client 内部重试）。label 标注 步骤/线名/阶段，
+        每次调用进服务日志记开始时刻与耗时秒数（成功、异常都记），
+        方便直接看出哪个调用慢（2026-09-17 提速修复排查用）。"""
         messages = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": prompt},
         ]
+        mode = "wait-slot" if self.semaphore.locked() else "run"
+        logger.info(f"[LLM_CALL] {label} 开始 mode={mode}")
+        t0 = time.time()
         async with self.semaphore:
-            return await self.llm.chat(messages, expect_json=expect_json, thinking=self.thinking)
+            try:
+                result = await self.llm.chat(messages, expect_json=expect_json,
+                                             thinking=self.thinking)
+            except Exception as e:
+                logger.warning(f"[LLM_CALL] {label} 失败 耗时{time.time() - t0:.1f}s: {e}")
+                raise
+            logger.info(f"[LLM_CALL] {label} 完成 耗时{time.time() - t0:.1f}s")
+            return result
 
     @staticmethod
     def _clean_md_output(text):
@@ -227,7 +281,8 @@ class Agent:
         as_text = skill.get("format") == "markdown"
         if as_text:
             prompt += "\n\n（直接从 # 标题开始输出正文；禁止开场白、计划陈述和任何工具调用文本）"
-        result = await self._llm_call(prompt, expect_json=not as_text)
+        result = await self._llm_call(prompt, expect_json=not as_text,
+                                      label=f"{skill['id']}:{skill.get('name', '')}")
         if as_text:
             result = self._clean_md_output(result)
         return result
@@ -245,28 +300,44 @@ class Agent:
             line_ctx["line_name"] = line["name"]
             line_ctx["line_instruction"] = line.get("instruction", "")
             prompt = self._render(line_template, line_ctx)
-            return await self._llm_call(prompt)
+            return await self._llm_call(prompt,
+                                        label=f"{skill['id']}:{line['name']}")
 
         line_results = await asyncio.gather(*[run_line(l) for l in lines])
 
         if skill.get("aggregate"):
             context["line_results"] = json.dumps(line_results, ensure_ascii=False, indent=2)
             agg_prompt = self._render(skill["aggregate_prompt"], context)
-            return await self._llm_call(agg_prompt)
+            return await self._llm_call(agg_prompt, label=f"{skill['id']}:聚合")
         return line_results
 
     async def _exec_iterate(self, skill: dict, ctx: dict,
                             on_progress, t0) -> dict:
         items = ctx.get(skill["iterate_over"], [])
         results = {}
-        for i, item in enumerate(items):
+
+        async def run_stage(i, item):
+            """单阶段1次调用。各阶段输入互相独立；阶段间是否并行由 parallel_stages 控制。"""
             sname = item.get("stage_name", f"阶段{i+1}")
             if on_progress:
                 on_progress(skill["id"], f"阶段{i+1}/{len(items)}: {sname}", time.time() - t0)
             context = self._build_context(skill, ctx, item)
             prompt = self._render(skill["prompt"], context)
-            result = await self._llm_call(prompt)
-            key = str(item.get("stage_index", i))
+            result = await self._llm_call(
+                prompt, label=f"{skill['id']}:阶段{i+1}:{sname}")
+            if on_progress:
+                on_progress(skill["id"],
+                            f"完成: 阶段{i+1}/{len(items)}: {sname}", time.time() - t0)
+            return str(item.get("stage_index", i)), result
+
+        if skill.get("parallel_stages"):
+            # 阶段间并行（各阶段输入独立；全局信号量限流防打爆配额）
+            done = await asyncio.gather(*[run_stage(i, it) for i, it in enumerate(items)])
+            for key, result in done:
+                results[key] = result
+            return results
+        for i, item in enumerate(items):
+            key, result = await run_stage(i, item)
             results[key] = result
         return results
 
@@ -276,7 +347,9 @@ class Agent:
         line_template = skill.get("line_prompt", "")
         lines = skill.get("lines", [])
         results = {}
-        for i, item in enumerate(items):
+
+        async def run_stage(i, item):
+            """单阶段：多线并行 + 可选补漏。阶段间是否并行由 parallel_stages 控制。"""
             stage_name = item.get("stage_name", f"阶段{i+1}")
             if on_progress:
                 on_progress(skill["id"],
@@ -290,7 +363,8 @@ class Agent:
                 line_ctx["line_instruction"] = line.get("instruction", "")
                 line_ctx["stage_name"] = stage_name
                 prompt = self._render(line_template, line_ctx)
-                return await self._llm_call(prompt)
+                return await self._llm_call(prompt,
+                                            label=f"{skill['id']}:阶段{i+1}:{stage_name}:{line['name']}")
 
             line_results = await asyncio.gather(*[run_line(l) for l in lines])
 
@@ -299,6 +373,10 @@ class Agent:
                 "stage_name": stage_name,
                 "lines": line_results if isinstance(line_results, list) else [line_results],
             }
+            if on_progress:
+                on_progress(skill["id"],
+                            f"完成: 阶段{i+1}/{len(items)}: {stage_name} 6线生成",
+                            time.time() - t0)
 
             if skill.get("gap_check"):
                 if on_progress:
@@ -307,13 +385,26 @@ class Agent:
                 gap_ctx["line_results"] = json.dumps(line_results, ensure_ascii=False, indent=2)
                 gap_ctx["stage_name"] = stage_name
                 gap_prompt = self._render(skill["gap_check_prompt"], gap_ctx)
-                gap_result = await self._llm_call(gap_prompt)
+                gap_result = await self._llm_call(gap_prompt,
+                                                  label=f"{skill['id']}:阶段{i+1}:{stage_name}:补漏检查")
                 stage_data["gap_fills"] = (gap_result.get("gap_fills", [])
                                            if isinstance(gap_result, dict)
                                            else (gap_result if isinstance(gap_result, list) else []))
+                if on_progress:
+                    on_progress(skill["id"],
+                                f"完成: 阶段{i+1}/{len(items)}: {stage_name} 补漏检查",
+                                time.time() - t0)
+            return stage_data
 
-            key = str(item.get("stage_index", i))
-            results[key] = stage_data
+        if skill.get("parallel_stages"):
+            # 阶段间并行（各阶段输入独立；全局信号量限流防打爆配额）
+            done = await asyncio.gather(*[run_stage(i, it) for i, it in enumerate(items)])
+            for sd in done:
+                results[str(sd.get("stage_index"))] = sd
+            return results
+        for i, item in enumerate(items):
+            sd = await run_stage(i, item)
+            results[str(sd.get("stage_index"))] = sd
         return results
 
 
@@ -509,7 +600,7 @@ class ChatAgent:
             path.write_text(args["content"], encoding="utf-8")
             return {"status": "ok", "message": "保存成功,下次分析自动生效"}
         if name == "list_reports":
-            out_dir = BASE_DIR / "output"
+            from paths import OUTPUT_DIR as out_dir
             if not out_dir.exists():
                 return {"reports": []}
             reports = []

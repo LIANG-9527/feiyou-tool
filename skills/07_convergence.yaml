@@ -4,6 +4,7 @@ name: 意图簇汇流
 description: 每个阶段的全部问句归入意图簇,零删除,标注客群信号
 order: 7
 type: iterate
+parallel_stages: true  # 阶段间并行（各阶段输入互相独立，总并发仍受 max_concurrency 限流）
 iterate_over: step3_journey
 iterate_as: stage
 context_builders:

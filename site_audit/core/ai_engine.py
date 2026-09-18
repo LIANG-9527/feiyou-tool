@@ -53,17 +53,19 @@ def _price_for_hour(hour_key: str) -> dict:
     return PRICE_PEAK
 
 
-def estimate_cost_cny(tu: dict, ts_hint: str = None) -> float:
+def estimate_cost_cny(tu: dict, ts_hint: str = None, search_price_per_call: float = 0.0) -> float:
     """按阿里云百炼官方价格估算 token 费用（元）。
 
     优先用 usage_by_hour 分时桶逐桶查价（旧报告数据兼容）；
     旧报告无分时数据时，用 ts_hint（报告时间戳，"YYYY-MM-DD HH:MM:SS"）。
     百炼不分峰谷，两表同值。
     无缓存细分按全部未命中计价（上界，不会低估成本）。
+    search_price_per_call：联网搜索每次单价（元），乘 tu["search_calls"] 计入；
+    0=不计费但用量照常记录（单价以实际账单校准后由调用方传入）。
     """
     if not tu:
         return 0.0
-    total = 0.0
+    total = search_price_per_call * tu.get("search_calls", 0)
     by_hour = tu.get("usage_by_hour")
     if by_hour:
         for hour_key, b in by_hour.items():
@@ -88,9 +90,9 @@ def estimate_cost_cny(tu: dict, ts_hint: str = None) -> float:
     else:
         hit = tu.get("prompt_cache_hit_tokens", 0)
     completion = tu.get("completion_tokens", 0)
-    cost = (miss / 1_000_000 * p["input_miss"]
-            + hit / 1_000_000 * p["input_hit"]
-            + completion / 1_000_000 * p["output"])
+    cost = total + (miss / 1_000_000 * p["input_miss"]
+                    + hit / 1_000_000 * p["input_hit"]
+                    + completion / 1_000_000 * p["output"])
     return round(cost, 4)
 
 # 常见地域前缀（省级+主要城市），用于从公司名提炼核心品牌词；按长度降序匹配，长前缀优先

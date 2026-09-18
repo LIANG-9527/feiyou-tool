@@ -129,6 +129,38 @@ PAGE_CHECKERS = [
 ]
 
 
+def _audit_conclusions(report) -> dict:
+    """检测结论扩字段（供企业资料详情页/外部API读，明细仍在报告文件）：
+    维度分、官网指纹、后台路径暴露、必检/非必检计数、核心问题（全部不合格项）。"""
+    from site_audit.core.models import Status
+    cats = [{"name": (c.category.value if hasattr(c.category, "value") else str(c.category)),
+             "score": round(c.score, 1), "fail": c.failed, "warn": c.warned, "pass": c.passed}
+            for c in report.categories]
+    core = [r for r in report.results if r.item_id not in ("tech-14", "tech-15")
+            and getattr(r, "tier", "core") != "bonus"]
+    bonus = [r for r in report.results if r.item_id not in ("tech-14", "tech-15")
+             and getattr(r, "tier", "core") == "bonus"]
+    def _cnt(rs, st): return sum(1 for r in rs if r.status == st)
+    idx = {r.item_id: r for r in report.results}
+    def _concl(iid):
+        r = idx.get(iid)
+        return (r.status.value if r else "skip"), (r.message if r else "")
+    fingerprint = _concl("tech-14"); backend = _concl("tech-15")
+    issues = [{"name": r.item_name, "message": (r.message or "")[:120],
+               "suggestion": (r.suggestion or "")[:160]}
+              for r in report.results if r.status == Status.FAIL]
+    return {
+        "categories": cats,
+        "core_counts": {"total": len(core), "pass": _cnt(core, Status.PASS),
+                        "warn": _cnt(core, Status.WARN), "fail": _cnt(core, Status.FAIL)},
+        "bonus_counts": {"total": len(bonus), "pass": _cnt(bonus, Status.PASS),
+                         "warn": _cnt(bonus, Status.WARN), "fail": _cnt(bonus, Status.FAIL)},
+        "fingerprint": {"status": fingerprint[0], "message": (fingerprint[1] or "")[:120]},
+        "backend": {"status": backend[0], "message": (backend[1] or "")[:120]},
+        "issues": issues[:20],
+    }
+
+
 def _create_ai_engine(llm_config: dict = None) -> AIEngine | None:
     """从配置创建AI语义引擎，无配置则返回None。温度强制为0确保结果确定性。"""
     if not llm_config:
@@ -275,6 +307,18 @@ def run_site_audit(url: str, output_dir, max_pages: int = 12,
         snapshot_dir = save_snapshot(output_dir, snapshot_name,
                                      pages=[page, *extra_pages],
                                      ai_engine=ai_engine)
+
+        # 客户档案：官网检测快照入库（只存结论；明细在报告文件）
+        try:
+            from company_cache import upsert_audit_snapshot
+            upsert_audit_snapshot(domain, ts, {
+                "url": url, "final_url": report.final_url,
+                "score": report.total_score, "grade": report.grade,
+                "summary": report.summary, "sampled_count": sampled,
+                "page_coverage": page_coverage, "report_file": json_name,
+                **_audit_conclusions(report)})
+        except Exception:
+            pass
 
     return {
         "ok": True,

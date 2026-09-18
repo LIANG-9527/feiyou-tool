@@ -4,6 +4,7 @@ name: 话题拆解
 description: 对每个阶段6条推理线并行产出话题+问句,然后补漏检查
 order: 6
 type: iterate_parallel
+parallel_stages: true  # 阶段间并行（各阶段输入独立，总并发仍受 max_concurrency 限流）
 iterate_over: step3_journey
 iterate_as: stage
 context_builders:

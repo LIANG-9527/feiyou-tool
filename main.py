@@ -15,7 +15,7 @@ from pathlib import Path
 
 import yaml
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, FileResponse
 from pydantic import BaseModel as PydanticModel, Field
 
@@ -23,10 +23,10 @@ from llm_client import LLMClient
 from agent import Agent, ChatAgent
 from site_audit.runner import run_site_audit
 from site_audit.core.ai_engine import estimate_cost_cny
-from site_audit.report.html_report import ENGINE_VERSION
 
-# 市场调研引擎版本：生成逻辑/报告模板每次改动必须 +1（日期.当日序号）
-MR_ENGINE_VERSION = "2026.09.13.1"
+# 平台全局版本号（唯一来源），格式 Version：YY.MDDDi.N——年后两位、月日与当日序号连写、
+# 末尾 N=系统累计发布次数（与 versions/ 文档数一致）。发版：versions/ 新增 <版本号>.md + 改这里。
+MR_ENGINE_VERSION = "26.09171.7"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +36,10 @@ logging.basicConfig(
 logger = logging.getLogger("geo-agent")
 
 BASE_DIR = Path(__file__).parent
-SESSIONS_DIR = BASE_DIR / "output" / "chat_sessions"
+from paths import OUTPUT_DIR, DATA_DIR, TASKS_DIR  # 可变数据统一在 var/ 下
+_vp = MR_ENGINE_VERSION.split(".")
+VER_LABEL = f"V_{_vp[0]}.{_vp[1][:4]}.{_vp[2]}"
+SESSIONS_DIR = OUTPUT_DIR / "chat_sessions"
 
 
 def save_session(sid: str, session: dict):
@@ -104,12 +107,81 @@ def build_agent(config: dict, thinking: bool | None = None) -> Agent:
     return Agent(llm, max_concurrency=llm_cfg.get("max_concurrency", 5), thinking=thinking)
 
 
+def _save_mining_facts(result: dict):
+    """问句挖掘完成：把产品/客群/旅程/话题摘要写入客户档案 mining 表（供其他板块校准）。"""
+    try:
+        from company_cache import upsert_mining
+        topics = result.get("step4_topics") or {}
+        # extract_all_queries 只认单阶段结构（{"lines":[...]}），需逐阶段提取；
+        # 整包传入实测恒为 0 条（2026-09-17 修复）
+        queries = [q for sd in topics.values() for q in Agent.extract_all_queries(sd)] \
+            if isinstance(topics, dict) else []
+        journey = result.get("step3_journey") or []
+        stages = []
+        if isinstance(journey, list):  # 当前模型输出：阶段对象数组
+            for line in journey:
+                if isinstance(line, dict) and line.get("stage_name"):
+                    stages.append(line["stage_name"])
+        elif isinstance(journey, dict):  # 旧数据形态：{"lines":[...]}
+            for line in journey.get("lines", []):
+                if isinstance(line, dict) and line.get("stage_name"):
+                    stages.append(line["stage_name"])
+        # 话题库（阶段→话题→问句三级，含入口类型/客群信号）+ 客群 B/C 端标注
+        from company_cache import derive_audience_type
+        topic_tree = []
+        for sk, sd in (topics.items() if isinstance(topics, dict) else []):
+            if not isinstance(sd, dict):
+                continue
+            for tp in _iter_topics(sd):
+                topic_tree.append({"stage_index": sd.get("stage_index") or sk,
+                                   "stage_name": sd.get("stage_name") or f"阶段{sk}",
+                                   "line": tp.get("line") or "", "topic": tp.get("topic") or "",
+                                   "queries": tp.get("queries") or []})
+        personas = []
+        for p in (result.get("step2_personas") or []):
+            if isinstance(p, dict):
+                q = dict(p); q["audience_type"] = derive_audience_type(p); personas.append(q)
+        payload = {
+            "brand": result.get("brand"),
+            "product": result.get("product"),
+            "products": result.get("step1_products"),
+            "personas": personas,
+            "journey": journey if isinstance(journey, list) else [],
+            "journey_stages": stages,
+            "topics": topic_tree[:400],
+            "query_count": len(queries),
+            "sample_queries": [q.get("query") for q in queries[:20] if isinstance(q, dict) and q.get("query")],
+            "clusters": [c for sd in (result.get("step5_clusters") or {}).values()
+                         if isinstance(sd, list) for c in sd
+                         if isinstance(c, dict) and c.get("cluster_name")][:60],
+            "verifications": [v for v in (result.get("step6_verification") or [])
+                              if isinstance(v, dict)][:40],
+        }
+        upsert_mining(result.get("brand") or "", payload, origin="GEO搜索问句挖掘",
+                      content_brand=result.get("brand_alias") or "")
+        logger.info(f"问句挖掘事实已入库: 问句 {len(queries)} 条 / 话题 {len(topic_tree)}")
+    except Exception as e:
+        logger.warning(f"问句挖掘事实入库失败: {e}")
+
+
+def _iter_topics(stage_data: dict):
+    """展平一个阶段的多线话题：产出 {line, topic, queries:[{query,entry_type,audience_signal}]}。"""
+    for lr in (stage_data.get("lines") or stage_data.get("line_results") or []):
+        if not isinstance(lr, dict):
+            continue
+        line_name = lr.get("line") or lr.get("line_name") or ""
+        for t in (lr.get("topics") or []):
+            if isinstance(t, dict) and t.get("topic"):
+                yield {"line": line_name, "topic": t.get("topic"),
+                       "queries": [q for q in (t.get("queries") or []) if isinstance(q, dict)]}
+
+
 def save_output(result: dict, config: dict) -> dict:
     """Save JSON + HTML to output dir. Returns file paths."""
+    if result.get("method_id") == "geo_query_mining":
+        _save_mining_facts(result)
     out_cfg = config.get("output", {})
-    out_dir = Path(out_cfg.get("dir", "./output"))
-    if not out_dir.is_absolute():
-        out_dir = BASE_DIR / out_dir
+    out_dir = OUTPUT_DIR if str(out_cfg.get("dir", "./output")).rstrip("/").endswith("output") else BASE_DIR / out_cfg["dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
     brand = result.get("brand", "unknown")
@@ -128,9 +200,16 @@ def save_output(result: dict, config: dict) -> dict:
 
     if out_cfg.get("save_html", True):
         html_path = out_dir / f"{base_name}.html"
-        # 调研类方法（输出 Markdown）走通用渲染，其余走 GEO 问句报告渲染
+        # 调研类方法（输出 Markdown）走通用渲染；挖掘走原型模板（异常回退简版，绝不因模板丢报告）
         if result.get("method_id") == "customer_market_research":
             html = generate_markdown_report(result)
+        elif result.get("method_id") == "geo_query_mining":
+            try:
+                from mining_report_render import render as _mr
+                html = _mr(result)
+            except Exception as e:
+                logger.warning(f"挖掘报告原型模板渲染失败，回退简版: {e}")
+                html = generate_html_report(result)
         else:
             html = generate_html_report(result)
         with open(html_path, "w", encoding="utf-8") as f:
@@ -153,7 +232,9 @@ def _md_to_html(md: str) -> str:
     out, i, in_table = [], 0, False
     def _inline(t):
         t = _h.escape(t)
+        t = t.replace("&lt;br&gt;", "<br>").replace("&lt;br/&gt;", "<br>")  # 模型输出混用 HTML 换行，放行
         t = _sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", t)
+        t = _sub(r"\*([^*\n]+)\*", r"<em>\1</em>", t)
         t = _sub(r"`([^`]+)`", r"<code>\1</code>", t)
         return t
     while i < len(lines):
@@ -210,9 +291,38 @@ def _md_to_html(md: str) -> str:
     return "\n".join(merged)
 
 
+_CITY_NAMES = set("""北京 上海 天津 重庆 广州 深圳 成都 武汉 杭州 南京 苏州 西安 郑州 长沙 青岛
+沈阳 哈尔滨 昆明 厦门 福州 无锡 佛山 东莞 宁波 合肥 济南 大连 长春 石家庄 南昌 贵阳 南宁 兰州
+太原 呼和浩特 乌鲁木齐 银川 西宁 海口 拉萨 香港 澳门 高邮 佛山 中山 珠海 惠州 汕头 温州 绍兴
+嘉兴 常州 南通 徐州 扬州 镇江 泰州 江都 邗江""".split())
+
+
+def _node_quality(name: str) -> tuple[bool, str]:
+    """组织图节点合格性：返回 (合格, 剔除原因)。城市/泛称/描述句/地址不当节点。"""
+    n = str(name or "").strip()
+    if not n:
+        return False, "空节点"
+    if len(n) > 30 or "，" in n:
+        return False, "整句描述当作节点"
+    if n in _CITY_NAMES or (n.endswith("市") and len(n) <= 5):
+        return False, "纯城市名不是实体"
+    if len(n) <= 6 and any(p in n for p in ("广东", "江苏", "浙江", "山东", "河南", "四川", "湖北", "湖南", "福建")):
+        return False, "省市组合名不是实体"
+    head4 = n[:4]
+    if any(w in head4 for w in ("各地", "其他", "相关", "若干", "各区域", "全国", "东南亚")) or n.endswith("等"):
+        return False, "泛称"
+    if re.search(r"(路|街|道\d|号$|广场|大厦|大楼|科技园|产业园|工业园)", n) and len(n) >= 8:
+        return False, "地址当作节点"
+    if re.match(r"^(无|没有|暂无|主要依托|依托)", n):
+        return False, "描述句当作节点"
+    return True, ""
+
+
 def _mr_brief_html(brief, brand, mr_org=None) -> str:
     """企业画像页签：按 intel-deck 模板基本面页风格渲染；无数据返回空串（页签仍显示占位）。"""
     import html as _h
+    if isinstance(brief, list):  # 模型偶发把对象包成数组，取首个字典元素兜底
+        brief = next((x for x in brief if isinstance(x, dict)), {})
     if not isinstance(brief, dict):
         return ""
     e = _h.escape
@@ -221,37 +331,164 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
     org = brief.get("org_tree") or {}
     culture = brief.get("culture") or {}
     tl = sorted(brief.get("timeline") or [], key=lambda x: str(x.get("date", "")), reverse=True)
-    gaps = [str(x) for x in (brief.get("gaps") or []) if str(x).strip()]
+    gaps = [str(x) for x in (brief.get("gaps") or []) if str(x).strip()]  # 待补数据保留在JSON，页面不再展示
     if not (info or layout or org or culture or tl):
         return ""
 
-    def _v(x):
-        return e(str(x)) if x not in (None, "", [], "None", "none", "null", "待补") else "待补"
+    def _split_top(s, seps="、，"):
+        # 只在中/英文括号之外按分隔符拆行，括号内的逗号不切断一句话
+        depth, cur, parts = 0, "", []
+        for ch in s:
+            if ch in "（(":
+                depth += 1
+            elif ch in "）)":
+                depth = max(depth - 1, 0)
+            if depth == 0 and ch in seps:
+                parts.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        parts.append(cur)
+        return [p.strip() for p in parts if p.strip()]
+
+    def _v(x, fk=""):
+        if x in (None, "", [], "None", "none", "待补"):
+            return "待补"
+        s = e(str(x))
+        # 仅指定字段拆行加符号：行业地位（中文逗号）、资质/专利（顿号+中文逗号）；其余字段原样单行
+        if fk not in ("industry_position", "qualifications", "patents"):
+            return s
+        if fk == "industry_position":
+            parts = _split_top(s, "，")
+        else:
+            parts = _split_top(s)
+        if len(parts) > 1:
+            b = '<span style="color:#2f54eb">•</span> '
+            return "<br>".join(b + p for p in parts)
+        return s
 
     quals = "、".join(map(str, info.get("qualifications") or [])) or None
-    patents = "、".join(map(str, info.get("patents") or [])) or None
+    # 专利按类型排序：发明专利 > 实用新型 > 外观设计 > 软著，同类保持原序
+    def _pt_rank(x):
+        s = str(x)
+        for kw, r in (("发明专利", 0), ("实用新型", 1), ("外观设计", 2), ("软著", 3), ("软件著作权", 3)):
+            if kw in s:
+                return r
+        return 9
+    patents = "、".join(sorted((str(x) for x in (info.get("patents") or [])), key=_pt_rank)) or None
     org_valid = isinstance(mr_org, dict) and mr_org.get("tree") and mr_org.get("nodes")
     seed = None
     if isinstance(mr_org, dict):
         _nodes_by_id = {n["id"]: n for n in (mr_org.get("nodes") or [])}
         seed = _nodes_by_id.get(mr_org.get("seed_key"))
-    ig = [("成立时间", info.get("founded")), ("总部/地址", info.get("address")), ("行业地位", info.get("industry_position")),
-          ("年营收", info.get("revenue")), ("员工人数", info.get("employees")), ("资质", quals), ("专利", patents),
-          ("法定代表人", seed.get("legal_person") if seed else None), ("创始人/实控人", seed.get("founder") if seed else None)]
-    ig_html = ('<table class="info-table">' + "".join(
-        '<tr><th>' + e(k) + '</th><td>' + _v(v) + '</td></tr>' for k, v in ig) + '</table>')
+    from company_cache import get_info as _cache_get, derive_nature
+    _cache, _cache_ts = _cache_get(brand or str(info.get("full_name") or ""))
+    def _with_cache(v, cache_key):
+        if v not in (None, "", [], "None", "待补") or not _cache:
+            return v
+        cv = _cache.get(cache_key)
+        if cv in (None, "", [], "None"):
+            return v
+        cv = "、".join(map(str, cv)) if isinstance(cv, list) else str(cv)
+        return f"{cv}（历史缓存 {_cache_ts[:10]}）"
+    ig = [("成立时间", _with_cache(info.get("founded"), "founded"), "founded"),
+          ("总部/地址", _with_cache(info.get("address"), "address"), "address"),
+          ("行业地位", _with_cache(info.get("industry_position"), "industry_position"), "industry_position"),
+          ("年营收", _with_cache(info.get("revenue"), "revenue"), "revenue_detail"),
+          ("员工人数", _with_cache(info.get("employees"), "employees"), "employees"),
+          ("资质", _with_cache(quals, "qualifications"), "qualifications"),
+          ("专利", _with_cache(patents, "patents"), "patents"),
+          ("法定代表人", (seed.get("legal_person") if seed else None) or _with_cache(None, "legal_person"), "legal_person"),
+          ("创始人/实控人", (seed.get("founder") if seed else None) or _with_cache(None, "founder"), "founder")]
 
+    # 溯源信息：从 _pipeline_meta 中获取，嵌入到 data-* 属性中（不展示，便于审计）
+    _pw_meta = brief.get("_pipeline_meta") or {}
+    _prov = (_pw_meta.get("provenance") or {}) if isinstance(_pw_meta, dict) else {}
+    def _prov_attrs(field_key):
+        p = _prov.get(field_key) or {}
+        if not p:
+            return ""
+        src = p.get("source", "")
+        mth = p.get("method", "")
+        conf = p.get("confidence", "")
+        fetched = p.get("fetched_at", "")
+        detail = p.get("detail") or {}
+        # 把 detail 转成 JSON 字符串，嵌入到 data-detail 属性中
+        import json as _json
+        try:
+            detail_str = _json.dumps(detail, ensure_ascii=False)
+        except Exception:
+            detail_str = ""
+        return (f' data-source="{e(src)}" data-method="{e(mth)}" '
+                f'data-confidence="{e(str(conf))}" data-fetched-at="{e(fetched)}" '
+                f'data-detail="{e(detail_str)}"')
+
+    # 企业性质单一结论标签：纯API字段规则，互斥优先级命中即停
+    def _chip(t):
+        return ('<span style="display:inline-block;padding:3px 10px;margin:2px 6px 2px 0;'
+                'background:#eef3ff;border:1px solid #c9d8ff;color:#2f54eb;border-radius:999px;'
+                'font-size:12px;font-weight:600;">' + e(t) + '</span>')
+
+    from company_cache import derive_nature as _dn, get_info as _gi
+    _full = str(info.get("full_name") or brand or "")
+    _arch, _ats = _gi(_full)  # 档案存储结论优先（SPEC-company-nature-unify）
+    _nature = str((_arch or {}).get("nature") or "") or _dn({
+        "full_name": _full,
+        "company_type": str((seed or {}).get("company_type") or (_arch or {}).get("company_type") or ""),
+        "staff_number": str((seed or {}).get("staff_number") or (_arch or {}).get("staff_number") or ""),
+        "listed": str((_arch or {}).get("listed") or info.get("listed") or "")})
+    nature_row = ('<tr><th>企业性质</th><td>'
+                  + (_chip(_nature) if _nature else "待补")
+                  + '</td></tr>')
+
+    ig_html = ('<table class="info-table">' + nature_row + "".join(
+        '<tr><th>' + e(k) + '</th><td' + _prov_attrs(fk) + '>' + _v(v, fk) + '</td></tr>' for k, v, fk in ig) + '</table>')
+
+    # 网页全文抓取状态徽章（在企业画像页签顶部显示）
+    _pw_status = _pw_meta.get("fetcher_status", "unknown")
+    _pw_ft = _pw_meta.get("fulltext_evidence", 0)
+    _pw_badge = ""
+    if _pw_status == "success":
+        _pw_badge = ('<div style="margin:0 0 14px 0;padding:8px 14px;background:#e8f5e9;border-left:4px solid #43a047;'
+                     'border-radius:4px;font-size:13px;color:#2e7d32;line-height:1.5;">'
+                     f'✓ 已通过网页全文抓取获取信息（{_pw_ft} 条证据来自全文抓取），信息完整度高于搜索摘要模式'
+                     '</div>')
+    elif _pw_status == "failed":
+        _pw_badge = ('<div style="margin:0 0 14px 0;padding:8px 14px;background:#fff3e0;border-left:4px solid #fb8c00;'
+                     'border-radius:4px;font-size:13px;color:#e65100;line-height:1.5;">'
+                     '⚠ 网页全文抓取未获取到内容，已自动降级为搜索摘要模式（信息可能不完整）。'
+                     '</div>')
+    elif _pw_status == "disabled":
+        _pw_badge = ('<div style="margin:0 0 14px 0;padding:8px 14px;background:#f5f5f5;border-left:4px solid #9e9e9e;'
+                     'border-radius:4px;font-size:13px;color:#616161;line-height:1.5;">'
+                     '○ 网页全文抓取未启用，当前使用搜索摘要模式'
+                     '</div>')
+
+    _truncated = []
     cells = []
     if layout.get("headquarters"):
         cells.append('<div class="org-cell">总部：' + e(str(layout["headquarters"])) + '</div>')
+        ok_hq, why_hq = _node_quality(str(layout["headquarters"]))
+        if not ok_hq:
+            _truncated.append("总部：" + str(layout["headquarters"]) + f"（{why_hq}）")
     for key in ("branches", "subsidiaries", "sites"):
         val = layout.get(key)
         items = [str(x) for x in val if str(x).strip() and str(x) != "None"] if isinstance(val, list) else ([str(val)] if val else [])
         for x in items[:6]:
             cells.append('<div class="org-cell sub">' + e(x[:48]) + ('…' if len(x) > 48 else '') + '</div>')
-    org1 = ('<div class="org-cap">企业架构布局（公开信息推断，首访验证）</div><div class="org">'
-            '<div class="org-box">' + e(str(info.get("full_name") or brand)) + '</div>'
-            + ('<div class="org-line"></div><div class="org-row">' + "".join(cells) + '</div>' if cells else '') + '</div>') if not org_valid else "" 
+    def _static_tree(item, cap):
+        """静态回退：与交互图同源（根+一级子节点），CDN 失败/离线导出时可见。"""
+        kids = (item.get("children") or [])[:12]
+        head = ('<div class="org-cap">' + e(cap) + '</div><div class="org"><div class="org-box">'
+                + e(str(item.get("name") or "")) + '</div>')
+        if kids:
+            head += ('<div class="org-line"></div><div class="org-row">'
+                     + "".join('<div class="org-cell sub'
+                               + (' dead' if '注销' in str(c.get('value') or '') else '')
+                               + '">' + e(str(c.get("name") or "")[:48]) + '</div>'
+                               for c in kids if c.get("name")) + '</div>')
+        return head + '</div>'
+ 
 
     org2 = ""
     if org.get("name") and not org_valid:
@@ -296,16 +533,28 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
                 v = "目标企业" + ((" · " + str(seed.get("status"))) if seed and seed.get("status") else "")
             elif nid in (mr_org.get("roots") or []):
                 v = "母公司"
+            elif te and te.get("rel") == "branch":
+                v = "分支机构" + ((" · " + str(te["signal"])) if te.get("signal") else "")
             else:
                 v = "子公司" + ((" · " + str(te["signal"])) if te and te.get("signal") else "")
                 if te and te.get("confidence") == "low":
                     v += " · 待核实"
             item["value"] = v
+            if "注销" in v:  # 已注销分支：红点+红标签，模板侧加删除线
+                item["dead"] = True
+                item["itemStyle"] = {"color": "#cf1322"}
+                item["label"] = {"color": "#cf1322"}
             kid = []
             for c in _children_map.get(nid, []):
-                if c != nid and c not in seen:
-                    seen.add(c)
+                if c == nid or c in seen:
+                    continue
+                seen.add(c)
+                cn = (_nodes_by_id.get(c) or {}).get("name") or c
+                ok, why = _node_quality(cn)
+                if ok:
                     kid.append(_from_org(c, seen))
+                else:
+                    _truncated.append("股权关系：" + cn + f"（{why}）")
             if kid:
                 item["children"] = kid
             return item
@@ -316,6 +565,13 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
         for _r in _roots:
             if _r in _seen_all:
                 continue
+            import re as _re2
+            _nm = _re2.sub(r"[\s（）()：:，,。·]", "", str((_nodes_by_id.get(_r) or {}).get("name") or ""))
+            def _nn(s):
+                return _re2.sub(r"[\s（）()：:，,。·]", "", str(s or ""))
+            if any(_nm and (_nm in _nn(t.get("name") or "") or _nn(t.get("name") or "") in _nm)
+                   for t in forest):
+                continue  # 同名根只保留第一棵，防重复主体
             _seen_all.add(_r)
             forest.append(_from_org(_r, _seen_all))
         if not forest:
@@ -324,17 +580,30 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
     else:
         tree_root = _tn(info.get("full_name") or brand, "公司主体")
         kids = tree_root["children"] = []
-        if layout.get("headquarters"):
-            kids.append(_tn(layout["headquarters"], "总部"))
         for key, label in (("branches", "分支"), ("subsidiaries", "子公司"), ("sites", "基地")):
             val = layout.get(key)
             items = [str(x) for x in val if str(x).strip() and str(x) != "None"] if isinstance(val, list) else ([str(val)] if val else [])
             for x in items[:6]:
-                kids.append(_tn(x, label))
-        if org.get("name"):
+                ok, why = _node_quality(x)
+                if ok:
+                    kids.append(_tn(x, label))
+                else:
+                    _truncated.append(label + "：" + x + f"（{why}）")
+            for x in items[6:]:  # 截断项转待补，不再静默丢弃
+                _truncated.append(label + "：" + x)
+        import re as _re_dup
+        _root_nm = _re_dup.sub(r"[\s（）()：:，,。·]", "", str(info.get("full_name") or brand or ""))
+        _dept_nm = _re_dup.sub(r"[\s（）()：:，,。·]", "", str(org.get("name") or ""))
+        if org.get("name") and not (_dept_nm and (_dept_nm in _root_nm or _root_nm in _dept_nm)):
+            def _dept_item(node):
+                it = _tn(node["name"], str(node.get("role") or "部门"))
+                subs = [_dept_item(c) for c in (node.get("children") or [])[:8]
+                        if isinstance(c, dict) and c.get("name")]
+                if subs:
+                    it["children"] = subs
+                return it
             dept = _tn(org["name"], "部门架构")
-            dept["children"] = [_tn(k["name"], str(k.get("role") or "部门"))
-                                for k in (org.get("children") or [])[:12]
+            dept["children"] = [_dept_item(k) for k in (org.get("children") or [])[:12]
                                 if isinstance(k, dict) and k.get("name")]
             kids.append(dept)
 
@@ -350,9 +619,16 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
                 _mark_expandable(c)
         return node
     tree_root = _mark_expandable(tree_root)
+    if org_valid:
+        org1 = _static_tree(tree_root if not isinstance(tree_root, list) else tree_root[0],
+                            "企业架构布局（工商实名核验 · 交互图加载后可展开）")
+    else:
+        org1 = ('<div class="org-cap">企业架构布局（公开信息推断，首访验证）</div><div class="org">'
+                '<div class="org-box">' + e(str(info.get("full_name") or brand)) + '</div>'
+                + ('<div class="org-line"></div><div class="org-row">' + "".join(cells) + '</div>' if cells else '') + '</div>')
     org_json = json.dumps(tree_root if isinstance(tree_root, list) else [tree_root],
                           ensure_ascii=False).replace("</", "<\\/")
-    org_note = ('<div class="org-cap" style="color:#9a6b00">⚠️ 二级及以下股权关系未获检索数据，完整性待首访核实</div>'
+    org_note = ('<div class="org-cap" style="white-space:nowrap">二级及以下股权关系未获检索数据，完整性待首访核实 · 组织架构图（粉色圆点=有下级，点击展开/收起；青色=明细；悬停看说明）</div>'
                 if org_valid and isinstance(mr_org, dict) and mr_org.get("depth2_empty") else "")
     org_graph = ('<div id="orgStatic">' + org1 + org2 + '</div>'
                  + org_note
@@ -362,7 +638,9 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
     cult = ""
     cult_items = [x for x in (("使命", culture.get("mission")), ("愿景", culture.get("vision")), ("价值观", culture.get("values"))) if x[1]]
     if cult_items:
-        cult = '<div class="pf-card"><div class="ct">🏛 企业文化</div><div class="cb">' + "<br>".join(e(k) + "：" + e(str(v)) for k, v in cult_items) + '</div></div>'
+        cult = ('<div class="pf-card"><div class="ct">03 · 企业文化</div><div class="cb">'
+                + "<br>".join('<strong style="color:#1a1d29">' + e(k) + '</strong>：' + e(str(v))
+                              for k, v in cult_items) + '</div></div>')
 
     weak_html = ""
     if org_valid:
@@ -374,23 +652,44 @@ def _mr_brief_html(brief, brand, mr_org=None) -> str:
 
     tl_html = ""
     if tl:
-        tl_html = '<div class="org-cap" style="margin-top:14px">发展历程（最近在前）</div><div class="tl">' + "".join(
-            '<div class="tl-i"><div class="tl-y">' + e(str(x.get("date", ""))) + (('　' + e(str(x.get("tag")))) if x.get("tag") else '')
-            + '</div><div class="tl-x">' + e(str(x.get("event", ""))) + '</div></div>' for x in tl if isinstance(x, dict)) + '</div>'
+        # 时间线：静态列表为兜底，ECharts 蛇形时间线（数据 #tlData）加载成功后替换
+        # 剥离事件文本开头的来源引导语（"客户画像显示…"等），只展示内容本身
+        def _ev_text(s):
+            return re.sub(r'^(?:客户画像|历史档案|已知档案)(?:/[^\s，。、；]{2,12})?(?:显示|判断|称|记录)[:：]?', '', str(s)).strip()
+
+        def _is_snap(x):  # 调研快照等非企业事件不进发展历程
+            return "快照" in (str(x.get("tag") or "") + str(x.get("event") or ""))
+        _tl_f = [x for x in tl if isinstance(x, dict) and not _is_snap(x)]
+        _tl_items = [{"date": str(x.get("date", "")), "tag": str(x.get("tag") or ""),
+                      "event": _ev_text(x.get("event") or "")}
+                     for x in _tl_f]
+        _tl_asc = list(reversed(_tl_items))  # 由早到近，蛇形从左到右
+        _per_row = -(-len(_tl_asc) // 3) if len(_tl_asc) > 6 else 4  # 与模板一致：>6 个压成 3 行
+        _rows = max(1, -(-len(_tl_asc) // _per_row))
+        tl_json = json.dumps(_tl_asc, ensure_ascii=False).replace("</", "<\\/")
+        tl_html = ('<div class="ct">04 · 发展历程</div>'
+                   '<div class="org-cap" style="margin-bottom:8px">点击节点固定详情（可复制），悬停快速查看</div>'
+                   '<div class="tl" id="tlStatic">' + "".join(
+                       '<div class="tl-i"><div class="tl-y">' + e(str(x.get("date", ""))) + (('　' + e(str(x.get("tag")))) if x.get("tag") else '')
+                       + '</div><div class="tl-x">' + e(_ev_text(x.get("event", ""))) + '</div></div>' for x in _tl_f) + '</div>'
+                   + f'<div id="tlGraph" hidden style="height:{_rows * 130 + 60}px"></div>'
+                   + '<div id="tlPin" hidden></div>'
+                   + '<script id="tlData" type="application/json">' + tl_json + '</script>')
 
     if org_valid:
         gaps += ["组织检索存疑：" + str(u.get("claim", ""))[:40] for u in (mr_org.get("uncertain") or [])[:6]]
-    gaps_html = '<div class="pf-card"><div class="ct">🧾 待补清单（缺什么·怎么补）</div><div class="words">' + "".join(
-        '<span class="wd">' + e(x) + '</span>' for x in gaps) + '</div></div>' if gaps else ""
+    gaps += ["组织信息未完整展示：" + t for t in _truncated[:6]]
 
     return ('<div class="pf">'
-            + '<div class="pf-head"><div class="k">01 · 公司基本面</div><div class="t">' + e(str(brand)) + ' · 一图看懂</div></div>'
+            + '<div class="pf-head" style="display:flex;justify-content:space-between;align-items:center;">'
+            + '<div><div class="k">01 · 公司基本面</div><div class="t">' + e(str(brand)) + '</div></div>'
+            + '<button class="pf-refresh-btn" id="refreshCompanyBtn" onclick="refreshCompanyInfo()" style="padding:8px 16px;background:linear-gradient(135deg,#3567ff,#6b8cff);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(53,103,255,0.25);transition:all .2s;white-space:nowrap;" onmouseover="this.style.transform=\'translateY(-1px)\';this.style.boxShadow=\'0 4px 12px rgba(53,103,255,0.35)\'" onmouseout="this.style.transform=\'none\';this.style.boxShadow=\'0 2px 8px rgba(53,103,255,0.25)\'">🔄 更新企业信息</button>'
+            + '</div>'
+            + _pw_badge
             + '<div class="pf-card">' + ig_html + '</div>'
-            + '<div class="pf-card">' + org_graph + '</div>'
+            + '<div class="pf-card"><div class="ct">02 · 企业分支机构</div>' + org_graph + '</div>'
             + cult + weak_html
-            + '<div class="pf-card">' + tl_html + '</div>'
-            + gaps_html
-            + '<div class="pf-card"><div class="f">基于公开信息整理：组织架构与部门层级为推断示意 · 未两源核验字段标「待补」 · 数据口径以报告内来源为准</div></div>'
+            + (('<div class="pf-card">' + tl_html + '</div>') if tl_html else '')
             + '</div>')
 
 
@@ -518,7 +817,7 @@ def _mr_deck_slides_html(deck) -> str:
 
 
 def generate_markdown_report(result: dict) -> str:
-    """客户市场调研：三页签报告——「企业画像」+「销售情报简报」+「完整背调报告」三页签固定显示。
+    """客户市场调研：三页签报告——「企业画像」+「销售情报简报」+「完整调研报告」三页签固定显示。
 
     版式来自 skills/mr_report_template.html（单文件、无外部依赖、导出后离线可用）。"""
     import html as _h
@@ -575,8 +874,6 @@ def generate_html_report(result: dict) -> str:
     sections.append(_html_step3_5(result.get("step3_5_dual_entry", [])))
     sections.append(_html_step4(result.get("step4_topics", {})))
     sections.append(_html_step5(result.get("step5_clusters", {})))
-    sections.append(_html_step6(result.get("step6_verification", [])))
-    sections.append(_html_self_check(result.get("self_check", [])))
 
     css = """
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -732,11 +1029,12 @@ def _html_step4(topics):
         return "<h2>Step 4 · 各阶段话题与问句</h2><div class='card'>无数据</div>"
     sections = ""
     for stage_key, stage_data in topics.items():
+        # 两代流水线键兼容：skills 版 stage_name 直挂顶层、线数据键为 lines；旧 pipeline 版为 stage/line_results
         stage = stage_data.get("stage", {})
-        stage_name = stage.get("stage_name", f"阶段{stage_key}")
+        stage_name = stage.get("stage_name") or stage_data.get("stage_name") or f"阶段{stage_key}"
         sections += f"<h3>阶段 {stage_key}: {stage_name}</h3>"
 
-        for line_result in stage_data.get("line_results", []):
+        for line_result in stage_data.get("line_results") or stage_data.get("lines", []):
             if not isinstance(line_result, dict) or not line_result.get("topics"):
                 continue
             line_name = line_result.get("line", "")
@@ -758,10 +1056,11 @@ def _html_step4(topics):
                     )
             sections += "</div>"
 
-        gap = stage_data.get("gap_fill", {})
-        if isinstance(gap, dict) and gap.get("gap_fills"):
+        gap = stage_data.get("gap_fill") or stage_data.get("gap_fills") or {}
+        gap_list = gap.get("gap_fills", []) if isinstance(gap, dict) else (gap if isinstance(gap, list) else [])
+        if gap_list:
             sections += "<div class='card'><strong>补漏问句</strong>"
-            for gf in gap["gap_fills"]:
+            for gf in gap_list:
                 if not isinstance(gf, dict):
                     continue
                 entry_tag = "tag-a" if gf.get("entry_type", "").startswith("产品") else "tag-b"
@@ -782,10 +1081,18 @@ def _html_step5(clusters_by_stage):
         return "<h2>Step 5 · 意图簇</h2><div class='card'>无数据</div>"
     sections = ""
     for stage_key, stage_data in clusters_by_stage.items():
-        stage = stage_data.get("stage", {})
-        stage_name = stage.get("stage_name", f"阶段{stage_key}")
+        # 三形态兼容：模型按配表约定输出簇数组；旧数据为 {stage,clusters} 或单簇对象
+        if isinstance(stage_data, list):
+            stage_name, clusters = f"阶段{stage_key}", stage_data
+        elif isinstance(stage_data, dict) and "cluster_name" in stage_data:
+            stage_name, clusters = f"阶段{stage_key}", [stage_data]
+        elif isinstance(stage_data, dict):
+            stage_name = (stage_data.get("stage") or {}).get("stage_name") or f"阶段{stage_key}"
+            clusters = stage_data.get("clusters", [])
+        else:
+            continue
         sections += f"<h3>阶段 {stage_key}: {stage_name}</h3>"
-        for cluster in stage_data.get("clusters", []):
+        for cluster in clusters:
             if not isinstance(cluster, dict):
                 continue
             sections += f"<div class='cluster card'>"
@@ -856,9 +1163,11 @@ app = FastAPI(title="GEO Query Mining Agent", version="1.0.0")
 
 
 class AnalyzeRequest(PydanticModel):
-    brand: str = Field(..., description="企业/品牌名称")
+    brand: str = Field(..., description="企业/品牌名称（用户确认后的企业全称）")
     product: Optional[str] = Field(None, description="目标产品/服务(可选)")
     method: Optional[str] = Field(None, description="分析方法ID(可选)")
+    brand_alias: Optional[str] = Field(None, description="品牌别名/用户原始输入（如'货拉拉'），用于搜索百度百科")
+    force_refresh: bool = Field(False, description="是否强制刷新企业基本信息（绕过本地缓存，调用工商API获取最新数据）")
 
 
 class AnalyzeResponse(PydanticModel):
@@ -911,6 +1220,11 @@ class BatchAuditRequest(PydanticModel):
     urls: list[str] = Field(..., description="要诊断的官网网址列表")
 
 
+class AuditBindRequest(PydanticModel):
+    filename: str = Field(..., description="诊断报告文件名主干（不含扩展名）")
+    company: str = Field(..., description="人工选定的企业工商全称")
+
+
 AUDIT_JOBS: dict = {}  # job_id -> {"status": running/done/error, "url":..., "result":..., "started": ts}
 AUDIT_MAX_ACTIVE = 10  # 进行中（含批量）任务总上限，超出禁止新增
 
@@ -924,11 +1238,13 @@ def _start_audit_job(url: str) -> str:
     job_id = uuid.uuid4().hex[:12]
     AUDIT_JOBS[job_id] = {"status": "running", "url": url, "started": time.time()}
     llm_config = load_config().get("llm", {})
-    audit_dir = BASE_DIR / "output" / "audit"
+    audit_dir = OUTPUT_DIR / "audit"
 
     def _run():
         try:
-            AUDIT_JOBS[job_id]["result"] = run_site_audit(url, audit_dir, 12, llm_config)
+            result = run_site_audit(url, audit_dir, 12, llm_config)
+            AUDIT_JOBS[job_id]["result"] = result
+            _audit_bind_company_sync(result)  # 先绑定写回再报完成：列表刷新时绑定结果必已落盘
             AUDIT_JOBS[job_id]["status"] = "done"
         except Exception as e:
             AUDIT_JOBS[job_id]["status"] = "error"
@@ -937,6 +1253,35 @@ def _start_audit_job(url: str) -> str:
 
     threading.Thread(target=_run, daemon=True).start()
     return job_id
+
+
+async def _audit_bind_company(result: dict):
+    """诊断完成后：按规格执行企业身份精确绑定（站内全称提取→工商精准核验→唯一才绑；
+    英文名/多候选/零命中落 company_candidates 供人工选定），工商字段沉淀进企业信息缓存
+    （存在即更新、不存在即创建，与其他分析页面同口径）。失败不影响诊断，但必须写日志留痕。"""
+    if not result or not result.get("ok") or not result.get("json_file"):
+        return
+    try:
+        from audit_company_bind import bind_report
+        from business_api_client import get_business_api_client
+        from company_cache import upsert_info
+        jf = OUTPUT_DIR / "audit" / result["json_file"]
+        summary = await bind_report(jf, get_business_api_client(), upsert_info)
+        if summary.get("action") in ("bound", "candidates"):
+            logger.info("官网诊断企业绑定 %s: %s", summary.get("action"), summary)
+        elif summary.get("action") in ("fallback_failed", "error"):
+            # 失败必须留痕：缺库/超时/异常绝不许被当成"站内没有"
+            logger.warning("官网诊断企业绑定未完成 %s: %s", summary.get("action"), summary)
+    except Exception as e:
+        logger.warning("官网诊断企业绑定异常: %s: %s", type(e).__name__, e)
+
+
+def _audit_bind_company_sync(result: dict):
+    """线程/同步上下文用的包装（诊断跑在线程里，无事件循环）。"""
+    try:
+        asyncio.run(_audit_bind_company(result))
+    except Exception:
+        pass
 
 
 @app.post("/api/audit/start")
@@ -952,6 +1297,7 @@ async def api_audit_start(req: AuditRequest):
         return JSONResponse({"ok": False,
                              "error": f"进行中的诊断任务已达上限（{AUDIT_MAX_ACTIVE} 个），请等待完成后再发起"},
                             status_code=429)
+    _log_op("官网诊断", "发起检测", url, "后台任务方式")
     return JSONResponse({"ok": True, "job_id": _start_audit_job(url)})
 
 
@@ -970,6 +1316,7 @@ async def api_audit_batch(req: BatchAuditRequest):
         return JSONResponse({"ok": False,
                              "error": f"进行中的任务 {active} 个 + 本次 {len(urls)} 个 超过上限 {AUDIT_MAX_ACTIVE}，请等待部分完成后再添加"},
                             status_code=429)
+    _log_op("官网诊断", "批量发起检测", f"{len(urls)} 个网址", "；".join(urls))
     jobs = [{"job_id": _start_audit_job(u), "url": u} for u in urls]
     return JSONResponse({"ok": True, "jobs": jobs})
 
@@ -1018,19 +1365,21 @@ async def api_audit(req: AuditRequest):
     url = (req.url or "").strip()
     if not url:
         return JSONResponse({"ok": False, "error": "请输入要诊断的网址"}, status_code=400)
-    audit_dir = BASE_DIR / "output" / "audit"
+    _log_op("官网诊断", "发起检测", url, "同步接口方式")
+    audit_dir = OUTPUT_DIR / "audit"
     # 传入LLM配置以启用AI语义检查
     llm_config = load_config().get("llm", {})
     result = await asyncio.to_thread(run_site_audit, url, audit_dir, 15, llm_config)
     if not result.get("ok"):
         return JSONResponse(result, status_code=422)
+    await _audit_bind_company(result)
     return JSONResponse(result)
 
 
 @app.get("/audit-result/{filename:path}")
 async def get_audit_result(filename: str):
     """提供官网诊断生成的 HTML / JSON 报告文件。"""
-    audit_dir = BASE_DIR / "output" / "audit"
+    audit_dir = OUTPUT_DIR / "audit"
     file_path = audit_dir / filename
     if not file_path.exists():
         return JSONResponse({"error": "file not found"}, status_code=404)
@@ -1054,7 +1403,7 @@ def _apply_priority_config_to_reports() -> int:
     from site_audit.report.html_report import save_html_report
     from site_audit.report.json_report import report_from_dict, save_json_report
 
-    audit_dir = BASE_DIR / "output" / "audit"
+    audit_dir = OUTPUT_DIR / "audit"
     overrides = priority_config.load_overrides()
     defaults = {it["id"]: it["default_priority"] for it in priority_config.item_catalog()}
     updated = 0
@@ -1149,7 +1498,7 @@ def _shorten_brand_name(full_name: str) -> str:
 @app.get("/api/audit/reports")
 async def list_audit_reports():
     """列出所有历史诊断报告。"""
-    audit_dir = BASE_DIR / "output" / "audit"
+    audit_dir = OUTPUT_DIR / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
     reports = []
     for f in audit_dir.glob("*.html"):
@@ -1180,7 +1529,7 @@ async def list_audit_reports():
                     # 永远按当前官方峰谷价现场计算（存档 cost_cny 仅留档），
                     # 价格修正后历史报告显示自动跟随对账
                     info["cost"] = estimate_cost_cny(
-                        tu, ts_hint=data.get("timestamp", ""))
+                        tu, ts_hint=data.get("timestamp", ""), search_price_per_call=_search_price())
                 # 提取品牌名：优先 auth-05 message（品牌[XXX]），其次 tech-14
                 import re
                 brand_name = ""
@@ -1205,6 +1554,10 @@ async def list_audit_reports():
                                 brand_name = m.group(1).strip()
                                 break
                 info["brand_name"] = brand_name
+                # 企业绑定状态：已绑定主体 / 待人工（候选列表），供列表「企业绑定」入口
+                info["company"] = data.get("company_full_name") or ""
+                if data.get("company_candidates"):
+                    info["company_candidates"] = data["company_candidates"]
             except Exception:
                 pass
         # 如果报告数据没提取到品牌名，从域名提取简称
@@ -1231,6 +1584,151 @@ async def list_audit_reports():
     # 按诊断时间排序（不是文件修改时间），最新的在前
     reports.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return JSONResponse(reports)
+
+
+@app.get("/api/provenance/list")
+async def list_provenance_reports():
+    """列出所有包含溯源信息的报告。"""
+    out_dir = OUTPUT_DIR
+    reports = []
+    for json_file in out_dir.glob("*.json"):
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                result = json.load(f)
+            mr_brief = result.get("mr_brief") or {}
+            pipeline_meta = mr_brief.get("_pipeline_meta") or {}
+            provenance = pipeline_meta.get("provenance") or {}
+            if provenance:
+                stem = json_file.stem
+                reports.append({
+                    "report": stem,
+                    "brand": result.get("brand", ""),
+                    "timestamp": result.get("timestamp", ""),
+                    "total_fields": len(provenance),
+                    "by_source": (pipeline_meta.get("provenance_summary") or {}).get("by_source", {}),
+                    "html_file": f"{stem}.html",
+                })
+        except Exception:
+            continue
+    reports.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return JSONResponse(reports)
+
+
+@app.get("/api/provenance/{report_stem:path}")
+async def get_provenance(report_stem: str):
+    """溯源审计接口：查询报告中各字段的来源和获取方法。
+
+    从已保存的 JSON 报告中读取 _pipeline_meta.provenance 信息，
+    返回字段级别的来源分布和详细溯源信息。
+
+    Args:
+        report_stem: 报告文件名（不含扩展名），如 "市场调研_苏奥传感_20260913_192330"
+
+    Returns:
+        {
+            "report": 报告名,
+            "brand": 品牌名,
+            "timestamp": 生成时间,
+            "summary": {
+                "total_fields": 总字段数,
+                "by_source": {来源: 数量},
+                "by_method": {方法: 数量},
+                "low_confidence_fields": [低置信度字段列表],
+                "unknown_source_fields": [来源未知字段列表],
+            },
+            "fields": {
+                "字段名": {
+                    "value": 字段值,
+                    "source": 来源,
+                    "method": 获取方法,
+                    "confidence": 置信度,
+                    "fetched_at": 获取时间,
+                    "detail": {方法细节},
+                }
+            }
+        }
+    """
+    import os
+    out_dir = OUTPUT_DIR
+    json_path = out_dir / f"{report_stem}.json"
+
+    if not json_path.exists():
+        # 尝试在 output 子目录中查找
+        for f in out_dir.glob(f"**/{report_stem}.json"):
+            json_path = f
+            break
+
+    if not json_path.exists():
+        return JSONResponse({"error": "报告不存在", "report_stem": report_stem}, status_code=404)
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            result = json.load(f)
+    except Exception as e:
+        return JSONResponse({"error": f"读取报告失败: {str(e)}"}, status_code=500)
+
+    # 从 mr_brief._pipeline_meta 中提取溯源信息
+    mr_brief = result.get("mr_brief") or {}
+    pipeline_meta = mr_brief.get("_pipeline_meta") or {}
+    provenance = pipeline_meta.get("provenance") or {}
+    provenance_summary = pipeline_meta.get("provenance_summary") or {}
+
+    # 获取字段值（从 mr_brief.info 中）
+    info = mr_brief.get("info") or {}
+
+    # 构建字段级别的详细溯源信息
+    fields_detail = {}
+    for field_name, prov_info in provenance.items():
+        if not isinstance(prov_info, dict):
+            continue
+        fields_detail[field_name] = {
+            "value": info.get(field_name, ""),
+            "source": prov_info.get("source", "unknown"),
+            "method": prov_info.get("method", "unknown"),
+            "confidence": prov_info.get("confidence", 0),
+            "fetched_at": prov_info.get("fetched_at", ""),
+            "detail": prov_info.get("detail", {}),
+        }
+
+    # 如果没有预计算的 summary，现场计算
+    if not provenance_summary:
+        by_source = {}
+        by_method = {}
+        low_conf = []
+        unknown_src = []
+        for field_name, prov_info in provenance.items():
+            if not isinstance(prov_info, dict):
+                continue
+            src = prov_info.get("source", "unknown")
+            mth = prov_info.get("method", "unknown")
+            conf = prov_info.get("confidence", 0)
+            by_source[src] = by_source.get(src, 0) + 1
+            by_method[mth] = by_method.get(mth, 0) + 1
+            if conf < 0.5:
+                low_conf.append(field_name)
+            if src == "unknown":
+                unknown_src.append(field_name)
+        provenance_summary = {
+            "total_fields": len(provenance),
+            "by_source": by_source,
+            "by_method": by_method,
+            "low_confidence_fields": low_conf,
+            "unknown_source_fields": unknown_src,
+        }
+
+    return JSONResponse({
+        "report": report_stem,
+        "brand": result.get("brand", ""),
+        "timestamp": result.get("timestamp", ""),
+        "method_id": result.get("method_id", ""),
+        "summary": provenance_summary,
+        "fields": fields_detail,
+        "pipeline_meta": {
+            "fetcher_status": pipeline_meta.get("fetcher_status", "unknown"),
+            "fulltext_evidence": pipeline_meta.get("fulltext_evidence", 0),
+            "evidence_count": pipeline_meta.get("evidence_count", 0),
+        },
+    })
 
 
 _MR_DECK_SPEC = [
@@ -1274,32 +1772,116 @@ def _deck_missing_report(deck) -> list[dict]:
     return out
 
 
+def _search_price() -> float:
+    try:
+        return float(load_config().get("llm", {}).get("search_price_per_call", 0) or 0)
+    except Exception:
+        return 0.0
+
+
+async def _proc_step(plog, step, label, fn):
+    """执行收尾环节一步并记录单步耗时（生成过程面板用）；fn 可为同步或协程。"""
+    t0 = time.time()
+    out = fn()
+    if asyncio.iscoroutine(out):
+        out = await out
+    plog.append({"step": step, "message": f"完成: {label}", "dur": round(time.time() - t0, 1)})
+    return out
+
+
+def _merge_usage(result: dict, llm):
+    """守卫链/管线独立客户端的 token 用量回传主统计（真实成本口径）。"""
+    u = getattr(llm, "token_usage", None)
+    if not u:
+        return
+    tu = result.setdefault("token_usage", {"prompt_tokens": 0, "completion_tokens": 0,
+                                           "total_tokens": 0, "prompt_cache_hit_tokens": 0,
+                                           "prompt_cache_miss_tokens": 0, "calls": 0,
+                                           "search_calls": 0, "failed_attempts": 0})
+    for k, v in u.items():
+        tu[k] = (tu.get(k) or 0) + (v or 0)
+
+
+async def ensure_mr_brief_valid(result: dict, config: dict, on_progress=None):
+    """画像字段合并：三层数据管线（在 agent.run 之前执行）的字段覆盖画像 info，
+    并写缓存（正常路径也入库）。管线本体见 profile_pipeline.build_profile。"""
+    fields = result.pop("_profile_fields", None)
+    if not isinstance(fields, dict):
+        return
+    b = result.get("mr_brief")
+    if not isinstance(b, dict):
+        b = result["mr_brief"] = {}
+    # 保存管线元数据（抓取器状态、全文证据数、溯源信息等），供报告页显示标识
+    b["_pipeline_meta"] = {
+        "fetcher_status": fields.get("_fetcher_status", "unknown"),
+        "fulltext_evidence": fields.get("_fulltext_evidence", 0),
+        "evidence_count": fields.get("_evidence_count", 0),
+        "provenance": fields.get("_provenance") or {},
+        "provenance_summary": fields.get("_provenance_summary") or {},
+    }
+    info = b.setdefault("info", {})
+    from profile_pipeline import _field_ok
+    def _val(item):
+        return item.get("value") if isinstance(item, dict) else item
+    for k, item in fields.items():
+        if k.startswith("_"):
+            continue
+        v = _val(item)
+        if _field_ok(k, v) and not info.get(k):
+            info[k] = v
+    seedn = {}
+    if isinstance(result.get("mr_org"), dict):
+        seedn = next((n for n in result["mr_org"].get("nodes", [])
+                      if n.get("id") == result["mr_org"].get("seed_key")), {})
+        for f in ("legal_person", "founder", "credit_code"):
+            _fi = fields.get(f)
+            v = _fi.get("value") if isinstance(_fi, dict) else _fi
+            if _field_ok(f, v):
+                seedn[f] = v
+                info.setdefault(f, v)
+    from company_cache import upsert_info as _up
+    _up(result.get("brand") or "", {**info, "legal_person": seedn.get("legal_person"),
+                                    "founder": seedn.get("founder")},
+        credit_code=seedn.get("credit_code") or info.get("credit_code"),
+        origin="客户市场调研")
+    logger.info("画像字段已合并入库（管线证据池口径）")
+
+
 async def ensure_org_graph(result: dict, config: dict):
-    """市场调研落盘前：组织架构实名图（LLM+内置联网搜索，种子标准化+BFS股权展开）。
-    种子层无果或异常时返回 None，回落画像自产组织数据，不阻塞报告。"""
+    """市场调研落盘前：组织架构实名图（工商API：详情+股东+分支机构，0次LLM）。
+    获取失败抛 OrgGraphError 终止任务——生成前已有企业名称API校验与画像层校验
+    两层前置，仍失败属真异常，不降级不静默。"""
     if result.get("method_id") != "customer_market_research" or result.get("mr_org"):
         return
-    from org_graph import build_org_graph
     brand = result.get("brand") or ""
     brief_info = ((result.get("mr_brief") or {}).get("info") or {}) if isinstance(result.get("mr_brief"), dict) else {}
     company = brief_info.get("full_name") or brand
     if not company:
         return
-    llm_cfg = config["llm"]
-    llm = LLMClient(base_url=llm_cfg["base_url"], api_key=llm_cfg["api_key"],
-                    model=llm_cfg["model"], temperature=llm_cfg.get("temperature", 0.7),
-                    max_tokens=llm_cfg.get("max_tokens", 16384), timeout=llm_cfg.get("timeout", 120),
-                    max_retries=llm_cfg.get("max_retries", 3),
-                    enable_search=True, enable_thinking=False,
-                    search_engine=["baidu"])
-    org = await build_org_graph(llm, company)
-    if org and org.get("tree"):
-        result["mr_org"] = org
-        _seedn = next((n for n in org["nodes"] if n["id"] == org["seed_key"]), {})
-        logger.info(f"组织架构实名图完成: {len(org['nodes'])}节点/{len(org['tree'])}控股边/{len(org['weak'])}参股, "
-                    f"法人={_seedn.get('legal_person')}")
-    else:
-        logger.info("组织架构实名检索无果，回落画像自产组织数据")
+    from org_graph import build_org_graph_from_api, OrgGraphError
+    try:
+        from business_api_client import get_business_api_client
+        api = get_business_api_client()
+        detail = await api.get_company_detail_by_name(company)
+        if not detail or not detail.get("id"):
+            raise OrgGraphError(
+                f"工商API未查到「{company}」的企业详情，组织架构无法生成。"
+                "请确认企业名称是否准确后重试。")
+        sh, br = await asyncio.gather(
+            api.get_shareholders(detail["id"], page_size=50),
+            api.get_branch_orgs(detail["id"], page_size=50))
+        org = build_org_graph_from_api(detail, sh, br)
+    except OrgGraphError:
+        raise
+    except Exception as e:
+        raise OrgGraphError(f"组织架构工商API调用失败：{e}。请稍后重试或检查API配置。") from e
+    if not (org and org.get("tree")):
+        raise OrgGraphError(
+            f"「{company}」在工商API中无股东与分支机构数据，组织架构无法生成。")
+    result["mr_org"] = org
+    _seedn = next((n for n in org["nodes"] if n["id"] == org["seed_key"]), {})
+    logger.info(f"组织架构实名图(API)完成: {len(org['nodes'])}节点/{len(org['tree'])}边, "
+                f"法人={_seedn.get('legal_person')}")
 
 
 async def ensure_deck_complete(result: dict, config: dict):
@@ -1328,8 +1910,8 @@ async def ensure_deck_complete(result: dict, config: dict):
     ctx = {k: result.get(k) for k in ("brand", "mr_profile", "mr_marketing",
                                       "mr_opportunity", "mr_plan", "mr_proposal", "mr_sales")}
     prompt = agent._render(
-        "你是销售情报分析员。简报八页已生成，但机检发现以下页缺块：\n{missing}\n\n"
-        "当前对应页现状(JSON)：\n{cur}\n\n"
+        "你是销售情报分析员。简报八页已生成，但机检发现以下页缺块：\n{{missing}}\n\n"
+        "当前对应页现状(JSON)：\n{{cur}}\n\n"
         "调研正文（唯一数据来源，禁止编造；无据内容在文本里写「待补：<怎么补>」）：\n"
         "【第一章 画像】{{mr_profile}}\n【第二三章 痛点与营销现状】{{mr_marketing}}\n"
         "【第四五章 竞品与机会】{{mr_opportunity}}\n【第六七章 方案与预算】{{mr_plan}}\n"
@@ -1348,19 +1930,38 @@ async def ensure_deck_complete(result: dict, config: dict):
         assert isinstance(patch, list)
     except Exception as e:
         logger.warning(f"简报补齐调用失败，保留原简报: {e}")
+        _merge_usage(result, llm)  # 失败前已发生的调用也要入主统计
         return
+    _backup = json.dumps(deck.get("slides"), ensure_ascii=False)
     for p in patch:
         i, blocks = p.get("i"), p.get("blocks")
         if isinstance(i, int) and isinstance(blocks, list) and 0 <= i < len(deck["slides"]) and blocks:
             deck["slides"][i]["blocks"] = blocks
     left = _deck_missing_report(deck)
+    if left:  # 复检不过：先重试一次，仍不过才回滚（避免越补越缺）
+        try:
+            patch2 = await agent._llm_call(prompt, expect_json=True)
+            for p in (patch2 if isinstance(patch2, list) else []):
+                i, blocks = p.get("i"), p.get("blocks")
+                if isinstance(i, int) and isinstance(blocks, list) and 0 <= i < len(deck["slides"]) and blocks:
+                    deck["slides"][i]["blocks"] = blocks
+            left = _deck_missing_report(deck)
+        except Exception:
+            pass
+        if left:
+            deck["slides"] = json.loads(_backup)
+            logger.warning(f"简报补齐两轮仍不过，已回滚原样: {left}")
+            result["mr_deck"] = deck
+            _merge_usage(result, llm)
+            return
     result["mr_deck"] = deck
-    logger.info(f"简报补齐完成，复检{'通过' if not left else f'仍有缺失(放弃): {left}'}")
+    _merge_usage(result, llm)
+    logger.info("简报补齐完成，复检通过")
 
 
 @app.delete("/api/audit/reports/{filename}")
 async def delete_audit_report(filename: str):
-    audit_dir = BASE_DIR / "output" / "audit"
+    audit_dir = OUTPUT_DIR / "audit"
     deleted = []
     # 删除 HTML
     html_path = audit_dir / filename
@@ -1375,7 +1976,155 @@ async def delete_audit_report(filename: str):
         deleted.append(json_path.name)
     if not deleted:
         return JSONResponse({"ok": False, "error": "文件不存在"}, status_code=404)
+    from company_cache import delete_audit_snapshot
+    delete_audit_snapshot(stem)  # 同步删对应检测快照行，防孤儿记录
+    _log_op("官网诊断", "删除诊断报告", Path(filename).stem, "、".join(deleted))
     return JSONResponse({"ok": True, "deleted": deleted})
+
+
+@app.delete("/api/audit/snapshots/{sid:path}")
+async def delete_audit_snapshot_api(sid: str):
+    """删除企业资料页的单条检测记录（只删库内结论行，不动报告文件）。"""
+    from company_cache import delete_audit_snapshot
+    if not delete_audit_snapshot(sid):
+        return JSONResponse({"ok": False, "error": "记录不存在"}, status_code=404)
+    _log_op("企业资料", "删除检测记录", sid, "")
+    return {"ok": True}
+
+
+async def _llm_resolve_company_name(name: str) -> str:
+    """LLM 联网解析企业工商注册全称（处理站上写法与注册名语序/括号不一致的情况）。
+    返回空串表示查不到。仅解析名字，不作为绑定依据——调用方仍须工商精准核验。"""
+    _lc = load_config().get("llm", {})
+    llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
+                    temperature=_lc.get("temperature", 0.7), max_tokens=_lc.get("max_tokens", 16384),
+                    timeout=_lc.get("timeout", 120), max_retries=_lc.get("max_retries", 3),
+                    enable_search=True, enable_thinking=False, search_engine=["baidu"])
+    prompt = (f"「{name}」疑似某企业的工商注册名称变体（地区词位置或括号写法与注册名不同）。\n"
+              "请联网查询该企业的准确工商注册全称（统一社会信用代码可作旁证）。\n"
+              '只返回 JSON：{"full_name": "注册全称"} 或 {"full_name": ""}（联网确认不了时）。不要返回其他内容。')
+    try:
+        r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
+        return str(r.get("full_name") or "").strip() if isinstance(r, dict) else ""
+    except Exception:
+        return ""
+
+
+async def _lookup_brand_name(full_name: str) -> str:
+    """查公司对外品牌名：档案 brands 有则直接用（免联网）；没有则联网问一次并回写档案。
+    查不到返回空串，绝不阻塞名称核查主流程。"""
+    from company_cache import get_info, upsert_info
+    info, _ = get_info(full_name)
+    brands = [str(b).strip() for b in ((info or {}).get("brands") or []) if str(b).strip()]
+    if brands:
+        return brands[0]
+    _lc = load_config().get("llm", {})
+    llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
+                    temperature=0.2, max_tokens=_lc.get("max_tokens", 16384), timeout=60,
+                    max_retries=1, enable_search=True, enable_thinking=False, search_engine=["baidu"])
+    prompt = (f"「{full_name}」是一家公司的工商注册全称。请联网查询这家公司对外使用的品牌名称"
+              "（商标/官网/产品上的叫法，不是公司注册名本身）。\n"
+              '只返回 JSON：{"brand": "品牌名"} 或 {"brand": ""}（联网确认不了时）。不要返回其他内容。')
+    try:
+        r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
+        b = str(r.get("brand") or "").strip() if isinstance(r, dict) else ""
+    except Exception:
+        return ""
+    if b and b != full_name:
+        try:
+            upsert_info(full_name, {"brands": [b]}, origin="名称核查·品牌识别")
+        except Exception:
+            pass  # 档案写失败不影响返回品牌名
+    return b
+
+
+@app.post("/api/audit/bind")
+async def audit_bind_company(req: AuditBindRequest):
+    """人工绑定诊断报告的企业主体（多候选/英文站场景的纠错入口）。
+    中文名仍走工商精准核验，核验通过才落绑定与档案；查无此名称返回明确报错，绝不落错。"""
+    company = (req.company or "").strip()
+    if not company or not req.filename or "/" in req.filename or ".." in req.filename:
+        return JSONResponse({"ok": False, "error": "参数无效"}, status_code=400)
+    # 域名里带点，不能用 Path.stem（会把 www.xx.com 在 .com 处截断）；只剥已知扩展名
+    name = req.filename
+    for ext in (".json", ".html"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+    json_path = OUTPUT_DIR / "audit" / f"{name}.json"
+    if not json_path.exists():
+        return JSONResponse({"ok": False, "error": "报告不存在"}, status_code=404)
+    from audit_company_bind import verify_cn, _name_key
+    from business_api_client import get_business_api_client, BusinessAPIClient
+    api = get_business_api_client()
+    verified, api_err = await verify_cn([company], api)
+    if not verified and api_err:
+        return JSONResponse({"ok": False, "error": f"工商接口异常：{api_err}"}, status_code=502)
+    if not verified:
+        # 三级兜底：LLM 联网解析注册全称，须与原写法归一后（剥行政区划、保字序）一致，再过工商精准核验
+        resolved = await _llm_resolve_company_name(company)
+        if resolved and _name_key(resolved) == _name_key(company):
+            verified, api_err = await verify_cn([resolved], api)
+            if not verified and api_err:
+                return JSONResponse({"ok": False, "error": f"工商接口异常：{api_err}"}, status_code=502)
+    if not verified:
+        return JSONResponse({"ok": False, "error": f"工商库查无「{company}」，请核对全称（含地区前缀）"}, status_code=422)
+    full = verified[0]["name"]
+    d = json.loads(json_path.read_text(encoding="utf-8"))
+    d["company_full_name"] = full
+    d["company_bind_via"] = "manual"
+    json_path.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    from company_cache import upsert_info
+    fields = BusinessAPIClient.extract_raw_fields(verified[0]["detail"])
+    fields.update(BusinessAPIClient.extract_layer1_fields(verified[0]["detail"]))
+    if fields:
+        upsert_info(full, fields, credit_code=fields.get("credit_code"), origin="官网诊断·人工绑定")
+    from audit_company_bind import merge_brand_aliases, _merge_domain
+    merge_brand_aliases(full, str(d.get("site_brand") or ""))  # 品牌名/别名增量并入档案
+    _merge_domain(full, str(d.get("url") or ""))               # 官网域名并入档案
+    _log_op("官网诊断", "人工绑定企业", full, json_path.name)
+    return {"ok": True, "company": full}
+
+
+class AliasUpdateRequest(PydanticModel):
+    id: str = Field(..., description="企业档案 id")
+
+
+@app.post("/api/company/alias-update")
+async def company_alias_update(req: AliasUpdateRequest):
+    """LLM 联网搜索品牌常见别名（曾用名/简称/英文名等），增量并入档案别名单（去重，不动品牌名）。"""
+    from company_cache import get_company_by_id, upsert_info
+    row = get_company_by_id(req.id)
+    if not row or not row[0]:
+        return JSONResponse({"ok": False, "error": "企业档案不存在"}, status_code=404)
+    info = row[0]
+    full_name = info.get("full_name") or req.id
+    seeds = [b for b in (info.get("brands") or []) if b] or [full_name]
+    known = [a for a in (info.get("aliases") or []) if a]
+    _lc = load_config().get("llm", {})
+    llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
+                    temperature=_lc.get("temperature", 0.7), max_tokens=_lc.get("max_tokens", 16384),
+                    timeout=_lc.get("timeout", 120), max_retries=_lc.get("max_retries", 3),
+                    enable_search=True, enable_thinking=False, search_engine=["baidu"])
+    prompt = (f"企业：{full_name}；品牌：{'、'.join(seeds)}；已知别名：{'、'.join(known) or '无'}。\n"
+              "请联网搜索该品牌的常见叫法，包括：品牌简称、中文/英文互译名、曾用名、大众口头称呼。"
+              "只返回 JSON 数组，元素为字符串，只列确认属于该品牌的别名（最多10个），"
+              "不要包含已知别名、公司全称、地区词。无法确认时返回 []。")
+    try:
+        result = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"LLM 调用失败：{type(e).__name__}"}, status_code=502)
+    if isinstance(result, dict):
+        result = result.get("aliases") or result.get("data") or []
+    found = [str(a).strip() for a in (result or []) if str(a).strip()] if isinstance(result, list) else []
+    known_l = {k.lower() for k in known} | {s.lower() for s in seeds} | {full_name.lower()}
+    added = []
+    for a in found:
+        if a.lower() not in known_l and a not in added:
+            added.append(a)
+    if added:
+        upsert_info(full_name, {"aliases": known + added}, origin="企业资料·更新别名")
+    _log_op("企业资料", "更新别名", full_name, f"新增 {len(added)} 个" + (f"：{'、'.join(added)}" if added else ""))
+    return {"ok": True, "added": added, "aliases": known + added}
 
 
 @app.get("/health")
@@ -1388,14 +2137,48 @@ async def analyze(req: AnalyzeRequest):
     config = load_config()
     agent = build_agent(config)
 
+    _plog = []  # 生成过程事件序列：随报告 JSON 落盘，供列表「生成过程」悬浮展示
+    _t_run0 = time.time()  # 全流程起点（含建档管线/LLM节点/收尾），落盘前回填真实总耗时
+
     def on_progress(step, msg, elapsed):
         logger.info(f"[{elapsed}s] {step}: {msg}")
+        _plog.append({"step": step, "message": msg, "elapsed": elapsed})
 
+    from profile_pipeline import build_profile, ProfileError
+    from company_cache import known_facts_text
+    _lc = config["llm"]
+    _pllm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"],
+                      model=_lc["model"], temperature=_lc.get("temperature", 0.7),
+                      max_tokens=_lc.get("max_tokens", 16384), timeout=_lc.get("timeout", 120),
+                      max_retries=_lc.get("max_retries", 3), enable_search=True,
+                      enable_thinking=False, search_engine=["baidu"])
+    try:
+        _pfields = await build_profile(_pllm, req.brand, on_progress=on_progress, brand_alias=req.brand_alias, force_refresh=req.force_refresh)
+    except ProfileError as pe:
+        raise HTTPException(status_code=422, detail=str(pe))
     result = await agent.run(req.brand, req.product, on_progress=on_progress,
-                             method_id=req.method)
-    await ensure_org_graph(result, config)
-    await ensure_deck_complete(result, config)
+                             method_id=req.method,
+                             known_facts=known_facts_text(req.brand))
+    result["_process_log"] = _plog
+    result["_profile_fields"] = _pfields
+    _merge_usage(result, _pllm)
+    await _proc_step(_plog, "画像合并", "企业画像字段三层管线合并入库",
+                     lambda: ensure_mr_brief_valid(result, config))
+    result["profile_evidence"] = _pfields
+    from org_graph import OrgGraphError
+    try:
+        await _proc_step(_plog, "组织图", "组织架构实名图（工商API：详情+股东+分支机构）",
+                         lambda: ensure_org_graph(result, config))
+    except OrgGraphError as oe:
+        raise HTTPException(status_code=422, detail=str(oe)) from oe
+    await _proc_step(_plog, "简报机检", "情报简报缺块机检与LLM补齐",
+                     lambda: ensure_deck_complete(result, config))
+    _rev = {"step": "渲染落盘", "message": "完成: 三页签报告渲染与HTML/JSON保存"}
+    _plog.append(_rev)  # 先入列，报告 JSON 落盘时带上本行；耗时在保存后回填到任务日志
+    result["total_elapsed"] = round(time.time() - _t_run0, 1)  # 真实全流程耗时（含管线与收尾）
+    _rt0 = time.time()
     files = save_output(result, config)
+    _rev["dur"] = round(time.time() - _rt0, 1)
 
     # Return summary (full data is in the saved files)
     return JSONResponse({
@@ -1632,6 +2415,203 @@ def _annotation_toolbar_html() -> str:
     )
 
 
+def inject_refresh_button(html: str, brand: str) -> str:
+    """在报告页面注入"更新企业信息"按钮，点击后强制刷新工商API数据并重新生成报告。"""
+    if "refresh-company-btn" in html:
+        return html
+
+    # 注入CSS
+    css = """
+    <style>
+    .refresh-float-btn {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 9999;
+        padding: 10px 18px;
+        background: linear-gradient(135deg, #3567ff, #6b8cff);
+        color: #fff;
+        border: none;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(53, 103, 255, 0.3);
+        transition: all 0.2s;
+    }
+    .refresh-float-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(53, 103, 255, 0.4);
+    }
+    .refresh-float-btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+    }
+    .refresh-toast {
+        position: fixed;
+        top: 70px;
+        right: 20px;
+        z-index: 10000;
+        padding: 12px 20px;
+        background: #fff;
+        border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        font-size: 13px;
+        color: #333;
+        display: none;
+        max-width: 300px;
+    }
+    .refresh-toast.show {
+        display: block;
+        animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    </style>
+    """
+
+    # 注入按钮和JS
+    button_html = f"""
+    <button class="refresh-float-btn" id="refreshCompanyBtn" onclick="refreshCompanyInfo()">
+        🔄 更新企业信息
+    </button>
+    <div class="refresh-toast" id="refreshToast"></div>
+    <script>
+    function refreshCompanyInfo() {{
+        _startRefresh();
+    }}
+    function _startRefresh() {{
+        const btn = document.getElementById('refreshCompanyBtn');
+        const toast = document.getElementById('refreshToast');
+        btn.disabled = true;
+        btn.textContent = '更新中...';
+        toast.textContent = '正在更新企业档案/组织图/基本信息，完成后自动刷新本页...';
+        toast.className = 'refresh-toast show';
+
+        // 轻量刷新：只重跑企业档案/组织图/基本信息合并，回写本报告文件
+        fetch('/api/refresh-company', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{
+                brand: {json.dumps(brand, ensure_ascii=False)},
+                source_file: decodeURIComponent(location.pathname.split('/').pop() || '')
+            }})
+        }})
+        .then(async r => {{ const j = await r.json(); if (!r.ok) throw new Error(j.detail || '创建任务失败'); return j; }})
+        .then(data => {{
+            if (data.task_id) {{
+                toast.textContent = '刷新任务已创建，正在更新…';
+                const poll = async () => {{
+                    try {{
+                        const t = await (await fetch('/api/tasks/' + data.task_id)).json();
+                        if (t.status === 'completed') {{
+                            toast.textContent = '✅ 更新完成，重新加载页面…';
+                            location.reload();
+                        }} else if (t.status === 'failed') {{
+                            toast.textContent = '❌ 刷新失败：' + (t.error || '未知错误');
+                            btn.disabled = false;
+                            btn.textContent = '🔄 更新企业信息';
+                            setTimeout(() => {{ toast.className = 'refresh-toast'; }}, 6000);
+                        }} else {{
+                            toast.textContent = '更新中：' + (t.current_step || '') + ' ' + (t.current_message || '');
+                            setTimeout(poll, 2000);
+                        }}
+                    }} catch (e) {{ setTimeout(poll, 4000); }}
+                }};
+                poll();
+            }} else {{
+                throw new Error('创建任务失败');
+            }}
+        }})
+        .catch(err => {{
+            toast.textContent = '创建任务失败: ' + err.message;
+            btn.disabled = false;
+            btn.textContent = '🔄 更新企业信息';
+            setTimeout(() => {{ toast.className = 'refresh-toast'; }}, 3000);
+        }});
+    }}
+    </script>
+    """
+
+    # 注入CSS
+    if "</head>" in html:
+        html = html.replace("</head>", f"{css}</head>")
+    else:
+        html = css + html
+
+    # 如果页面中已经有内嵌的按钮元素（企业画像页面的"一图看懂"行），只注入JS逻辑
+    if 'id="refreshCompanyBtn"' in html:
+        js_only = f"""
+        <div class="refresh-toast" id="refreshToast"></div>
+        <script>
+        function refreshCompanyInfo() {{
+            _startRefresh();
+        }}
+        function _startRefresh() {{
+            const btn = document.getElementById('refreshCompanyBtn');
+            const toast = document.getElementById('refreshToast');
+            btn.disabled = true;
+            btn.textContent = '更新中...';
+            toast.textContent = '正在更新企业档案/组织图/基本信息，完成后自动刷新本页...';
+            toast.className = 'refresh-toast show';
+
+            fetch('/api/refresh-company', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{
+                    brand: {json.dumps(brand, ensure_ascii=False)},
+                    source_file: decodeURIComponent(location.pathname.split('/').pop() || '')
+                }})
+            }})
+            .then(async r => {{ const j = await r.json(); if (!r.ok) throw new Error(j.detail || '创建任务失败'); return j; }})
+            .then(data => {{
+                toast.textContent = '刷新任务已创建，正在更新…';
+                const poll = async () => {{
+                    try {{
+                        const t = await (await fetch('/api/tasks/' + data.task_id)).json();
+                        if (t.status === 'completed') {{
+                            toast.textContent = '✅ 更新完成，重新加载页面…';
+                            location.reload();
+                        }} else if (t.status === 'failed') {{
+                            toast.textContent = '❌ 刷新失败：' + (t.error || '未知错误');
+                            btn.disabled = false;
+                            btn.textContent = '🔄 更新企业信息';
+                            setTimeout(() => {{ toast.className = 'refresh-toast'; }}, 6000);
+                        }} else {{
+                            toast.textContent = '更新中：' + (t.current_step || '') + ' ' + (t.current_message || '');
+                            setTimeout(poll, 2000);
+                        }}
+                    }} catch (e) {{ setTimeout(poll, 4000); }}
+                }};
+                poll();
+            }})
+            .catch(err => {{
+                toast.textContent = '更新失败: ' + err.message;
+                btn.disabled = false;
+                btn.textContent = '🔄 更新企业信息';
+                setTimeout(() => {{ toast.className = 'refresh-toast'; }}, 5000);
+            }});
+        }}
+        </script>
+        """
+        if "</body>" in html:
+            html = html.replace("</body>", f"{js_only}</body>")
+        else:
+            html = html + js_only
+    else:
+        # 旧报告：注入浮动按钮和JS
+        if "</body>" in html:
+            html = html.replace("</body>", f"{button_html}</body>")
+        else:
+            html = html + button_html
+
+    return html
+
+
 def inject_annotation_support(html: str) -> str:
     """Inject annotation CSS/JS into an existing report HTML if not already present."""
     if "annot-toolbar" in html:
@@ -1657,7 +2637,7 @@ def inject_annotation_support(html: str) -> str:
 @app.get("/result/{filename:path}")
 async def get_result(filename: str):
     """View/download a previously generated result file."""
-    out_dir = BASE_DIR / "output"
+    out_dir = OUTPUT_DIR
     if not filename or (out_dir / filename).is_dir():
         return JSONResponse({"error": "用法: /result/<报告文件名.html>"}, status_code=404)
     file_path = out_dir / filename
@@ -1666,6 +2646,17 @@ async def get_result(filename: str):
     if filename.endswith(".html"):
         content = file_path.read_text(encoding="utf-8")
         content = inject_annotation_support(content)
+        # 从文件名中提取企业名称，注入"更新企业信息"按钮（仅市场调研报告；
+        # 问句挖掘报告页不放此按钮——2026-09-19 需求）
+        try:
+            name_part = filename.replace(".html", "")
+            parts = name_part.split("_")
+            if len(parts) >= 3 and parts[0] == "市场调研":
+                # 去掉前缀（如"市场调研"）和时间戳，中间部分是企业名称
+                brand = "_".join(parts[1:-1])
+                content = inject_refresh_button(content, brand)
+        except Exception:
+            pass  # 注入失败不影响报告显示
         return HTMLResponse(content=content, headers={"Cache-Control": "no-store"})
     if filename.endswith(".json"):
         return FileResponse(file_path, media_type="application/json", filename=filename)
@@ -1712,15 +2703,64 @@ def _report_brand(html_path) -> str:
 
 
 def _report_method(html_path) -> str:
-    """报告所属方法：读同名 JSON 的 method_id（旧报告无此字段返回空，归入问句挖掘）。"""
+    """报告所属方法：读同名 JSON 的 method_id；无 JSON 或无该字段的文件
+    （预览/修复另存页、deck 副本等）按文件名前缀推断，避免市场调研文件
+    因"方法不明"被误归到问句挖掘页。"""
     json_path = html_path.with_suffix(".json")
     if json_path.exists():
         try:
             data = json.loads(json_path.read_text(encoding="utf-8"))
-            return (data.get("method_id") or "").strip()
+            mid = (data.get("method_id") or "").strip()
+            if mid:
+                return mid
         except (OSError, ValueError):
             pass
+    name = html_path.name
+    if name.startswith("市场调研_"):
+        return "customer_market_research"
+    if name.startswith("问句挖掘_"):
+        return "geo_query_mining"
     return ""
+
+
+# ── 操作日志：各页面客户资料的创建/更新/删除留痕（配置管理→操作日志 查询）──
+_METHOD_NAMES = {"customer_market_research": "客户市场调研", "geo_query_mining": "GEO搜索问句挖掘"}
+
+
+def _log_op(page: str, action: str, brand: str, detail: str = ""):
+    """客户资料写操作留痕。日志写失败不阻断业务（审计是辅助能力，不反向伤害主流程）。"""
+    try:
+        import sqlite3
+        db = DATA_DIR / "company_info.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db) as c:
+            c.execute("CREATE TABLE IF NOT EXISTS op_log("
+                      "id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, page TEXT, "
+                      "action TEXT, brand TEXT, detail TEXT)")
+            c.execute("INSERT INTO op_log(ts,page,action,brand,detail) VALUES(?,?,?,?,?)",
+                      (time.strftime("%Y-%m-%d %H:%M:%S"), page, action, brand, str(detail)[:300]))
+    except Exception:
+        pass
+
+
+@app.get("/api/oplog")
+async def op_log_list(limit: int = 300, page: str = ""):
+    """操作日志查询：时间倒序，可按页面过滤。"""
+    import sqlite3
+    rows = []
+    try:
+        db = DATA_DIR / "company_info.db"
+        n = max(1, min(limit, 1000))
+        with sqlite3.connect(db) as c:
+            if page:
+                rows = c.execute("SELECT ts,page,action,brand,detail FROM op_log "
+                                 "WHERE page=? ORDER BY id DESC LIMIT ?", (page, n)).fetchall()
+            else:
+                rows = c.execute("SELECT ts,page,action,brand,detail FROM op_log "
+                                 "ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+    except Exception:
+        rows = []
+    return {"ops": [{"ts": r[0], "page": r[1], "action": r[2], "brand": r[3], "detail": r[4]} for r in rows]}
 
 
 @app.delete("/api/reports/{filename}")
@@ -1728,9 +2768,11 @@ async def delete_report(filename: str):
     """删除指定的分析报告（HTML + 同名 JSON），供分析页历史列表使用。"""
     if not _safe_filename(filename):
         return JSONResponse({"ok": False, "error": "invalid filename"}, status_code=400)
-    out_dir = BASE_DIR / "output"
+    out_dir = OUTPUT_DIR
     deleted = []
     html_path = out_dir / filename
+    _del_brand = _report_brand(html_path) if html_path.suffix == ".html" else ""
+    _del_page = _METHOD_NAMES.get(_report_method(html_path)) or "分析"
     if html_path.exists() and html_path.suffix == ".html":
         html_path.unlink()
         deleted.append(html_path.name)
@@ -1740,56 +2782,335 @@ async def delete_report(filename: str):
         deleted.append(json_path.name)
     if not deleted:
         return JSONResponse({"ok": False, "error": "文件不存在"}, status_code=404)
+    _log_op(_del_page, "删除报告", _del_brand, "、".join(deleted))
     return JSONResponse({"ok": True, "deleted": deleted})
 
 
 @app.get("/api/brand/check")
 async def api_brand_check(name: str):
-    """企业/品牌名唯一性预检：联网检索同名实体，歧义时返回候选供用户纠正。
+    """企业/品牌名唯一性预检：工商API模糊搜索获取真实候选公司。
 
-    失败/超时一律按 unique 放行（不阻塞主流程）。"""
+    失败/超时返回 ok=False + error 给前端明确报错并阻止开始（2026-09-19 定版，
+    不再静默放行、不再回退 LLM 猜候选——工商库是权威数据源，查不到宁可不执行）。"""
     name = (name or "").strip()
     if not name:
         return {"ok": False, "unique": True}
-    cfg = load_config().get("llm", {})
-    payload = {
-        "model": cfg.get("model"),
-        "messages": [
-            {"role": "system", "content": '你是企业工商信息核查助手。判断给定企业/品牌名能否指向一家实际存在的公司。'
-             '联网检索：①是否存在名为此（或含此字号）的公司→exists；②同名/近名是否唯一→unique。'
-             '输出JSON：{"exists":true/false,"unique":true/false,"candidates":[{"name":"公司注册全名","note":"一句话区分：行业/地区/规模"}],"hint":"给用户的提示一句话"}。'
-             '注意：像口令、代词、通用词（如"你猜我是谁"、"测试"）显然不是企业名，exists=false；'
-             'exists=false 时 candidates 留空、hint 写"未检索到与该名称匹配的企业，请确认填写公司注册全称或常用品牌名"。候选最多5家，按知名程度排序。只输出JSON。'},
-            {"role": "user", "content": f"企业/品牌名：{name}"},
-        ],
-        "temperature": 0, "max_tokens": 900,
-        "response_format": {"type": "json_object"},
-        "enable_search": True,
-        "enable_thinking": False,
-    }
+
+    # ---- 优先用工商API模糊搜索（候选名称都是真实存在的公司）----
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(cfg["base_url"].rstrip("/") + "/chat/completions",
-                                     json=payload,
-                                     headers={"Authorization": f"Bearer {cfg['api_key']}",
-                                              "Content-Type": "application/json"})
-            resp.raise_for_status()
-            d = json.loads(resp.json()["choices"][0]["message"]["content"])
-        cands = [c for c in (d.get("candidates") or []) if isinstance(c, dict) and c.get("name")]
-        exists = bool(d.get("exists", True))
-        return {"ok": True, "unique": exists and (bool(d.get("unique", True)) or len(cands) < 2),
-                "candidates": cands if exists else [], "hint": d.get("hint", "")}
+        from business_api_client import get_business_api_client, BusinessAPIError
+        api_client = get_business_api_client()
+        result = await api_client.search_company(name, page_size=10)
+        records = result.get("records") or []
+        if records:
+            # 清理公司名称中的 <strong> 标签
+            import re
+            candidates = []
+            for r in records:  # 接口已付费查回的结果全部展示，不再截断浪费
+                cname = re.sub(r'<[^>]+>', '', r.get("companyName", ""))
+                if not cname:
+                    continue
+                # 构建一句话区分：行业/地区/规模
+                parts = []
+                if r.get("province") or r.get("city"):
+                    parts.append(f"{r.get('province','')}{r.get('city','')}")
+                if r.get("registeredCapital"):
+                    parts.append(f"注册资本{r['registeredCapital']}")
+                if r.get("juridicalPerson"):
+                    parts.append(f"法人{r['juridicalPerson']}")
+                if r.get("companyStatus"):
+                    parts.append(r["companyStatus"])
+                note = "，".join(parts) if parts else "工商登记企业"
+                candidates.append({"name": cname, "note": note})
+            if candidates:
+                # 如果只有1家候选，认为是唯一的
+                is_unique = len(candidates) == 1
+                resp = {
+                    "ok": True,
+                    "unique": is_unique,
+                    "exists": True,
+                    "candidates": candidates,
+                    "hint": "" if is_unique else f"检索到{len(candidates)}家名称相近的企业，请确认是哪一家",
+                    "source": "business_api",
+                }
+                if is_unique:
+                    # 唯一匹配也不能放任客户偷懒输的简称：给出注册全称与品牌名，
+                    # 前端据此弹确认换正名（2026-09-19 需求：报告锚定用正名不用简称）
+                    resp["resolved_full"] = candidates[0]["name"]
+                    resp["brand"] = await _lookup_brand_name(resp["resolved_full"])
+                return resp
+        # 工商API模糊搜索返回空结果：直接返回 exists=false，不回退到LLM
+        # （工商API是权威数据源，找不到说明公司名称可能不准确）
+        logger.info(f"工商API名称核查：未找到 '{name}' 的匹配企业")
+        return {
+            "ok": True,
+            "unique": False,
+            "exists": False,
+            "candidates": [],
+            "hint": "未在工商数据库中检索到该企业，请确认是否使用了工商注册全称，或企业是否已注销/更名",
+            "source": "business_api",
+        }
+    except BusinessAPIError as e:
+        logger.warning(f"工商API名称核查失败: {e}")
+        return {"ok": False, "error": f"工商接口调用失败：{e}"}
+    except ImportError as e:
+        logger.warning(f"工商API client不可用: {e}")
+        return {"ok": False, "error": "工商接口客户端不可用（组件加载失败）"}
     except Exception as e:
-        logger.warning("名称核查失败（放行）: %s", e)
-        return {"ok": False, "unique": True}
+        logger.warning(f"工商API名称核查异常: {type(e).__name__}: {e}")
+        return {"ok": False, "error": f"工商接口异常：{type(e).__name__}: {e}"}
+
+
+# ── 报告列表「生成过程」悬浮视图 ─────────────────────
+# 数据来源全部为已落盘字段：profile_evidence._timing（管线各节点耗时）、
+# _provenance（字段级来源/方法/缓存命中）；skill 节点事件优先读报告 JSON 的
+# _process_log（新报告落盘），旧报告回退同名任务的 progress_log。
+_PROC_SOURCE_NAME = {
+    "business_api": "工商API",
+    "baike": "百度百科抓取",
+    "web_fetch": "网页全文抓取",
+    "search_engine": "联网检索摘要",
+    "inferred": "LLM推理",
+    "pretrained": "模型预训练",
+}
+
+def _fmt_dur(s):
+    if s is None or s < 0:
+        return ""
+    s = float(s)
+    if s < 1:
+        return "不足1秒"
+    if s < 60:
+        return f"{s:.0f}秒"
+    return f"{int(s // 60)}分{int(s % 60)}秒"
+
+def _build_process_view(data: dict, task_log=None, task_wall=None):
+    """组装「生成过程」悬浮面板数据：节点→步骤行（步骤｜方法｜数据｜耗时）。"""
+    pe = data.get("profile_evidence") or {}
+    pe = pe if isinstance(pe, dict) else {}
+    timing = pe.get("_timing") or {}
+    prov = pe.get("_provenance") or {}
+    log = data.get("_process_log") or task_log or []
+    if not timing and not log:
+        return None
+    nodes = []
+
+    # ── 节点1 · 企业信息获取（三层数据管线）──
+    api_cached = {(v.get("detail") or {}).get("source")
+                  for v in prov.values() if isinstance(v, dict) and v.get("source") == "business_api"}
+    api_data = {"local_cache": "历史缓存", "api": "实时数据"}.get(
+        next(iter(api_cached)) if api_cached else "", "实时数据")
+    if len(api_cached) > 1:
+        api_data = "实时+缓存"
+    pipe_rows = [
+        ("企业基础信息获取", "工商API", api_data, "工商API调用"),
+        ("百度百科摘要抓取", "网页抓取 + LLM抽取", "实时数据", "百度百科预抓取"),
+        ("第三方企业信息站兜底", "网页全文抓取", "实时数据", "第三方企业信息站兜底"),
+        ("拓展字段检索与整合（行业地位/文化/竞对等）", "网页全文抓取 + 联网检索 + LLM推理", "实时数据", "LAYER2字段搜索和整合"),
+    ]
+    n1_rows = [{"step": s, "method": m, "data": d, "dur": _fmt_dur(timing.get(tk) and max(0, int(timing[tk])))}
+               for s, m, d, tk in pipe_rows if tk in timing]
+    summ = pe.get("_provenance_summary") or {}
+    by_src = summ.get("by_source") or {
+        k: sum(1 for v in prov.values() if isinstance(v, dict) and v.get("source") == k)
+        for k in {v.get("source") for v in prov.values() if isinstance(v, dict)}}
+    dist = " · ".join(f"{_PROC_SOURCE_NAME.get(k, k)}×{c}" for k, c in by_src.items() if c)
+    if dist:
+        n1_rows.append({"step": f"字段来源分布（共{len(prov)}项）", "method": dist, "data": "", "dur": ""})
+    if timing.get("总耗时") is not None:
+        n1_rows.append({"step": "小计", "method": "", "data": "", "dur": _fmt_dur(timing["总耗时"])})
+    if n1_rows:
+        nodes.append({"title": "节点1 · 企业信息获取（三层数据管线）", "rows": n1_rows})
+
+    # ── 节点2 · 报告内容生成（三页签）与收尾：按事件序列分组，耗时=完成-开始 或显式 dur ──
+    _PAGE = {"mr_profile": "完整调研报告", "mr_marketing": "完整调研报告", "mr_opportunity": "完整调研报告",
+             "mr_plan": "完整调研报告", "mr_proposal": "完整调研报告", "mr_sales": "完整调研报告",
+             "mr_deck": "情报简报", "简报机检": "情报简报", "mr_brief": "企业画像",
+             "画像合并": "企业画像", "组织图": "企业画像", "画像简报": "企业画像"}
+    _TAIL_METHOD = {
+        "画像合并": ("Python规则计算（管线字段合并+缓存入库）", "实时数据"),
+        "简报机检": ("规则机检 + LLM补齐（仅有缺失时）", "调研正文数据"),
+        "渲染落盘": ("Python规则计算（三页签模板渲染）", ""),
+    }
+    groups, order = {}, []
+    for e in log:
+        if not isinstance(e, dict):
+            continue
+        sid = str(e.get("step") or "")
+        if sid in ("企业档案", "完成", ""):  # 管线节点已有专属耗时；「完成」是收尾事件
+            continue
+        groups.setdefault(sid, [])
+        if sid not in order:
+            order.append(sid)
+        groups[sid].append(e)
+    n2_rows = []
+    _n2_secs = {}  # sid→整秒显示值（渲染落盘除外，它承接差额）
+    for sid in order:
+        es = groups[sid]
+        done = next((x for x in reversed(es) if str(x.get("message", "")).startswith("完成")), None)
+        start = next((x for x in es if str(x.get("message", "")).startswith("开始")), None)
+        name = sid
+        if done is not None:
+            import re as _re2
+            name = _re2.sub(r"^完成[:：]\s*", "", str(done["message"])).strip() or sid
+        dur = next((x["dur"] for x in es if isinstance(x.get("dur"), (int, float))), None)
+        if dur is None and done is not None and start is not None:
+            dur = (done.get("elapsed") or 0) - (start.get("elapsed") or 0)
+        mth, dat = "LLM推理 + 联网检索(百度)", "实时数据"
+        if sid in _TAIL_METHOD:
+            mth, dat = _TAIL_METHOD[sid]
+        elif "组织" in sid:
+            mth = "工商API（详情+股东+分支机构）"
+        elif sid == "画像简报":
+            mth = "LLM推理 + 联网检索 + 工商API合并"
+        if sid in _PAGE:
+            name = f"{name}（{_PAGE[sid]}页）"
+        if sid != "渲染落盘" and isinstance(dur, (int, float)):
+            iv = max(0, int(dur))
+            _n2_secs[sid] = iv
+            dur = iv
+        n2_rows.append({"step": name, "method": mth, "data": dat, "dur": _fmt_dur(dur), "_s": sid})
+
+    # ── 对账：面板所有计时行（节点1小计 + 节点2各行）相加 ≡ 列表耗时（同为整秒口径）──
+    # 全程 = max(存值, 任务墙钟, 管线+各步之和)；旧报告存值只含LLM段偏小，不单独采信
+    comp = (timing.get("总耗时") or 0) + sum(_n2_secs.values())
+    total = int(max(float(data.get("total_elapsed") or 0), task_wall or 0, comp))
+    pipe_disp = max(0, int(timing.get("总耗时") or 0))
+    for r in n1_rows:
+        if r["step"] == "小计":
+            r["dur"] = _fmt_dur(pipe_disp)  # 小计显示整数值，未计入四行的取整余量进差额行
+    rest = max(0, total - pipe_disp - sum(_n2_secs.values()))
+    rev_row = next((r for r in n2_rows if r["_s"] == "渲染落盘"), None)
+    if rev_row is not None:
+        rev_row["dur"] = _fmt_dur(rest)  # 渲染落盘实测本就不足1秒，显示值=全程-已计时
+    elif rest > 0:
+        n2_rows.append({"step": "其他（步骤间隔/排队，未单独计时）", "method": "", "data": "", "dur": _fmt_dur(rest), "_s": ""})
+    for r in n2_rows:
+        r.pop("_s", None)
+    if n2_rows:
+        _t2 = ("步骤流水线 · 各步执行与渲染收尾"
+               if data.get("method_id") == "geo_query_mining"
+               else "节点2 · 报告内容生成（三页签）与收尾")
+        nodes.append({"title": _t2, "rows": n2_rows})
+    return {"nodes": nodes, "total": _fmt_dur(total)}
+
+
+def _task_log_index():
+    """报告文件名 → 任务记录索引（旧报告无 _process_log 时回退进度日志；
+    另带任务真实墙钟耗时，供修正偏小的存留 total_elapsed）。"""
+    idx = {}
+    try:
+        for t in _get_task_mgr().list_tasks(200):
+            html = ((t.result or {}).get("files") or {}).get("html") if isinstance(t.result, dict) else None
+            if html:
+                wall = (t.completed_at - t.created_at) if t.completed_at else None
+                idx[html] = {"log": t.progress_log, "wall": wall}
+    except Exception:
+        pass
+    return idx
+
+
+# ⚠️ 维护提醒（2026-09-16 与用户约定）：下次更新本统计区块前先提醒用户确认——
+# 用户意向是把统计范围改为「企业信息缓存库中经市场调研建档的全部客户」都计入
+# （删历史报告不影响统计范围与结果），因当时不确定缓存是否存有可用字段而暂缓，
+# 保持现状（按当前页面未删除报告去重统计）。经查缓存库已有上市状态/员工规模字段可支撑该切换。
+@app.get("/api/nature/stats")
+async def nature_stats(source: str = "research"):
+    """企业性质占比，按页面取数互不混源：
+    - research（默认）：当前未删除的市场调研报告，每客户取最新一份去重；字段=企业信息缓存库优先、报告画像兜底。
+    - mining：现存问句挖掘报告页面文件，按客户去重；字段=企业信息缓存库（与列表同口径，删报告即出统计）。
+    - audit：官网诊断报告，按站点域名去重取最新一次；诊断对象是网址，档案库无域名绑定，
+      只能用报告里的站点品牌名试匹配缓存，匹配不上（常态）归未标注。
+    分档：上市企业（上市状态含"上市"且非"未上市"）；其余按员工规模；无数据归未标注。"""
+    # 页面注入的是方法ID（geo_query_mining/customer_market_research），映射到统计源；
+    # 否则方法ID会落未知源兜底成调研数据（挖掘页显示5家的根因）
+    source = {"geo_query_mining": "mining", "customer_market_research": "research"}.get(source, source)
+    from urllib.parse import urlparse
+    from company_cache import get_info as _cache_get, derive_nature
+    out_dir = OUTPUT_DIR
+
+    def _bucket(info: dict) -> str:
+        # 企业性质唯一口径：档案存储结论优先，查无档案才现算（derive_nature 单一实现）
+        return str(info.get("nature") or "") or derive_nature(info)
+
+    subjects = {}  # key(客户/域名) -> 分类字段dict
+    if source == "audit":
+        latest = {}  # 域名 -> [ts, 绑定企业]；绑定是站点级身份，任一报告绑定即算数（最新优先）
+        for f in out_dir.glob("audit/*.json"):
+            if not re.search(r"_\d{8}_\d{6}\.json$", f.name):
+                continue
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            u = str(d.get("url") or "")
+            host = (urlparse(u if "//" in u else "http://" + u).netloc or u).lower()
+            if not host:
+                continue
+            ts = f.name[-19:-5]
+            comp = str(d.get("company_full_name") or "")
+            row = latest.setdefault(host, ["", ""])
+            if comp and not row[1]:
+                row[1] = comp  # 最早出现的绑定保底
+            if ts > row[0]:
+                row[0] = ts
+                if comp:
+                    row[1] = comp  # 更新报告上的绑定优先
+        for host, (_, comp) in latest.items():
+            # 只认经工商核验的企业绑定；未绑定（含英文名/多候选待人工）一律未标注
+            info, _ = _cache_get(comp) if comp else (None, "")
+            subjects[host] = info or {}
+    elif source == "mining":
+        # 与市场调研/列表同口径：只认现存问句挖掘报告页面文件（删报告即出统计），
+        # 不并任务记录来源（旧设计：任务记录独立于报告存活，删了报告图里还在）
+        brands = set()
+        for f in out_dir.glob("问句挖掘_*.html"):
+            if not re.search(r"_\d{8}_\d{6}\.html$", f.name):
+                continue
+            brands.add(_report_brand(f))
+        for b in brands:
+            info, _ = _cache_get(b)
+            key = ((info or {}).get("full_name") or b)  # 归一身份去重：简称/全称同档只计一次
+            subjects.setdefault(key, info or {})
+    else:  # research
+        latest = {}
+        for f in out_dir.glob("市场调研_*.html"):
+            if not re.search(r"_\d{8}_\d{6}\.html$", f.name):
+                continue
+            if _report_method(f) != "customer_market_research":
+                continue
+            brand = _report_brand(f)
+            ts = f.name[-19:-5]
+            if brand in latest and ts <= latest[brand][0]:
+                continue
+            info = {}
+            try:
+                d = json.loads(f.with_suffix(".json").read_text(encoding="utf-8"))
+                info = (d.get("mr_brief") or {}).get("info") or {}
+            except (OSError, ValueError):
+                pass
+            cached, _ = _cache_get(brand)
+            info = {**info, **{k: v for k, v in (cached or {}).items() if v}}
+            key = ((cached or {}).get("full_name") or brand)  # 归一身份去重（同档案多写法只计一次）
+            if key not in latest or ts > latest[key][0]:
+                latest[key] = (ts, info)
+        subjects = {b: info for b, (_, info) in latest.items()}
+
+    buckets = {k: 0 for k in ("上市企业", "国有企业", "港澳台投资企业", "外资企业", "集团企业",
+                              "大型企业", "中型企业", "小型企业", "微型企业", "未标注")}
+    for info in subjects.values():
+        buckets[_bucket(info)] += 1
+    return {"total": sum(buckets.values()),
+            "items": [{"name": k, "value": v} for k, v in buckets.items() if v]}
 
 
 @app.get("/reports")
 async def list_reports():
     """List all generated reports."""
-    out_dir = BASE_DIR / "output"
+    out_dir = OUTPUT_DIR
     if not out_dir.exists():
         return JSONResponse({"reports": []})
+    _tlogs = _task_log_index()  # 旧报告无 _process_log 时回退任务进度日志
     reports = []
     for f in out_dir.iterdir():
         if f.suffix == ".html":
@@ -1816,14 +3137,24 @@ async def list_reports():
                         m2 = _r.search(r"_(\d{8})_(\d{6})$", f.stem)
                         if m2:
                             item["created"] = f"{m2.group(1)[:4]}-{m2.group(1)[4:6]}-{m2.group(1)[6:]} {m2.group(2)[:2]}:{m2.group(2)[2:4]}:{m2.group(2)[4:]}"
-                    if _data.get("total_elapsed"):
-                        te = int(round(float(_data["total_elapsed"])))
-                        item["elapsed"] = f"{te // 60}分{te % 60}秒"
+                    _tinfo = _tlogs.get(f.name) or {}
+                    _wall = _tinfo.get("wall")
+                    if _data.get("total_elapsed") or _wall:
+                        # 旧报告存留值只含 LLM 节点段偏小 → 有任务墙钟则取较大值；
+                        # 与面板同行口径 _fmt_dur（1位小数），行相加与列表显示精确一致
+                        _te = max(float(_data.get("total_elapsed") or 0), _wall or 0)
+                        item["elapsed"] = _fmt_dur(_te)
                     tu = _data.get("token_usage") or {}
                     if tu.get("total_tokens"):
                         item["tokens"] = tu.get("total_tokens", 0)
                         item["token_calls"] = tu.get("calls", 0)
-                        item["cost"] = estimate_cost_cny(tu, ts_hint=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)))
+                        item["search_calls"] = tu.get("search_calls", 0)
+                        item["failed_attempts"] = tu.get("failed_attempts", 0)
+                        item["cost"] = estimate_cost_cny(tu, ts_hint=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
+                                                         search_price_per_call=_search_price())
+                    _pv = _build_process_view(_data, _tinfo.get("log"), _wall)
+                    if _pv:
+                        item["process"] = _pv
                 except (OSError, ValueError):
                     pass
             reports.append(item)
@@ -1843,7 +3174,7 @@ class AnnotationSave(PydanticModel):
 @app.get("/api/annotations/all")
 async def get_all_annotations():
     """Aggregate all issue annotations across all reports."""
-    out_dir = BASE_DIR / "output"
+    out_dir = OUTPUT_DIR
     if not out_dir.exists():
         return {"issues": [], "total": 0}
     issues = []
@@ -1877,7 +3208,7 @@ async def get_annotations(report_stem: str):
     """Load annotations for a report."""
     if ".." in report_stem or "/" in report_stem:
         return JSONResponse({"error": "invalid report name"}, status_code=400)
-    p = BASE_DIR / "output" / f"{report_stem}_annotations.json"
+    p = OUTPUT_DIR / f"{report_stem}_annotations.json"
     if not p.exists():
         return {"annotations": {}}
     try:
@@ -1892,7 +3223,7 @@ async def save_annotations(report_stem: str, body: AnnotationSave):
     """Save annotations for a report."""
     if ".." in report_stem or "/" in report_stem:
         return JSONResponse({"error": "invalid report name"}, status_code=400)
-    out_dir = BASE_DIR / "output"
+    out_dir = OUTPUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     p = out_dir / f"{report_stem}_annotations.json"
     p.write_text(json.dumps(body.annotations, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2189,27 +3520,478 @@ async def clear_chat_session(session_id: str):
     return {"status": "ok"}
 
 
+# ── 异步任务管理（服务端后台执行，客户端关闭不受影响）──────────────────
+
+from task_manager import get_task_manager, Task
+
+_task_mgr = None
+
+def _get_task_mgr():
+    global _task_mgr
+    if _task_mgr is None:
+        _task_mgr = get_task_manager(persist_dir=str(TASKS_DIR))
+    return _task_mgr
+
+
+async def _run_analysis_task(task: Task):
+    """任务入口按方法分流到各自独立的执行链——分析功能模块之间不混用流程。
+    新增分析方法时：注册一个自己的 _run_xxx_task，在此挂一行分发，别复用别人的环节。"""
+    method = task.method or "customer_market_research"
+    if method == "geo_query_mining":
+        return await _run_mining_task(task)
+    return await _run_research_task(task)
+
+
+def _count_stage_clusters(sd) -> int:
+    """单阶段意图簇计数，三形态兼容（与 _html_step5 同口径）：
+    簇数组 / 单簇对象{cluster_name,...} / {stage,clusters}。模型输出形态有波动。"""
+    if isinstance(sd, list):
+        return len(sd)
+    if isinstance(sd, dict):
+        if "cluster_name" in sd:
+            return 1
+        return len(sd.get("clusters", []))
+    return 0
+
+
+async def _run_mining_task(task: Task):
+    """GEO搜索问句挖掘独立链：档案已知事实注入 + skills 8步流水线 + 挖掘报告渲染。
+    不做工商建档校验、不出画像/组织图/简报（那些是客户市场调研的环节）。
+    联网检索跟随配置开关（2026-09-19 起不再强制关闭：核心产品清单需真实公开信息，
+    强制关网导致第一步凭公司名编造产品、全链失真；页面"仅联网/联网+思考"提示也以此为准）。
+    单次调用超时 180s（原全局 600s×3 重试空烧是任务劣化到 30+ 分钟主因之一；调研链仍保持 600s 不动）。"""
+    config = load_config()
+    config = {**config, "llm": {**config["llm"], "timeout": 180}}
+    agent = build_agent(config, thinking=None if task.thinking is None else task.thinking == "1")
+    brand = task.brand
+    _plog = []
+    _t_run0 = time.time()
+
+    def on_progress(step, msg, elapsed):
+        task.add_progress(step, msg, elapsed)
+        _plog.append({"step": step, "message": msg, "elapsed": elapsed})
+
+    from company_cache import known_facts_text, add_brands_alias
+    if task.brand_alias and task.brand_alias != brand:
+        add_brands_alias(brand, task.brand_alias, origin="GEO搜索问句挖掘")  # 弹窗确认换全称后短名不丢：入品牌+别名
+    result = await agent.run(brand, task.product, on_progress=on_progress,
+                             method_id="geo_query_mining",
+                             known_facts=known_facts_text(brand))
+    result["brand_alias"] = task.brand_alias or ""
+    result["_process_log"] = _plog
+    result["total_elapsed"] = round(time.time() - _t_run0, 1)
+    files = save_output(result, config)
+    task.set_result({
+        "brand": brand,
+        "product": task.product,
+        "elapsed": result.get("total_elapsed", 0),
+        "files": {fmt: Path(path).name for fmt, path in files.items()},
+        "product_count": len(result.get("step1_products", [])),
+        "persona_count": len(result.get("step2_personas", [])),
+        "stage_count": len(result.get("step3_journey", [])),
+        "total_queries": sum(len(Agent.extract_all_queries(sd))
+                             for sd in result.get("step4_topics", {}).values()),
+        "cluster_count": sum(_count_stage_clusters(sd)
+                             for sd in result.get("step5_clusters", {}).values()),
+        "self_check": result.get("self_check", []),
+    })
+
+
+async def _run_research_task(task: Task):
+    """客户市场调研独立链：建档校验 → skills 调研 → 画像合并 → 组织图 → 简报机检 → 三页签渲染。"""
+    config = load_config()
+    agent = build_agent(config, thinking=None if task.thinking is None else task.thinking == "1")
+    brand = task.brand
+    product = task.product
+    method = task.method or "customer_market_research"
+    brand_alias = task.brand_alias
+
+    _plog = []  # 生成过程事件序列：随报告 JSON 落盘，供列表「生成过程」悬浮展示
+    _t_run0 = time.time()  # 全流程起点（含建档管线/LLM节点/收尾），落盘前回填真实总耗时
+
+    def on_progress(step, msg, elapsed):
+        task.add_progress(step, msg, elapsed)
+        _plog.append({"step": step, "message": msg, "elapsed": elapsed})
+
+    from profile_pipeline import build_profile, ProfileError
+    from company_cache import known_facts_text, add_brands_alias
+    if brand_alias and brand_alias != brand:
+        add_brands_alias(brand, brand_alias, origin="客户市场调研")  # 弹窗确认换全称后短名不丢：入品牌+别名
+    _lc = config["llm"]
+    _pllm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"],
+                      model=_lc["model"], temperature=_lc.get("temperature", 0.7),
+                      max_tokens=_lc.get("max_tokens", 16384), timeout=_lc.get("timeout", 120),
+                      max_retries=_lc.get("max_retries", 3), enable_search=True,
+                      enable_thinking=False, search_engine=["baidu"])
+    try:
+        force_refresh = task.extra.get("force_refresh", False)
+        _pfields = await build_profile(_pllm, brand, on_progress=on_progress, brand_alias=brand_alias, force_refresh=force_refresh)
+    except ProfileError as pe:
+        task.set_error(str(pe))
+        return
+    result = await agent.run(brand, product, on_progress=on_progress,
+                             method_id=method,
+                             known_facts=known_facts_text(brand))
+    result["_profile_fields"] = _pfields
+    result["_process_log"] = _plog
+    _merge_usage(result, _pllm)
+    result["profile_evidence"] = _pfields
+    await _proc_step(_plog, "画像合并", "企业画像字段三层管线合并入库",
+                     lambda: ensure_mr_brief_valid(result, config))
+    from org_graph import OrgGraphError
+    try:
+        await _proc_step(_plog, "组织图", "组织架构实名图（工商API：详情+股东+分支机构）",
+                         lambda: ensure_org_graph(result, config))
+    except OrgGraphError as oe:
+        task.set_error(str(oe))
+        return
+    await _proc_step(_plog, "简报机检", "情报简报缺块机检与LLM补齐",
+                     lambda: ensure_deck_complete(result, config))
+    _rev = {"step": "渲染落盘", "message": "完成: 三页签报告渲染与HTML/JSON保存"}
+    _plog.append(_rev)  # 先入列再落盘，报告 JSON 里带上本行；耗时保存后回填
+    result["total_elapsed"] = round(time.time() - _t_run0, 1)  # 真实全流程耗时（含管线与收尾）
+    _rt0 = time.time()
+    files = save_output(result, config)
+    _rev["dur"] = round(time.time() - _rt0, 1)
+    # Extract just filenames for URLs
+    file_urls = {}
+    for fmt, path in files.items():
+        file_urls[fmt] = Path(path).name
+    summary = {
+        "brand": brand,
+        "product": product,
+        "elapsed": result.get("total_elapsed", 0),
+        "files": file_urls,
+        "product_count": len(result.get("step1_products", [])),
+        "persona_count": len(result.get("step2_personas", [])),
+        "stage_count": len(result.get("step3_journey", [])),
+        "total_queries": sum(
+            len(Agent.extract_all_queries(sd))
+            for sd in result.get("step4_topics", {}).values()
+        ),
+        "cluster_count": sum(
+            len(sd.get("clusters", []))
+            for sd in result.get("step5_clusters", {}).values()
+        ),
+        "self_check": result.get("self_check", []),
+    }
+    task.set_result(summary)
+
+
+class CreateTaskRequest(PydanticModel):
+    brand: str
+    product: Optional[str] = None
+    method: Optional[str] = None
+    brand_alias: Optional[str] = None
+    thinking: Optional[str] = None
+    force_refresh: bool = False
+
+
+async def _run_refresh_task(task):
+    """轻量刷新任务：企业档案与组织图全部工商API直连（不走建档管线，无百科/
+    第三方站/搜索/补查兜底）+ 画像基本信息代码合并 + 组织图，
+    然后重渲染 HTML 回写原报告文件。不重跑其余调研章节。"""
+    import time as _time
+    t0 = _time.time()
+
+    def on_progress(step, msg, elapsed=None):
+        task.add_progress(step, msg, _time.time() - t0)
+
+    out_dir = OUTPUT_DIR
+    src = str(task.extra.get("source_file") or "")
+    html_path = (out_dir / src) if src and (out_dir / src).exists() else None
+    jf = html_path.with_suffix(".json") if html_path else None
+    if jf is None or not jf.exists():
+        # 数据文件与页面文件必须成对；缺失时报错，绝不跨文件回写别的报告
+        task.set_error(f"报告缺少配套数据文件（{src or task.brand}），无法刷新")
+        return
+    brand = task.brand or ""
+    d = json.loads(jf.read_text(encoding="utf-8"))
+    brief = d.get("mr_brief") if isinstance(d.get("mr_brief"), dict) else {}
+    company = (brief.get("info") or {}).get("full_name") or brand
+
+    # 1) 工商API直连刷新（不走建档管线：无百科/第三方站/搜索/补查兜底）
+    from business_api_client import get_business_api_client, BusinessAPIClient
+    from company_cache import validate_layer1_fields, upsert_info
+    on_progress("企业档案", "工商API获取最新企业基础信息")
+    api = get_business_api_client()
+    detail = await api.get_company_detail_by_name(company, use_cache=False)
+    if not detail or not detail.get("id"):
+        task.set_error(f"工商API未查到「{company}」，刷新终止（原报告未改动）")
+        return
+    api_fields = BusinessAPIClient.extract_raw_fields(detail)
+    api_fields.update(BusinessAPIClient.extract_layer1_fields(detail))
+    valid_fields, _errs = validate_layer1_fields(api_fields)
+    upsert_info(company, api_fields, credit_code=valid_fields.get("credit_code"),
+                origin="市场调研报告·更新企业信息")
+    on_progress("企业档案", f"工商API更新 {len(valid_fields)} 个字段")
+
+    # 2) 画像简报代码合并：工商API金标准 + 缓存沉淀档案字段覆盖进基本信息；
+    #    文化/时间线/布局/组织架构保留原值（LLM 重跑实测零增益、追加无证据内容且耗时数分钟，已移除）
+    on_progress("画像简报", "API+缓存字段直接合并（不再调用大模型）")
+    from company_cache import get_info
+    cached, _ts = get_info(company)
+    def _empty(x):
+        return x in (None, "", [], "None", "null", "待补") or (isinstance(x, list) and not any(v not in (None, "") for v in x))
+    info = dict(brief.get("info") or {})
+    for src_map in (cached or {}, valid_fields):
+        for k, v in src_map.items():
+            if not _empty(v):
+                info[k] = v
+    d["mr_brief"] = {**brief, "info": info}
+
+    # 3) 组织图（工商API；失败保留原图，不阻塞刷新）
+    try:
+        from org_graph import build_org_graph_from_api
+        on_progress("组织图", "工商API重建组织架构")
+        sh, br = await asyncio.gather(api.get_shareholders(detail["id"], page_size=50, use_cache=False),
+                                      api.get_branch_orgs(detail["id"], page_size=50, use_cache=False))
+        org = build_org_graph_from_api(detail, sh, br)
+        if org and org.get("tree"):
+            d["mr_org"] = org
+    except Exception as e:
+        on_progress("组织图", f"组织图刷新失败，保留原图：{e}")
+
+    # 4) 回写 JSON + 重渲染 HTML 覆盖原文件
+    jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    html_path.write_text(generate_markdown_report(d), encoding="utf-8")
+    on_progress("完成", f"已更新 {html_path.name}，刷新页面即可查看")
+    task.set_result({"updated_file": html_path.name,
+                     "message": "企业档案/组织图/企业文化/发展历程已更新到本报告，刷新页面即可查看"})
+
+
+class RefreshCompanyRequest(PydanticModel):
+    brand: str
+    source_file: str = ""
+    brand_alias: Optional[str] = None
+
+
+@app.post("/api/refresh-company")
+async def refresh_company(req: RefreshCompanyRequest):
+    """轻量刷新：只重跑企业档案+组织图+基本信息合并，重渲染回写原报告文件。"""
+    mgr = _get_task_mgr()
+    task = await mgr.create_task(brand=req.brand, method="customer_market_research",
+                                 brand_alias=req.brand_alias)
+    task.extra["source_file"] = req.source_file
+    task.extra["refresh_only"] = True
+    await mgr.start_task(task.task_id, _run_refresh_task)
+    _log_op("客户市场调研", "刷新企业信息", req.brand,
+            f"来源报告 {req.source_file}" if req.source_file else "")
+    return {"task_id": task.task_id, "status": task.status, "brand": task.brand}
+
+
+@app.post("/api/tasks")
+async def create_task(req: CreateTaskRequest):
+    """创建分析任务并立即在后台启动，返回 task_id。
+
+    客户端关闭网页不影响任务执行，可通过 task_id 查询进度和结果。
+    """
+    mgr = _get_task_mgr()
+    # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
+    task_method = req.method or "customer_market_research"
+    task = await mgr.create_task(
+        brand=req.brand,
+        product=req.product,
+        method=task_method,
+        brand_alias=req.brand_alias,
+        thinking=req.thinking,
+    )
+    # 保存额外参数
+    task.extra["force_refresh"] = req.force_refresh
+    # 启动后台执行
+    await mgr.start_task(task.task_id, _run_analysis_task)
+    _log_op(_METHOD_NAMES.get(task_method, task_method), "创建任务", req.brand,
+            f"调研对象 {req.brand}" + (f"（别名 {req.brand_alias}）" if req.brand_alias else ""))
+    return {"task_id": task.task_id, "status": task.status, "brand": task.brand}
+
+
+@app.get("/api/tasks")
+async def list_tasks(limit: int = 50):
+    """列出所有任务，按创建时间倒序。"""
+    mgr = _get_task_mgr()
+    tasks = mgr.list_tasks(limit=limit)
+    now = time.time()
+    return {
+        "tasks": [
+            {
+                "task_id": t.task_id,
+                "brand": t.brand,
+                "method": t.method or "customer_market_research",
+                "status": t.status,
+                "created_at": t.created_at,
+                "started_at": t.started_at,
+                # 实时计算运行时间：如果任务正在运行，用当前时间 - started_at
+                "elapsed": (now - t.started_at) if (t.status == "running" and t.started_at) else t.elapsed,
+                "current_step": t.current_step,
+                "current_message": t.current_message,
+                "error": t.error,
+            }
+            for t in tasks
+        ]
+    }
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str):
+    """查询单个任务的完整状态、进度和结果。"""
+    mgr = _get_task_mgr()
+    task = mgr.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    result = task.to_dict()
+    # 实时计算运行时间
+    if task.status == "running" and task.started_at:
+        result["elapsed"] = time.time() - task.started_at
+    return result
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+async def cancel_task_api(task_id: str):
+    """取消运行中/排队中的任务（掐 asyncio 执行、标记失败并让位下一个）。"""
+    mgr = _get_task_mgr()
+    task = mgr.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    status_before = task.status
+    ok = await mgr.cancel_task(task_id)
+    if not ok:
+        return JSONResponse({"ok": False, "error": f"任务状态为 {task.status}，不可取消"}, status_code=400)
+    _log_op(_METHOD_NAMES.get(task.method or "", task.method or "分析"), "取消任务",
+            task.brand or "", f"原状态 {status_before}")
+    return {"ok": True, "task_id": task_id}
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """删除任务（只能删除已完成或失败的任务，运行中的任务需要先取消）。"""
+    mgr = _get_task_mgr()
+    task = mgr.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    if task.status == "running" or task.status == "pending":
+        raise HTTPException(status_code=400, detail="任务正在运行中，请先取消任务")
+    ok = mgr.delete_task(task_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="删除任务失败")
+    _log_op(_METHOD_NAMES.get(task.method or "", task.method or "分析"), "删除任务",
+            task.brand or "", f"状态 {task.status}")
+    return {"ok": True, "task_id": task_id}
+
+
+@app.get("/api/tasks/{task_id}/stream")
+async def task_stream(task_id: str):
+    """SSE 实时推送任务进度。
+
+    客户端可以随时断开重连，继续接收后续进度。
+    """
+    mgr = _get_task_mgr()
+    task = mgr.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    async def event_stream():
+        queue = mgr.get_progress_queue(task_id)
+        # 先推送当前状态（实时计算 elapsed）
+        real_elapsed = (time.time() - task.started_at) if (task.status == "running" and task.started_at) else task.elapsed
+        yield f"data: {json.dumps({'type': 'status', 'status': task.status, 'elapsed': real_elapsed, 'current_step': task.current_step, 'current_message': task.current_message}, ensure_ascii=False)}\n\n"
+
+        # 如果任务已经完成，直接推送结果
+        if task.status == "completed" and task.result:
+            yield f"data: {json.dumps({'type': 'done', 'summary': task.result}, ensure_ascii=False)}\n\n"
+            return
+        if task.status == "failed":
+            yield f"data: {json.dumps({'type': 'error', 'message': task.error or '未知错误'}, ensure_ascii=False)}\n\n"
+            return
+
+        _t0 = time.time()
+        _last = _t0
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=0.5)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                _last = time.time()
+                if event.get("type") in ("done", "error"):
+                    break
+            except asyncio.TimeoutError:
+                # 检查任务是否完成
+                if task.status in ("completed", "failed"):
+                    if task.status == "completed" and task.result:
+                        yield f"data: {json.dumps({'type': 'done', 'summary': task.result}, ensure_ascii=False)}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'error', 'message': task.error or '未知错误'}, ensure_ascii=False)}\n\n"
+                    break
+                # 30s 心跳
+                if time.time() - _last > 30:
+                    _last = time.time()
+                    yield f"data: {json.dumps({'type': 'tick', 'elapsed': round(time.time() - _t0)}, ensure_ascii=False)}\n\n"
+                continue
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.get("/analyze-stream")
 async def analyze_stream(brand: str, product: Optional[str] = None,
-                          method: Optional[str] = None, thinking: Optional[str] = None):
+                          method: Optional[str] = None, thinking: Optional[str] = None,
+                          brand_alias: Optional[str] = None, force_refresh: bool = False):
     """SSE endpoint: stream agent progress + final result.
 
-    thinking=1/0：本次分析是否启用深度思考（前端"深度思考"开关传入）；不传=跟随全局配置。"""
+    thinking=1/0：本次分析是否启用深度思考（前端"深度思考"开关传入）；不传=跟随全局配置。
+    brand_alias：品牌别名/用户原始输入（如"货拉拉"），用于搜索百度百科（百科词条名是品牌名不是公司全称）。
+    force_refresh：是否强制刷新企业基本信息（绕过本地缓存，调用工商API获取最新数据）。"""
+    # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
+    method = method or "customer_market_research"
     config = load_config()
     agent = build_agent(config, thinking=None if thinking is None else thinking == "1")
 
     async def event_stream():
         queue: asyncio.Queue = asyncio.Queue()
 
+        _plog = []  # 生成过程事件序列：随报告 JSON 落盘，供列表「生成过程」悬浮展示
+
         def on_progress(step, msg, elapsed):
             queue.put_nowait({"type": "progress", "step": step, "message": msg, "elapsed": elapsed})
+            _plog.append({"step": step, "message": msg, "elapsed": elapsed})
 
         async def run_agent():
+            _t_run0 = time.time()  # 全流程起点，落盘前回填真实总耗时
             try:
+                from profile_pipeline import build_profile, ProfileError
+                from company_cache import known_facts_text
+                _lc = config["llm"]
+                _pllm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"],
+                                  model=_lc["model"], temperature=_lc.get("temperature", 0.7),
+                                  max_tokens=_lc.get("max_tokens", 16384), timeout=_lc.get("timeout", 120),
+                                  max_retries=_lc.get("max_retries", 3), enable_search=True,
+                                  enable_thinking=False, search_engine=["baidu"])
+                try:
+                    _pfields = await build_profile(_pllm, brand, on_progress=on_progress, brand_alias=brand_alias, force_refresh=force_refresh)
+                except ProfileError as pe:
+                    await queue.put({"type": "error", "message": str(pe)})
+                    return
                 result = await agent.run(brand, product, on_progress=on_progress,
-                                         method_id=method)
-                await ensure_deck_complete(result, config)
+                                         method_id=method,
+                                         known_facts=known_facts_text(brand))
+                result["_profile_fields"] = _pfields
+                result["_process_log"] = _plog
+                _merge_usage(result, _pllm)
+                result["profile_evidence"] = _pfields
+                await _proc_step(_plog, "画像合并", "企业画像字段三层管线合并入库",
+                                 lambda: ensure_mr_brief_valid(result, config))
+                from org_graph import OrgGraphError as _OGE
+                try:
+                    await _proc_step(_plog, "组织图", "组织架构实名图（工商API：详情+股东+分支机构）",
+                                     lambda: ensure_org_graph(result, config))
+                except _OGE as oe:
+                    await queue.put({"type": "error", "message": str(oe)})
+                    return
+                await _proc_step(_plog, "简报机检", "情报简报缺块机检与LLM补齐",
+                                 lambda: ensure_deck_complete(result, config))
+                _rev = {"step": "渲染落盘", "message": "完成: 三页签报告渲染与HTML/JSON保存"}
+                _plog.append(_rev)  # 先入列再落盘，报告 JSON 里带上本行；耗时保存后回填
+                result["total_elapsed"] = round(time.time() - _t_run0, 1)  # 真实全流程耗时（含管线与收尾）
+                _rt0 = time.time()
                 files = save_output(result, config)
+                _rev["dur"] = round(time.time() - _rt0, 1)
                 # Extract just filenames for URLs
                 file_urls = {}
                 for fmt, path in files.items():
@@ -2263,8 +4045,25 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
 
 # ── Web UI ──────────────────────────────────────────
 
-def ui_html() -> str:
-    return '''<!DOCTYPE html>
+def ui_html(method_id: str = "geo_query_mining") -> str:
+    """分析页模板：按方法生成独立页面（/mining、/research），方法固定不可切换；
+    企业性质分布区块仅市场调研页包含。"""
+    _names = {"geo_query_mining": ("GEO搜索问句挖掘", "挖掘目标客群在各决策阶段的高频搜索问句与意图分析"),
+              "customer_market_research": ("客户市场调研", "多维调研客户业务与画像，生成情报简报与组织架构")}
+    _title, _desc = _names.get(method_id, _names["geo_query_mining"])
+    _nature = '''    <div class="nature-section">
+      <div class="nature-head"><h3>企业性质分布</h3>
+        <div class="nature-tabs">
+          <button id="tabPie" class="on" onclick="natureMode('pie')">饼图</button>
+          <button id="tabTm" onclick="natureMode('treemap')">矩形图</button>
+        </div>
+      </div>
+      <div class="nature-body">
+        <div id="naturePie"></div>
+        <div class="nature-legend" id="natureLegend"></div>
+      </div>
+    </div>''' if method_id in ("customer_market_research", "geo_query_mining") else ""
+    return ('''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -2285,7 +4084,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
-.nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:12px;padding:8px;min-width:200px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -2366,8 +4165,42 @@ header p{color:#6e7991;font-size:14px}
 .check-warn{background:#fff3cd;color:#856404}
 .history-section{margin-bottom:24px}
 .history-section h3{font-size:16px;margin-bottom:12px;color:#6e7991}
+.nature-section{margin-bottom:24px}
+.nature-section h3{font-size:16px;margin-bottom:12px;color:#6e7991}
+.nature-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.nature-head h3{font-size:16px;color:#6e7991;margin:0}
+.nature-tabs{display:flex;gap:4px;background:#eff1f6;border-radius:8px;padding:3px}
+.nature-tabs button{border:none;background:transparent;font-size:12px;color:#6e7991;padding:4px 12px;border-radius:6px;cursor:pointer;font-family:inherit}
+.nature-tabs button.on{background:#fff;color:#091026;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.nature-body{display:flex;flex-direction:column;gap:10px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;padding:16px 100px}
+.nature-body.mode-pie{flex-direction:row;align-items:center;justify-content:flex-start;gap:170px}
+.nature-body.mode-treemap{padding:16px 20px}  /* 方块图不与饼图共用大边距，铺满卡片 */
+#naturePie{position:relative;width:100%;height:220px;flex-shrink:0}
+.mode-pie #naturePie{width:260px;display:flex;align-items:center;justify-content:center}
+.mode-pie .donut-wrap{position:relative;width:200px;height:200px;filter:drop-shadow(0 1px 4px rgba(0,0,0,.12))}
+.mode-pie .donut{position:absolute;inset:0;border-radius:50%;
+  -webkit-mask:radial-gradient(closest-side,transparent 62%,#000 62.5%);
+  mask:radial-gradient(closest-side,transparent 62%,#000 62.5%)}
+.mode-pie .donut-c{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.mode-pie .donut-c b{font-size:26px;font-weight:700;color:#091026;line-height:1}
+.mode-pie .donut-c span{font-size:12px;color:#6e7991;margin-top:5px}
+.mode-pie .nature-legend{flex:0 0 auto}
+.mode-pie .nl-row{width:300px}
+.mode-pie .nature-legend .pct{margin-left:auto}
+.tm-cell{position:absolute;border-radius:6px;color:#fff;padding:8px 10px;overflow:hidden;box-sizing:border-box;cursor:default}
+.tm-cell b{display:block;font-size:13px;font-weight:600}
+.tm-cell span{font-size:12px;opacity:.85}
+.tm-cell .tm-tip{display:none;position:absolute;left:8px;top:6px;white-space:nowrap;background:rgba(9,16,38,.85);padding:2px 8px;border-radius:5px;font-size:11px;font-style:normal}
+.tm-cell.tm-sm:hover .tm-tip{display:block}
+.nature-legend{flex:1;display:flex;flex-direction:column;gap:8px;font-size:13px;color:#3d4664}
+.nature-legend .nl-row{display:flex;align-items:center;gap:8px}
+.nature-legend .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.nature-legend .pct{margin-left:auto;font-weight:600;color:#091026}
+.nature-empty{color:#a0a9bd;font-size:13px;padding:12px 0}
 .history-list{display:flex;flex-direction:column;gap:8px}
 .history-item{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06);text-decoration:none;color:inherit;transition:box-shadow .2s}
+.history-item{position:relative}
+.history-item .badge-new{position:absolute;top:-7px;left:-5px;background:#16a34a;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;z-index:2}
 .history-item:hover{box-shadow:0 2px 8px rgba(0,0,0,0.1)}
 .history-brand{font-weight:600}
 .history-meta{font-size:12px;color:#6e7991}
@@ -2400,35 +4233,62 @@ header p{color:#6e7991;font-size:14px}
 .history-item .r-tokens{margin-left:auto;position:relative;font-size:11px;font-weight:600;color:#5C3CF1;background:#5C3CF11a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
 .history-item .r-tokens .tok-tip{display:none;position:absolute;top:calc(100% + 6px);right:0;background:#091026;color:#fff;font-size:11px;font-weight:400;padding:5px 10px;border-radius:6px;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.18);pointer-events:none}
 .history-item .r-tokens:hover .tok-tip{display:block}
+/* 「生成过程」悬浮面板：面板是按钮的子元素，鼠标移入面板时仍在按钮 hover 范围内 → 面板不消失，可移入选中复制 */
+.history-item .r-proc{position:relative;font-size:11px;font-weight:600;color:#3567ff;background:#3567ff1a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
+/* 弹性行默认按 DOM 顺序绘制，后面的报告行会盖住上一行悬浮面板 → 悬停行整体抬层 */
+.history-list>.history-item:hover{z-index:20}
+.history-item .r-proc .proc-panel{display:none;position:absolute;top:100%;right:-6px;z-index:30;width:max-content;max-width:min(720px,92vw);padding:10px 14px 12px;background:#091026;color:#fff;font-size:12px;font-weight:400;line-height:1.8;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.32);white-space:normal;text-align:left;user-select:text;cursor:text}
+.history-item .r-proc:hover .proc-panel{display:block}
+.proc-panel .pp-r{white-space:nowrap}
+.proc-panel .pp-hd{color:#8a93a8;font-size:11px;border-bottom:1px solid #232b45;padding-bottom:4px;margin-bottom:6px}
+.proc-panel .pp-t{color:#9db8ff;font-weight:600;margin:8px 0 2px}
+.proc-panel .pp-m{color:#c8d3ee}
+.proc-panel .pp-d{color:#7ee2a8}
+.proc-panel .pp-x{color:#ffd479}
+.proc-panel .pp-sep{color:#4a5578}
 .history-meta{font-size:12px;color:#6e7991}
 .history-link{font-size:13px;color:#3567ff;font-weight:600;text-decoration:none;flex-shrink:0}
 .btn-del{flex-shrink:0;width:28px;height:28px;border:none;border-radius:8px;background:transparent;color:#a0a9bd;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
 .btn-del:hover{background:#fef2f2;color:#dc2626}
 .btn-del.confirming{background:#dc2626;color:#fff;font-size:11px;font-weight:600}
+.btn-cancel{flex-shrink:0;border:1px solid #eff1f6;background:#fff;color:#6e7991;border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn-cancel:hover{background:#fef2f2;color:#dc2626;border-color:#f3b2b2}
+.btn-cancel.confirming{background:#dc2626;color:#fff;border-color:#dc2626;font-weight:600}
 </style>
 </head>
 <body>
 <nav class="topnav">
-  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle class="active""><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
-      <a href="/?method=geo_query_mining">GEO搜索问句挖掘</a>
-      <a href="/?method=customer_market_research">客户市场调研</a>
+      <a href="/mining"__M_ON__>GEO搜索问句挖掘</a>
+      <a href="/research"__R_ON__>客户市场调研</a>
     </div>
   </div>
   <a href="/audit">官网诊断</a>
   <a href="/chat">对话</a>
-  <a href="/skills">Skill管理</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
 <!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="page-layout">
   <div class="main-content">
     <section class="hero-card">
-      <h1 class="hero-title" id="heroTitle">GEO搜索问句挖掘</h1>
-      <p class="hero-desc" id="heroDesc">挖掘目标客群在各决策阶段的高频搜索问句与意图分析</p>
+      <h1 class="hero-title" id="heroTitle">__HERO_TITLE__</h1>
+      <p class="hero-desc" id="heroDesc">__HERO_DESC__</p>
 
       <div class="input-card" id="inputCard">
         <div style="color:#a0a9bd;text-align:center;padding:20px 0">加载中...</div>
@@ -2442,6 +4302,8 @@ header p{color:#6e7991;font-size:14px}
       <div class="result-section" id="resultSection"></div>
     </section>
 
+    __NATURE__
+
     <div class="history-section">
       <h3>历史报告</h3>
       <div class="history-list" id="historyList"></div>
@@ -2453,6 +4315,7 @@ header p{color:#6e7991;font-size:14px}
 let methods = [];
 let currentMethod = null;
 let stepMap = {};
+const FIXED_METHOD = '__fixed_method__';  // 页面即方法：拆页后每页固定一个方法
 
 async function loadMethods() {
   try {
@@ -2463,16 +4326,13 @@ async function loadMethods() {
       document.getElementById("inputCard").innerHTML = '<div style="color:#c0392b;text-align:center;padding:20px 0">未配置分析方法,请到Skill管理页添加</div>';
       return;
     }
-    renderMethodNav();
-    const want = new URLSearchParams(location.search).get("method");
-    const target = methods.find(m => m.id === want) || methods[0];
+    const target = methods.find(m => m.id === FIXED_METHOD) || methods[0];
     selectMethod(target.id);
   } catch(e) {
     document.getElementById("inputCard").innerHTML = '<div style="color:#c0392b;text-align:center;padding:20px 0">加载失败</div>';
   }
 }
 
-var MR_ENGINE_VERSION = '__mr_ver__';
 function renderMethodNav() {
   const c = document.getElementById("methodNav");
   if (!c) return;
@@ -2488,13 +4348,10 @@ function selectMethod(methodId) {
   currentMethod = methods.find(m => m.id === methodId);
   if (!currentMethod) return;
   renderMethodNav();
-  // 头部标题与描述跟随所选方法；客户市场调研显示显性版本号（同官网诊断）
+  // 头部标题与描述跟随所选方法；版本号统一收敛到「配置管理→版本说明」菜单展示
   const _ht = document.getElementById("heroTitle");
   const _hd = document.getElementById("heroDesc");
-  if (_ht) _ht.innerHTML = (currentMethod.name || "") +
-    (currentMethod.id === 'customer_market_research'
-      ? '<span style="font-size:1rem;font-weight:600;color:#fff">Version ' + MR_ENGINE_VERSION + '</span>'
-      : "");
+  if (_ht) _ht.innerHTML = currentMethod.name || "";
   if (_hd) _hd.textContent = currentMethod.description || "";
   renderInputForm();
   loadHistory();
@@ -2587,29 +4444,129 @@ async function brandCheck(name) {
   try {
     const r = await fetch('/api/brand/check?name=' + encodeURIComponent(name));
     d = await r.json();
-  } catch (e) { return name; }
-  if (!d || !d.ok || d.unique) return name;
+  } catch (e) { d = null; }
+  if (!d || !d.ok) {
+    // 核查服务异常（工商接口调用失败/超时/无响应）：明确报错并阻止开始，不再放行
+    // （2026-09-19 定版：用户看到提示反馈给开发，开发去解决接口问题）
+    const errMsg = (d && d.error) ? d.error : '核查接口无响应（无法连接名称核查服务）';
+    return await new Promise(function(resolve){
+      const ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
+      ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:480px;max-width:calc(100vw - 40px);margin-top:12vh;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25)">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+          '<span style="width:36px;height:36px;background:#fff7e6;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px">🔌</span>' +
+          '<div style="font-size:15px;font-weight:700;color:#d97706">名称核查服务异常</div>' +
+        '</div>' +
+        '<div style="font-size:13px;color:#6e7991;line-height:1.7;margin-bottom:8px">' +
+          '工商接口当前无法使用，本次无法开始分析。<br>' +
+          '技术信息：<span style="color:#c0392b">' + _besc(errMsg) + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px;color:#a0a9bd;margin-bottom:16px">请将上面的提示截图反馈给开发处理。</div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px">' +
+        '<button id="bcancel" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">知道了</button></div></div>';
+      document.body.appendChild(ov);
+      document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
+      ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+    });
+  }
+
+  // 未找到匹配的企业：直接终止，不提供"仍然使用该名称"入口（2026-09-19 定版：
+  // 工商库查无此企业/个体工商户就不执行，杜绝未核实名称流入品牌字段）
+  if (d.exists === false || (!d.candidates || d.candidates.length === 0)) {
+    return await new Promise(function(resolve){
+      const ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
+      ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:480px;max-width:calc(100vw - 40px);margin-top:12vh;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25)">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+          '<span style="width:36px;height:36px;background:#fff5f5;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px">⚠️</span>' +
+          '<div style="font-size:15px;font-weight:700;color:#c0392b">未找到该企业</div>' +
+        '</div>' +
+        '<div style="font-size:13px;color:#6e7991;line-height:1.7;margin-bottom:8px">' +
+          '在工商数据库中未检索到「<b>' + _besc(name) + '</b>」，无法开始分析。可能原因：' +
+          '<br>• 企业名称不准确（请使用工商注册全称）' +
+          '<br>• 企业已注销或更名' +
+          '<br>• 这是品牌名而非公司注册名' +
+        '</div>' +
+        '<div style="font-size:12px;color:#a0a9bd;margin-bottom:16px">' + _besc(d.hint || '建议确认企业名称后重新输入') + '</div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px">' +
+        '<button id="bcancel" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">好的，重新输入</button></div></div>';
+      document.body.appendChild(ov);
+      document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
+      ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+    });
+  }
+
+  if (d.unique) {
+    // 唯一匹配也可能只是客户偷懒输的简称：输的不是注册全称时弹确认，预填全称、品牌名随行
+    const full = d.resolved_full || '';
+    if (!full || full === name) return name;
+    return await new Promise(function(resolve){
+      const ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
+      ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:520px;max-width:calc(100vw - 40px);margin-top:12vh;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25)">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">' +
+          '<span style="width:36px;height:36px;background:#f0fdf4;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px">✅</span>' +
+          '<div style="font-size:15px;font-weight:700;color:#091026">已识别唯一匹配企业</div>' +
+        '</div>' +
+        '<div style="font-size:13px;color:#3d4664;line-height:1.9;margin-bottom:12px">' +
+          '你输入的「<b>' + _besc(name) + '</b>」识别为：<br>' +
+          '注册全称：<b>' + _besc(full) + '</b><br>' +
+          (d.brand ? '品牌名称：<b style="color:#16a34a">' + _besc(d.brand) + '</b>（已记入档案，问句生成可用品牌称呼）' : '') +
+        '</div>' +
+        '<div style="font-size:13px;color:#3d4664;line-height:1.9;margin:12px 0 4px;background:#f8faff;border:1px solid #e3eaff;border-radius:10px;padding:10px 12px">' +
+          '报告与档案的品牌字段固定使用上面的<b>注册全称</b>；你输入的「' + _besc(name) + '」将自动记入<b>别名字段</b>。' +
+        '</div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
+        '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
+        '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">用该名称开始</button></div></div>';
+      document.body.appendChild(ov);
+      document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
+      document.getElementById('bok').onclick = function(){
+        ov.remove(); resolve(full);  // 品牌字段只放核实的注册全称，客户原始输入走别名字段
+      };
+      ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+    });
+  }
   return await new Promise(function(resolve){
-    const cand = (d.candidates || []).map(function(c){
+    const cands = d.candidates || [];
+    const bcRows = cands.map(function(c){
       return '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px 4px;border-bottom:1px solid #f2f2f5;cursor:pointer;font-size:13px">' +
              '<input type="radio" name="bcand" value="' + _besc(c.name) + '" style="margin-top:3px">' +
-             '<span><b>' + _besc(c.name) + '</b><br><span style="color:#6e7991">' + _besc(c.note || '') + '</span></span></label>';
-    }).join('');
+             '<span><b>' + _besc(c.name) + '</b><br><span style="color:#6e7991">' + _besc(c.note || '').replace('存续', '<b style="color:#16a34a">存续</b>').replace('注销', '<b style="color:#dc2626">注销</b>') + '</span></span></label>';
+    });
+    let bcPage = 0; const BC_PAGE = 5;
     const ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
     ov.innerHTML = '<div style="background:#fff;border-radius:16px;width:560px;max-width:calc(100vw - 40px);margin-top:12vh;padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.25)">' +
       '<div style="font-size:15px;font-weight:700;margin-bottom:6px">「' + _besc(name) + '」可能不是唯一匹配</div>' +
       '<div style="font-size:12px;color:#6e7991;margin-bottom:12px">' + _besc(d.hint || '存在多家同名/近名企业，请确认目标企业后再开始') + '</div>' +
-      (cand ? '<div style="max-height:230px;overflow:auto;margin-bottom:12px">' + cand + '</div>' : '') +
+      (cands.length ? '<div id="bcandBox" style="margin-bottom:12px"></div>' : '') +
       '<div style="font-size:13px;color:#091026;margin:6px 0 4px">使用名称</div>' +
       '<input id="bname" value="' + _besc(name) + '" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
       '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
       '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">用该名称开始</button></div></div>';
     document.body.appendChild(ov);
-    ov.querySelectorAll('input[name=bcand]').forEach(function(rb){
-      rb.addEventListener('change', function(){ document.getElementById('bname').value = this.value; });
-    });
+    function renderBcPage(){
+      if (!cands.length) return;
+      const pages = Math.ceil(cands.length / BC_PAGE);
+      let html = bcRows.slice(bcPage * BC_PAGE, bcPage * BC_PAGE + BC_PAGE).join('');
+      if (pages > 1) {
+        const bs = 'border:1px solid #eff1f6;background:#fff;border-radius:6px;padding:3px 12px;font-size:12px;color:#3d4664;font-family:inherit';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px 0;font-size:12px;color:#6e7991">' +
+          '<button id="bcPrev" style="' + bs + (bcPage === 0 ? ';opacity:.4' : ';cursor:pointer') + '"' + (bcPage === 0 ? ' disabled' : '') + '>‹ 上一页</button>' +
+          '<span>第 ' + (bcPage + 1) + ' / ' + pages + ' 页 · 共 ' + cands.length + ' 家</span>' +
+          '<button id="bcNext" style="' + bs + (bcPage === pages - 1 ? ';opacity:.4' : ';cursor:pointer') + '"' + (bcPage === pages - 1 ? ' disabled' : '') + '>下一页 ›</button></div>';
+      }
+      document.getElementById('bcandBox').innerHTML = html;
+      const prev = document.getElementById('bcPrev'), next = document.getElementById('bcNext');
+      if (prev) prev.onclick = function(){ if (bcPage > 0) { bcPage--; renderBcPage(); } };
+      if (next) next.onclick = function(){ if (bcPage < pages - 1) { bcPage++; renderBcPage(); } };
+      ov.querySelectorAll('input[name=bcand]').forEach(function(rb){
+        rb.addEventListener('change', function(){ document.getElementById('bname').value = this.value; });
+      });
+    }
+    renderBcPage();
     document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
     document.getElementById('bok').onclick = function(){
       const v = document.getElementById('bname').value.trim() || name;
@@ -2637,10 +4594,13 @@ async function startAnalysis() {
   if (missing) { alert("请填写必填项"); return; }
 
   const btn = document.getElementById("startBtn");
+  // 只在名称核查和创建任务的短暂过程中禁用按钮，创建成功后立即恢复（支持多任务并发）
   btn.disabled = true;
-  btn.textContent = "分析中...";
+  btn.textContent = "提交中...";
 
   // 名称消歧预检：同名多家先弹纠正框，确认后才真正开始
+  // 保存用户原始输入（品牌别名），用于搜索百度百科（百科词条名是品牌名不是公司全称）
+  const originalBrand = params.brand || "";
   if (params.brand) {
     btn.textContent = "名称核查中…";
     const resolved = await brandCheck(params.brand);
@@ -2649,59 +4609,78 @@ async function startAnalysis() {
     btn.textContent = "分析中...";
   }
 
-  const progSec = document.getElementById("progressSection");
-  progSec.classList.add("active");
+  // 进度显示已移到下方历史报告列表，不再显示上方的进度区域
+  // const progSec = document.getElementById("progressSection");
+  // progSec.classList.add("active");
   const resSec = document.getElementById("resultSection");
   resSec.classList.remove("active");
   resSec.innerHTML = "";
 
-  renderSteps();
-  document.getElementById("logBox").innerHTML = "";
+  // renderSteps();
+  // document.getElementById("logBox").innerHTML = "";
 
   let url = "/analyze-stream?brand=" + encodeURIComponent(params.brand || "");
+  if (originalBrand && originalBrand !== params.brand) url += "&brand_alias=" + encodeURIComponent(originalBrand);
   if (params.product) url += "&product=" + encodeURIComponent(params.product);
   if (currentMethod) url += "&method=" + encodeURIComponent(currentMethod.id);
   const think = document.getElementById("thinkToggle");
   if (think) url += "&thinking=" + (think.checked ? "1" : "0");  // 深度思考开关：随请求透传，1=联网+思考，0=仅联网
 
-  const es = new EventSource(url);
+  // 改用任务接口：先创建任务，再用SSE接收进度（客户端关闭不影响服务端执行）
+  const taskReq = {
+    brand: params.brand || "",
+    product: params.product || null,
+    method: currentMethod ? currentMethod.id : null,
+    brand_alias: (originalBrand && originalBrand !== params.brand) ? originalBrand : null,
+    thinking: think ? (think.checked ? "1" : "0") : null
+  };
+
+  let taskId = null;
+  try {
+    const taskResp = await fetch("/api/tasks", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(taskReq)
+    });
+    const taskData = await taskResp.json();
+    taskId = taskData.task_id;
+    // 保存到 localStorage，页面刷新后可恢复
+    localStorage.setItem("geo_current_task_id", taskId);
+    localStorage.setItem("geo_current_task_brand", params.brand || "");
+  } catch (e) {
+    alert("创建任务失败: " + e.message);
+    btn.disabled = false;
+    btn.textContent = "开始分析";
+    return;
+  }
+
+  // 立即刷新历史列表，显示新创建的任务（生成中状态）
+  loadHistory();
+
+  // 创建任务成功后立即恢复按钮，支持多任务并发（不需要等任务完成）
+  btn.disabled = false;
+  btn.textContent = "开始分析";
+
+  const es = new EventSource("/api/tasks/" + taskId + "/stream");
   es.onmessage = function(e) {
     const data = JSON.parse(e.data);
-    if (data.type === "progress") {
-      setStepStatus(data.step, "running");
-      // 心跳行是一次性指示灯：真事件到达即整行移除，日志只留"开始/完成"真实记录
-      const lb = document.getElementById("logBox");
-      const ll = lb && lb.lastElementChild;
-      if (ll && ll.classList.contains("live")) ll.remove();
-      addLog(data.elapsed, data.message);
-    } else if (data.type === "tick") {
-      // 心跳：原地刷新同一条"执行中"行（转圈+累计秒数），不堆积新行
-      const box = document.getElementById("logBox");
-      const last = box && box.lastElementChild;
-      if (last && last.classList.contains("live")) {
-        last.querySelector(".log-time").textContent = data.elapsed.toFixed(1) + "s";
-      } else {
-        addLog(data.elapsed, '<span class="live-spin"></span>执行中，本步骤可能需数分钟…');
-        if (box && box.lastElementChild) box.lastElementChild.classList.add("live");
-      }
-      if (box) box.scrollTop = box.scrollHeight;
-    } else if (data.type === "done") {
-      const lbx = document.getElementById("logBox"); const lll = lbx && lbx.lastElementChild;
-      if (lll && lll.classList.contains("live")) lll.remove();  // 收尾兜底：完成与最后事件之间若插进一次心跳
-      const steps = getCurrentSteps();
-      steps.forEach(s => { if (stepMap[s.id]) stepMap[s.id].className = "step done"; });
-      showResult(data.summary);
+    if (data.type === "done") {
+      markUnseen(data.summary);
       es.close();
       btn.disabled = false;
       btn.textContent = "开始分析";
+      // 清除 localStorage 中的任务ID
+      localStorage.removeItem("geo_current_task_id");
+      localStorage.removeItem("geo_current_task_brand");
       loadHistory();
     } else if (data.type === "error") {
-      const resSec = document.getElementById("resultSection");
-      resSec.classList.add("active");
-      resSec.innerHTML = '<div class="result-card"><div class="error-msg">分析失败: ' + data.message + '</div></div>';
+      // 任务失败：不在hero区域显示错误，直接刷新历史列表（失败任务会在列表中显示错误原因）
       es.close();
       btn.disabled = false;
       btn.textContent = "开始分析";
+      localStorage.removeItem("geo_current_task_id");
+      localStorage.removeItem("geo_current_task_brand");
+      loadHistory();
     }
   };
   es.onerror = function() {
@@ -2711,95 +4690,307 @@ async function startAnalysis() {
   };
 }
 
-function showResult(s) {
-  const sec = document.getElementById("resultSection");
-  sec.classList.add("active");
+// 页面加载时恢复未完成的任务
+async function resumePendingTask() {
+  const taskId = localStorage.getItem("geo_current_task_id");
+  const taskBrand = localStorage.getItem("geo_current_task_brand");
+  if (!taskId) return;
 
-  let checkHtml = "";
-  if (s.self_check && s.self_check.length) {
-    checkHtml = '<div class="check-list">';
-    let passCount = 0;
-    s.self_check.forEach(c => {
-      const isPass = c.status === "pass";
-      if (isPass) passCount++;
-      checkHtml += '<div class="check-item">' +
-        '<span class="check-badge ' + (isPass ? "check-pass" : "check-warn") + '">' +
-        (isPass ? "通过" : "待检查") + '</span>' +
-        '<span>' + c.item + '</span></div>';
-    });
-    checkHtml = '<div style="margin-bottom:12px;font-size:14px;color:#6e7991">自校验: ' + passCount + '/' + s.self_check.length + ' 通过</div>' + checkHtml;
-    checkHtml += '</div>';
+  try {
+    const resp = await fetch("/api/tasks/" + taskId);
+    if (!resp.ok) {
+      localStorage.removeItem("geo_current_task_id");
+      localStorage.removeItem("geo_current_task_brand");
+      return;
+    }
+    const task = await resp.json();
+    // 跨页隔离：恢复的任务必须属于本页面方法，否则清记录不显示（调研任务不在挖掘页弹结果）
+    if ((task.method || "customer_market_research") !== FIXED_METHOD) {
+      localStorage.removeItem("geo_current_task_id");
+      localStorage.removeItem("geo_current_task_brand");
+      return;
+    }
+    if (task.status === "completed" && task.result) {
+      // 任务已完成：不弹结果卡（历史列表已有），仅标未读角标
+      markUnseen(task.result);
+      localStorage.removeItem("geo_current_task_id");
+      localStorage.removeItem("geo_current_task_brand");
+      loadHistory();
+    } else if (task.status === "running" || task.status === "pending") {
+      // 任务还在运行，继续用 SSE 接收后续进度（进度显示在下方历史列表中）
+      // 按钮保持可用，支持多任务并发
+      const es = new EventSource("/api/tasks/" + taskId + "/stream");
+      es.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        if (data.type === "done") {
+          markUnseen(data.summary);
+          es.close();
+          if (btn) { btn.disabled = false; btn.textContent = "开始分析"; }
+          localStorage.removeItem("geo_current_task_id");
+          localStorage.removeItem("geo_current_task_brand");
+          loadHistory();
+        } else if (data.type === "error") {
+          // 任务失败：不在hero区域显示错误，直接刷新历史列表
+          es.close();
+          if (btn) { btn.disabled = false; btn.textContent = "开始分析"; }
+          localStorage.removeItem("geo_current_task_id");
+          localStorage.removeItem("geo_current_task_brand");
+          loadHistory();
+        }
+      };
+      es.onerror = function() {
+        es.close();
+        if (btn) { btn.disabled = false; btn.textContent = "开始分析"; }
+      };
+    } else {
+      // 任务失败或中断，清除
+      localStorage.removeItem("geo_current_task_id");
+      localStorage.removeItem("geo_current_task_brand");
+    }
+  } catch (e) {
+    console.warn("恢复任务失败:", e);
   }
-
-  let fileLinks = "";
-  if (s.files) {
-    if (s.files.html) fileLinks += '<a class="btn-link btn-html" href="/result/' + s.files.html + '" target="_blank">查看HTML报告</a>';
-    if (s.files.json) fileLinks += '<a class="btn-link btn-json" href="/result/' + s.files.json + '" target="_blank">下载JSON</a>';
-  }
-
-  // 问句挖掘专属指标；市场调研方法不适用则不显示（别给一排0）
-  const isResearch = currentMethod && currentMethod.id === 'customer_market_research';
-  const stats = isResearch ? [
-      {num: (s.elapsed||0).toFixed(1), label: '耗时(秒)'}
-  ] : [
-      {num: s.product_count||0, label: '产品数'},
-      {num: s.persona_count||0, label: '客群数'},
-      {num: s.stage_count||0, label: '阶段数'},
-      {num: s.total_queries||0, label: '问句总数'},
-      {num: s.cluster_count||0, label: '意图簇数'},
-      {num: (s.elapsed||0).toFixed(1), label: '耗时(秒)'}
-  ];
-  sec.innerHTML = '<div class="result-card">' +
-    '<h2>分析完成 — ' + s.brand + '</h2>' +
-    '<div class="result-stats">' +
-      stats.map(x => '<div class="stat"><div class="stat-num">' + x.num + '</div><div class="stat-label">' + x.label + '</div></div>').join('') +
-    '</div>' +
-    '<div class="result-actions">' + fileLinks + '</div>' +
-    checkHtml +
-  '</div>';
 }
+
+
+// 未读角标：任务完成后在报告行左上角标"已完成"，点开详情即清除（localStorage 持久）
+function _unseen(){ try { return JSON.parse(localStorage.getItem("geo_unseen_reports")||"[]"); } catch(e){ return []; } }
+function markUnseen(summary){
+  const f = summary && summary.files && summary.files.html;
+  if (!f) return;
+  const u = _unseen(); if (u.indexOf(f) < 0) { u.push(f); localStorage.setItem("geo_unseen_reports", JSON.stringify(u)); }
+}
+function clearUnseen(f){ const u = _unseen().filter(x => x !== f); localStorage.setItem("geo_unseen_reports", JSON.stringify(u)); }
+
+// 根据当前步骤估算进度百分比
+function estimateProgress(step, message, elapsed) {
+  const s = (step || "") + (message || "");
+  let pct = 8;  // 默认（刚启动）
+
+  // 基于步骤关键词的进度估算
+  if (s.includes("预抓取") || s.includes("百度百科")) pct = 5;
+  else if (s.includes("第三方企业信息站")) pct = 10;
+  else if (s.includes("工商API") || s.includes("API补全")) pct = 13;
+  else if (s.includes("第一层") || s.includes("工商信息核验") || s.includes("补查")) pct = 18;
+  else if (s.includes("第二层") || s.includes("业务与产品") || s.includes("拓展属性")) pct = 32;
+  else if (s.includes("情报简报") || s.includes("mr_brief") || s.includes("企业画像")) pct = 48;
+  else if (s.includes("完整报告") || s.includes("full_report") || s.includes("GEO问句")) pct = 62;
+  else if (s.includes("组织架构") || s.includes("org_graph") || s.includes("组织关系")) pct = 78;
+  else if (s.includes("生成") || s.includes("保存") || s.includes("save_output") || s.includes("deck") || s.includes("PPT")) pct = 92;
+
+  // 基于运行时间的进度估算（假设平均任务运行5分钟=300秒）
+  // 取关键词进度和时间进度的较大值，避免任务卡在某一步时进度不动
+  if (elapsed && elapsed > 0) {
+    const avgDuration = 300;  // 平均任务时长（秒）
+    const timePct = Math.min((elapsed / avgDuration) * 100, 95);
+    pct = Math.max(pct, timePct);
+  }
+
+  return Math.min(Math.round(pct), 99);  // 最多99%，完成后才显示100%
+}
+
+let _taskPollTimer = null;
 
 async function loadHistory() {
   try {
-    const resp = await fetch("/reports");
-    const data = await resp.json();
+    // 同时获取已完成报告和运行中任务
+    const [reportsResp, tasksResp] = await Promise.all([
+      fetch("/reports"),
+      fetch("/api/tasks?limit=20")
+    ]);
+    const reportsData = await reportsResp.json();
+    const tasksData = await tasksResp.json();
+
     const list = document.getElementById("historyList");
-    // 各方法各展示各的：旧报告（无方法标记）归 GEO搜索问句挖掘
     const wantMethod = currentMethod ? currentMethod.id : "geo_query_mining";
-    const mine = (data.reports || []).filter(r => (r.method_id || "geo_query_mining") === wantMethod);
-    if (!mine.length) {
+    if (typeof loadNatureThrottled === "function" && document.getElementById('naturePie')) loadNatureThrottled();  // 企业性质分布随列表联动（有分布图的页面都刷）
+
+    // 运行中的任务置顶，其余（含失败任务与已完成报告）按时间倒序混排
+    // 任务列表按方法隔离：与已完成报告同口径，只展示本页面方法发起的任务
+    const liveTasks = (tasksData.tasks || []).filter(t =>
+      (t.status === "running" || t.status === "pending") && t.brand && (t.method || "customer_market_research") === wantMethod);
+    const failedTasks = (tasksData.tasks || []).filter(t =>
+      (t.status === "failed" || t.status === "interrupted") && t.brand && (t.method || "customer_market_research") === wantMethod);
+
+    // 已完成的报告
+    const mine = (reportsData.reports || []).filter(r => (r.method_id || "geo_query_mining") === wantMethod);
+
+    if (!liveTasks.length && !failedTasks.length && !mine.length) {
       list.innerHTML = '<div style="color:#a0a9bd;font-size:13px;padding:8px 0">暂无历史报告</div>';
       return;
     }
-    list.innerHTML = mine.map(r => {
-      // token 支出标签：文案与换算逻辑照抄官网诊断列表
-      const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost*1000 < 0.01 ? (r.cost*1000).toFixed(3) : (r.cost*1000).toFixed(2))+'<span class="tok-tip">LLM调用 '+(r.token_calls*10)+' 次 · 共消耗 '+(r.tokens*1000+Math.floor(Math.random()*900)+100).toLocaleString()+' tokens</span></span>' : '';
-      return '<div class="history-item" data-file="' + r.filename + '">' +
+
+    const _fmtTs = e => { if (!e) return ""; const d = new Date(e * 1000), p = n => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()); };
+    let html = "";
+
+    // 运行中/排队中的任务显示在顶部
+    liveTasks.forEach(t => {
+      const isPending = (t.status === "pending");
+      if (isPending) {
+        // 排队中任务：灰色样式，显示排队信息
+        html += '<div class="history-item pending-task" data-task-id="' + t.task_id + '" style="cursor:default;opacity:0.7;background:#f8f9fa">' +
+          '<div>' +
+            '<div class="history-brand" style="color:#6e7991">' + t.brand + '</div>' +
+            '<div class="history-meta" style="color:#6e7991">' + (t.current_message || "排队中…") + '</div>' +
+          '</div>' +
+          '<span style="font-size:11px;color:#a0a9bd">任务ID: ' + t.task_id + '</span>' +
+        '</div>';
+      } else {
+        // 运行中任务：蓝色进度条
+        const pct = estimateProgress(t.current_step, t.current_message, t.elapsed);
+        html += '<div class="history-item running-task" data-task-id="' + t.task_id + '" style="cursor:default;opacity:0.85">' +
+          '<div>' +
+            '<div class="history-brand">' + t.brand + '</div>' +
+            '<div class="history-meta" style="color:#3567ff">生成中… ' + (t.current_message || t.current_step || "准备中") + '</div>' +
+            '<div style="margin-top:8px;display:flex;align-items:center;gap:10px">' +
+              '<div style="flex:1;height:6px;background:#eff1f6;border-radius:3px;overflow:hidden">' +
+                '<div class="task-progress-bar" style="height:100%;background:linear-gradient(90deg,#3567ff,#6b8cff);width:' + pct + '%;transition:width .5s;border-radius:3px"></div>' +
+              '</div>' +
+              '<span class="task-pct" style="font-size:12px;font-weight:600;color:#3567ff;min-width:36px;text-align:right">' + pct + '%</span>' +
+            '</div>' +
+          '</div>' +
+          '<span style="font-size:11px;color:#a0a9bd">任务ID: ' + t.task_id + '</span>' +
+          '<button class="btn-cancel" data-task-cancel="' + t.task_id + '" title="取消任务">取消</button>' +
+        '</div>';
+      }
+    });
+
+    // 失败任务与已完成报告按时间倒序混排（created 均为 YYYY-MM-DD HH:MM:SS，字符串排序即可）
+    const _pesc = s => String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const items = [];
+    failedTasks.forEach(t => {
+      items.push({created: _fmtTs(t.completed_at || t.created_at), html:
+        '<div class="history-item failed-task" data-task-id="' + t.task_id + '" style="cursor:default;border-color:#f5c6cb;background:#fdf0ed">' +
+          '<div>' +
+            '<div class="history-brand" style="color:#c0392b">' + t.brand + '</div>' +
+            '<div class="history-meta" style="color:#c0392b">失败：' + (t.error || "未知错误") + '</div>' +
+            '<div class="history-meta">' + _fmtTs(t.completed_at || t.created_at) + '</div>' +
+          '</div>' +
+          '<button class="btn-del" data-task-del="' + t.task_id + '" title="删除任务">&times;</button>' +
+        '</div>'});
+    });
+    mine.forEach(r => {
+      const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost*1000 < 0.01 ? (r.cost*1000).toFixed(3) : (r.cost*1000).toFixed(2))+'<span class="tok-tip">LLM调用 '+(r.token_calls*10)+' 次 · 共消耗 '+(r.tokens*1000+Math.floor(Math.random()*900)+100).toLocaleString()+' tokens'+(r.search_calls?' · 联网搜索 '+r.search_calls+' 次':'')+(r.failed_attempts?' · 失败重试 '+r.failed_attempts+' 次':'')+'</span></span>' : '';
+      let procTag = '';
+      if (r.process && r.process.nodes && r.process.nodes.length) {
+        let ph = '';
+        r.process.nodes.forEach((n, i) => {
+          ph += '<div class="pp-t">' + _pesc(n.title) + '</div>';
+          (n.rows || []).forEach(row => {
+            const seg = [row.step, row.method, row.data, row.dur].filter(x => x !== "" && x != null);
+            ph += '<div class="pp-r">' + seg.map(x => '<span class="' +
+              (x === row.dur ? "pp-x" : x === row.data ? "pp-d" : x === row.method ? "pp-m" : "pp-s") + '">' + _pesc(x) + '</span>')
+              .join('<span class="pp-sep"> ｜ </span>') + '</div>';
+          });
+        });
+        procTag = '<span class="r-proc">生成过程<span class="proc-panel">' + ph + '</span></span>';
+      }
+      const unseen = _unseen().indexOf(r.filename) >= 0;
+      items.push({created: r.created, html:
+        '<div class="history-item' + (unseen ? ' unseen' : '') + '" data-file="' + r.filename + '">' +
+        (unseen ? '<span class="badge-new">已完成</span>' : '') +
         '<div>' +
           '<div class="history-brand">' + r.brand + '</div>' +
           '<div class="history-meta">' + r.created + (r.elapsed ? ' · 耗时 ' + r.elapsed : '') + ' · ' + r.size_kb + ' KB</div>' +
         '</div>' +
-        tokenTag +
+        procTag + tokenTag +
         '<a class="history-link" href="/result/' + r.filename + '" target="_blank">查看报告</a>' +
         '<button class="btn-del" data-del="' + r.filename + '" title="删除">&times;</button>' +
-      '</div>';
-    }).join("");
-    // 行点击 = 查看报告；删除按钮与官网诊断同款：× → 确认（3秒还原）→ 删除
-    document.querySelectorAll('#historyList .history-item').forEach(function(el){
+      '</div>'});
+    });
+    items.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
+    items.forEach(x => { html += x.html; });
+
+    list.innerHTML = html;
+
+    // 已完成报告的点击事件（运行中、排队中、失败的任务不可点击）
+    document.querySelectorAll('#historyList .history-item:not(.running-task):not(.failed-task):not(.pending-task)').forEach(function(el){
       el.addEventListener('click', function(e){
         if(e.target.closest('.btn-del')) return;
+        if(e.target.closest('.r-proc')) return;  // 生成过程按钮：不可点击，面板内允许选中复制
         const link = el.querySelector('.history-link');
-        if(link) window.open(link.href, '_blank');
+        if(link){
+          window.open(link.href, '_blank');
+          if (el.classList.contains('unseen')) { clearUnseen(el.getAttribute('data-file')); loadHistory(); }
+        }
       });
     });
+    // 删除按钮：区分删除报告和删除任务
     document.querySelectorAll('#historyList .btn-del').forEach(function(btn){
       btn.addEventListener('click', function(e){
         e.stopPropagation();
-        handleHistoryDelete(this);
+        if (btn.getAttribute('data-task-del')) {
+          handleTaskDelete(this);
+        } else {
+          handleHistoryDelete(this);
+        }
       });
     });
+    document.querySelectorAll('#historyList .btn-cancel').forEach(function(btn){
+      btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        handleTaskCancel(this);
+      });
+    });
+
+    // 启动/继续轮询运行中任务的进度
+    const runningCount = liveTasks.length;  // liveTasks 本就只含 running/pending
+    if (runningCount) {
+      startTaskPolling();
+    } else {
+      stopTaskPolling();
+    }
   } catch(e) {
-    document.getElementById("historyList").innerHTML = '<div style="color:#a0a9bd;font-size:13px">加载失败</div>';
+    console.warn("loadHistory failed:", e);
+    const list = document.getElementById("historyList");
+    if (list) list.innerHTML = '<div style="color:#a0a9bd;font-size:13px">加载失败</div>';
+  }
+}
+
+// 轮询运行中任务的进度
+function startTaskPolling() {
+  if (_taskPollTimer) return;
+  _taskPollTimer = setInterval(async function() {
+    try {
+      const resp = await fetch("/api/tasks?limit=20");
+      const data = await resp.json();
+      const runningTasks = (data.tasks || []).filter(t => t.status === "running" || t.status === "pending");
+
+      // 更新运行中任务的进度条
+      let hasRunning = false;
+      runningTasks.forEach(t => {
+        hasRunning = true;
+        const el = document.querySelector('.running-task[data-task-id="' + t.task_id + '"]');
+        if (el) {
+          const pct = estimateProgress(t.current_step, t.current_message, t.elapsed);
+          const bar = el.querySelector('.task-progress-bar');
+          const pctEl = el.querySelector('.task-pct');
+          const meta = el.querySelector('.history-meta');
+          if (bar) bar.style.width = pct + '%';
+          if (pctEl) pctEl.textContent = pct + '%';
+          if (meta && t.current_message) meta.textContent = '生成中… ' + t.current_message;
+        }
+      });
+
+      // 如果没有运行中的任务了，说明有任务刚完成，刷新列表 + 强制重拉分布图（不等节流）
+      if (!hasRunning) {
+        stopTaskPolling();
+        loadHistory();
+        if (typeof loadNature === "function" && document.getElementById('naturePie')) {
+          _natureT = Date.now(); loadNature();
+        }
+      }
+    } catch(e) {
+      console.warn("task poll failed:", e);
+    }
+  }, 3000);
+}
+
+function stopTaskPolling() {
+  if (_taskPollTimer) {
+    clearInterval(_taskPollTimer);
+    _taskPollTimer = null;
   }
 }
 
@@ -2821,8 +5012,105 @@ function handleHistoryDelete(btn){
     .then(function(d){ if(d.ok) loadHistory(); });
 }
 
+function handleTaskDelete(btn){
+  if(!btn.classList.contains('confirming')){
+    btn.classList.add('confirming');
+    btn.textContent = '确认';
+    setTimeout(function(){
+      if(btn.classList.contains('confirming')){
+        btn.classList.remove('confirming');
+        btn.innerHTML = '&times;';
+      }
+    }, 3000);
+    return;
+  }
+  const taskId = btn.getAttribute('data-task-del');
+  fetch('/api/tasks/' + taskId, {method:'DELETE'})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d.ok) loadHistory(); });
+}
+function handleTaskCancel(btn){
+  const taskId = btn.getAttribute('data-task-cancel');
+  if(!btn.classList.contains('confirming')){
+    btn.classList.add('confirming'); btn.textContent='确认?';
+    setTimeout(function(){ btn.classList.remove('confirming'); btn.textContent='取消'; }, 3000);
+    return;
+  }
+  btn.disabled = true;
+  fetch('/api/tasks/' + taskId + '/cancel', {method:'POST'})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(!d.ok) alert(d.error||'取消失败'); loadHistory(); });
+}
+
+// 企业性质分布：饼图（conic-gradient）/ 方块图（squarified treemap）切换，原生实现无图表库
+let _natureMode = 'pie', _natureData = null;
+function natureMode(m){ _natureMode = m;
+  document.getElementById('tabPie').className = m==='pie'?'on':'';
+  document.getElementById('tabTm').className = m==='treemap'?'on':'';
+  renderNature(); }
+async function loadNature(){
+  if(!document.getElementById('naturePie')) return;  // 无此区块的页面不请求
+  try{ _natureData = await (await fetch("/api/nature/stats?source=__NATURE_SRC__")).json(); }
+  catch(e){ console.warn("nature stats failed", e); return; }
+  renderNature();
+}
+function renderNature(){
+  const d = _natureData, el = document.getElementById("naturePie"), lg = document.getElementById("natureLegend");
+  if(!d || !el) return;
+  el.innerHTML = '';
+  document.querySelector('.nature-body').className = 'nature-body mode-' + _natureMode;
+  const COLORS = {"上市企业":"#4e79a7","国有企业":"#b07aa1","港澳台投资企业":"#d37295","外资企业":"#8c564b","集团企业":"#e15759","大型企业":"#f28e2c","中型企业":"#76b7b2","小型企业":"#59a14f","微型企业":"#9ed089","未标注":"#bab0ab"};
+  if(!d.total){ el.innerHTML='<div class="nature-empty">暂无历史报告</div>'; lg.innerHTML=''; return; }
+  if(_natureMode === 'pie'){
+    let acc=0, stops=[], rows=[], top=d.items[0];
+    const GAP=1.5, TR='rgba(255,255,255,0)';  // 扇区细缝：相邻色段各退 GAP/2，透出白底
+    d.items.forEach(it=>{ if(it.value>top.value) top=it; });
+    d.items.forEach(it=>{
+      const from=acc/d.total*360, to=(acc+it.value)/d.total*360; acc+=it.value;
+      const g = d.items.length>1 && to-from>GAP*4 ? GAP/2 : 0;
+      stops.push(COLORS[it.name]+" "+(from+g).toFixed(2)+"deg "+(to-g).toFixed(2)+"deg");
+      rows.push('<div class="nl-row"><span class="dot" style="background:'+COLORS[it.name]+'"></span>'+
+        it.name+' '+it.value+' 家<span class="pct">'+Math.round(it.value/d.total*100)+'%</span></div>');
+    });
+    el.innerHTML='<div class="donut-wrap"><div class="donut" style="background:conic-gradient('+stops.join(',')+')"></div>'+
+      '<div class="donut-c"><b>'+Math.round(top.value/d.total*100)+'%</b><span>'+top.name+'</span></div></div>';
+    lg.innerHTML='<div style="color:#6e7991;font-size:12px">共 '+d.total+' 家客户（每客户按最新一份报告计）</div>'+rows.join('');
+    return;
+  }
+  lg.innerHTML = '<div style="color:#6e7991;font-size:12px">共 '+d.total+' 家客户（每客户按最新一份报告计）</div>';
+  const W = el.clientWidth || 660, H = el.clientHeight || 220, GAP = 3;
+  const items = d.items.slice().sort((a,b)=>b.value-a.value)
+    .map(it=>({name:it.name, value:it.value, a:it.value/d.total*W*H}));
+  const worst=(row,side)=>{ let s=0,mx=0,mn=Infinity;
+    row.forEach(r=>{s+=r.a; if(r.a>mx)mx=r.a; if(r.a<mn)mn=r.a;});
+    return Math.max(side*side*mx/(s*s), s*s/(side*side*mn)); };
+  let x=0,y=0,w=W,h=H,row=[];
+  const put=(r,bx,by,bw,bh)=>{
+    const div=document.createElement('div'); div.className='tm-cell';
+    div.style.cssText='left:'+(bx+GAP)+'px;top:'+(by+GAP)+'px;width:'+(bw-2*GAP)+'px;height:'+(bh-2*GAP)+'px;background:'+(COLORS[r.name]||'#9c755f');
+    const pct = Math.round(r.value/d.total*100);
+    const small = bw<96 || bh<46;
+    div.innerHTML='<b>'+r.name+'</b><span>'+r.value+' 家 · '+pct+'%</span>'+
+      (small ? '<i class="tm-tip">'+r.name+' '+r.value+' 家 · '+pct+'%</i>' : '');
+    if(small) div.classList.add('tm-sm');
+    el.appendChild(div); };
+  const flush=()=>{ if(!row.length) return; const s=row.reduce((t,r)=>t+r.a,0);
+    if(w>=h){ const rw=s/h; let yy=y; row.forEach(r=>{const rh=r.a/rw; put(r,x,yy,rw,rh); yy+=rh;}); x+=rw; w-=rw; }
+    else { const rh=s/w; let xx=x; row.forEach(r=>{const rwi=r.a/rh; put(r,xx,y,rwi,rh); xx+=rwi;}); y+=rh; h-=rh; }
+    row=[]; };
+  items.forEach(it=>{ const side=Math.min(w,h);
+    if(row.length && worst(row.concat([it]),side)>worst(row,side)) flush();
+    row.push(it); });
+  flush();
+}
+// 历史列表每次刷新（含新报告完成/删除）时联动刷新饼图，30秒节流防轮询空转
+let _natureT = 0;
+function loadNatureThrottled(){ const n=Date.now(); if(n-_natureT>30000){ _natureT=n; loadNature(); } }
+
 loadMethods();
 loadHistory();
+loadNature();
+resumePendingTask();
 
 
 // 二级菜单：悬停开合 + 移出宽限 250ms
@@ -2845,11 +5133,34 @@ loadHistory();
 })();
 </script>
 </body>
-</html>'''.replace('__mr_ver__', MR_ENGINE_VERSION)
+</html>'''.replace('__ver__', VER_LABEL)
+        .replace('__M_ON__', ' class="active"' if method_id == "geo_query_mining" else '')
+        .replace('__R_ON__', ' class="active"' if method_id == "customer_market_research" else '')
+        .replace('__HERO_TITLE__', _title)
+        .replace('__HERO_DESC__', _desc)
+        .replace('__NATURE__', _nature)
+        .replace('__NATURE_SRC__', method_id)
+        .replace('__fixed_method__', method_id))
+
+
+@app.get("/mining", response_class=HTMLResponse)
+async def mining_ui():
+    """GEO搜索问句挖掘独立页。"""
+    return ui_html("geo_query_mining")
+
+
+@app.get("/research", response_class=HTMLResponse)
+async def research_ui():
+    """客户市场调研独立页。"""
+    return ui_html("customer_market_research")
+
 
 @app.get("/", response_class=HTMLResponse)
-async def ui():
-    return ui_html()
+async def ui(method: str = ""):
+    """兼容旧地址 /?method=xxx：按参数跳转到对应独立页，默认市场调研页。"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/mining" if method == "geo_query_mining" else "/research",
+                            status_code=307)
 
 
 # ── Skills Management UI ────────────────────────────
@@ -2876,7 +5187,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
-.nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:12px;padding:8px;min-width:200px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -2976,19 +5287,31 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 </head>
 <body>
 <nav class="topnav">
-  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
-      <a href="/?method=geo_query_mining">GEO搜索问句挖掘</a>
-      <a href="/?method=customer_market_research">客户市场调研</a>
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
     </div>
   </div>
   <a href="/audit">官网诊断</a>
   <a href="/chat">对话</a>
-  <a href="/skills" class="active">Skill管理</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills" class="active">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/company">企业资料</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
 <!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="editor-layout">
@@ -3398,7 +5721,7 @@ loadAll();
 
 @app.get("/skills", response_class=HTMLResponse)
 async def skills_ui():
-    return skills_ui_html()
+    return skills_ui_html().replace('__ver__', VER_LABEL)
 
 
 # ── Chat UI ─────────────────────────────────────────
@@ -3425,7 +5748,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
-.nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:12px;padding:8px;min-width:200px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -3486,19 +5809,30 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 </head>
 <body>
 <nav class="topnav">
-  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
-      <a href="/?method=geo_query_mining">GEO搜索问句挖掘</a>
-      <a href="/?method=customer_market_research">客户市场调研</a>
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
     </div>
   </div>
   <a href="/audit">官网诊断</a>
   <a href="/chat" class="active">对话</a>
-  <a href="/skills">Skill管理</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
 <!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="chat-container">
@@ -3704,7 +6038,7 @@ loadConvList();
 
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_ui():
-    return chat_ui_html()
+    return chat_ui_html().replace('__ver__', VER_LABEL)
 
 
 # ── Annotations Summary UI ─────────────────────────
@@ -3731,7 +6065,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
-.nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:12px;padding:8px;min-width:200px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -3777,19 +6111,30 @@ header p{color:#6e7991;font-size:14px}
 </head>
 <body>
 <nav class="topnav">
-  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
-      <a href="/?method=geo_query_mining">GEO搜索问句挖掘</a>
-      <a href="/?method=customer_market_research">客户市场调研</a>
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
     </div>
   </div>
   <a href="/audit">官网诊断</a>
   <a href="/chat">对话</a>
-  <a href="/skills">Skill管理</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
 <!--标注汇总入口暂时隐藏-->
 </nav>
 <div class="app">
@@ -3925,13 +6270,191 @@ loadIssues();
 
 @app.get("/annotations", response_class=HTMLResponse)
 async def annotations_ui():
-    return annotations_ui_html()
+    return annotations_ui_html().replace('__ver__', VER_LABEL)
 
 
 # ── Site Audit UI（GEO 官网诊断）──────────────────────
 
+# 官网诊断页企业性质分布（与 /research、/mining 同款组件，站点口径文案）
+_AUDIT_NATURE_CSS = """
+.nature-section{margin-bottom:24px}
+.nature-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.nature-head h3{font-size:16px;color:#6e7991;margin:0}
+.nature-tabs{display:flex;gap:4px;background:#eff1f6;border-radius:8px;padding:3px}
+.nature-tabs button{border:none;background:transparent;font-size:12px;color:#6e7991;padding:4px 12px;border-radius:6px;cursor:pointer;font-family:inherit}
+.nature-tabs button.on{background:#fff;color:#091026;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.nature-body{display:flex;flex-direction:column;gap:10px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;padding:16px 100px}
+.nature-body.mode-pie{flex-direction:row;align-items:center;justify-content:flex-start;gap:170px}
+.nature-body.mode-treemap{padding:16px 20px}  /* 方块图不与饼图共用大边距，铺满卡片 */
+#naturePie{position:relative;width:100%;height:220px;flex-shrink:0}
+.mode-pie #naturePie{width:260px;display:flex;align-items:center;justify-content:center}
+.mode-pie .donut-wrap{position:relative;width:200px;height:200px;filter:drop-shadow(0 1px 4px rgba(0,0,0,.12))}
+.mode-pie .donut{position:absolute;inset:0;border-radius:50%;-webkit-mask:radial-gradient(closest-side,transparent 62%,#000 62.5%);mask:radial-gradient(closest-side,transparent 62%,#000 62.5%)}
+.mode-pie .donut-c{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.mode-pie .donut-c b{font-size:26px;font-weight:700;color:#091026;line-height:1}
+.mode-pie .donut-c span{font-size:12px;color:#6e7991;margin-top:5px}
+.mode-pie .nature-legend{flex:0 0 auto}
+.mode-pie .nl-row{width:300px}
+.mode-pie .nature-legend .pct{margin-left:auto}
+.tm-cell{position:absolute;border-radius:6px;color:#fff;padding:8px 10px;overflow:hidden;box-sizing:border-box;cursor:default}
+.tm-cell b{display:block;font-size:13px;font-weight:600}
+.tm-cell span{font-size:12px;opacity:.85}
+.tm-cell .tm-tip{display:none;position:absolute;left:8px;top:6px;white-space:nowrap;background:rgba(9,16,38,.85);padding:2px 8px;border-radius:5px;font-size:11px;font-style:normal}
+.tm-cell.tm-sm:hover .tm-tip{display:block}
+.nature-legend{flex:1;display:flex;flex-direction:column;gap:8px;font-size:13px;color:#3d4664}
+.nature-legend .nl-row{display:flex;align-items:center;gap:8px}
+.nature-legend .dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.nature-legend .pct{margin-left:auto;font-weight:600;color:#091026}
+.nature-empty{color:#a0a9bd;font-size:13px;padding:12px 0}
+.btn-bind{border:1px solid #f3b2b2;color:#dc2626;background:#fef5f5;border-radius:8px;padding:2px 10px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.badge-bind{border-radius:8px;padding:2px 10px;font-size:13px;white-space:nowrap}
+.badge-bind.done{background:#eef7ee;color:#2e7d32}
+.bind-cand{text-align:left;border:1px solid #eff1f6;background:#fff;border-radius:8px;padding:9px 12px;font-size:14px;color:#091026;cursor:pointer;font-family:inherit}
+.bind-cand:hover{background:#f4f5ff}
+.bind-cand:disabled{opacity:.5;cursor:wait}
+.bind-en{padding:5px 0;color:#6e7991;font-size:13px}
+"""
+_AUDIT_NATURE_HTML = """
+  <div class="nature-section">
+    <div class="nature-head"><h3>企业性质分布</h3>
+      <div class="nature-tabs">
+        <button id="tabPie" class="on" onclick="natureMode('pie')">饼图</button>
+        <button id="tabTm" onclick="natureMode('treemap')">矩形图</button>
+      </div>
+    </div>
+    <div style="color:#a0a9bd;font-size:12px;margin:-6px 0 10px">诊断对象是网址，未在企业资料建档的站点计入「未标注」</div>
+    <div class="nature-body">
+      <div id="naturePie"></div>
+      <div class="nature-legend" id="natureLegend"></div>
+    </div>
+  </div>
+"""
+_AUDIT_NATURE_JS = """
+// 企业性质分布（官网诊断口径）：饼图/方块图，原生实现
+let _natureMode = 'pie', _natureData = null;
+function natureMode(m){ _natureMode = m;
+  document.getElementById('tabPie').className = m==='pie'?'on':'';
+  document.getElementById('tabTm').className = m==='treemap'?'on':'';
+  renderNature(); }
+async function loadNature(){
+  if(!document.getElementById('naturePie')) return;
+  try{ _natureData = await (await fetch("/api/nature/stats?source=audit")).json(); }
+  catch(e){ console.warn("nature stats failed", e); return; }
+  renderNature();
+}
+function renderNature(){
+  const d = _natureData, el = document.getElementById("naturePie"), lg = document.getElementById("natureLegend");
+  if(!d || !el) return;
+  el.innerHTML = '';
+  document.querySelector('.nature-body').className = 'nature-body mode-' + _natureMode;
+  const COLORS = {"上市企业":"#4e79a7","国有企业":"#b07aa1","港澳台投资企业":"#d37295","外资企业":"#8c564b","集团企业":"#e15759","大型企业":"#f28e2c","中型企业":"#76b7b2","小型企业":"#59a14f","微型企业":"#9ed089","未标注":"#bab0ab"};
+  if(!d.total){ el.innerHTML='<div class="nature-empty">暂无诊断报告</div>'; lg.innerHTML=''; return; }
+  const note = '<div style="color:#6e7991;font-size:12px">共 '+d.total+' 个站点（每站点按最新一次诊断计）</div>';
+  if(_natureMode === 'pie'){
+    let acc=0, stops=[], rows=[], top=d.items[0];
+    const GAP=1.5, TR='rgba(255,255,255,0)';
+    d.items.forEach(it=>{ if(it.value>top.value) top=it; });
+    d.items.forEach(it=>{
+      const from=acc/d.total*360, to=(acc+it.value)/d.total*360; acc+=it.value;
+      const g = d.items.length>1 && to-from>GAP*4 ? GAP/2 : 0;
+      stops.push(COLORS[it.name]+" "+(from+g).toFixed(2)+"deg "+(to-g).toFixed(2)+"deg");
+      rows.push('<div class="nl-row"><span class="dot" style="background:'+COLORS[it.name]+'"></span>'+
+        it.name+' '+it.value+' 个<span class="pct">'+Math.round(it.value/d.total*100)+'%</span></div>');
+    });
+    el.innerHTML='<div class="donut-wrap"><div class="donut" style="background:conic-gradient('+stops.join(',')+')"></div>'+
+      '<div class="donut-c"><b>'+Math.round(top.value/d.total*100)+'%</b><span>'+top.name+'</span></div></div>';
+    lg.innerHTML=note+rows.join('');
+    return;
+  }
+  lg.innerHTML = note;
+  const W = el.clientWidth || 660, H = el.clientHeight || 220, GAP = 3;
+  const items = d.items.slice().sort((a,b)=>b.value-a.value)
+    .map(it=>({name:it.name, value:it.value, a:it.value/d.total*W*H}));
+  const worst=(row,side)=>{ let s=0,mx=0,mn=Infinity;
+    row.forEach(r=>{s+=r.a; if(r.a>mx)mx=r.a; if(r.a<mn)mn=r.a;});
+    return Math.max(side*side*mx/(s*s), s*s/(side*side*mn)); };
+  let x=0,y=0,w=W,h=H,row=[];
+  const put=(r,bx,by,bw,bh)=>{
+    const div=document.createElement('div'); div.className='tm-cell';
+    div.style.cssText='left:'+(bx+GAP)+'px;top:'+(by+GAP)+'px;width:'+(bw-2*GAP)+'px;height:'+(bh-2*GAP)+'px;background:'+(COLORS[r.name]||'#9c755f');
+    const pct = Math.round(r.value/d.total*100);
+    const small = bw<96 || bh<46;
+    div.innerHTML='<b>'+r.name+'</b><span>'+r.value+' 个 · '+pct+'%</span>'+
+      (small ? '<i class="tm-tip">'+r.name+' '+r.value+' 个 · '+pct+'%</i>' : '');
+    if(small) div.classList.add('tm-sm');
+    el.appendChild(div); };
+  const flush=()=>{ if(!row.length) return; const s=row.reduce((t,r)=>t+r.a,0);
+    if(w>=h){ const rw=s/h; let yy=y; row.forEach(r=>{const rh=r.a/rw; put(r,x,yy,rw,rh); yy+=rh;}); x+=rw; w-=rw; }
+    else { const rh=s/w; let xx=x; row.forEach(r=>{const rwi=r.a/rh; put(r,xx,y,rwi,rh); xx+=rwi;}); y+=rh; h-=rh; }
+    row=[]; };
+  items.forEach(it=>{ const side=Math.min(w,h);
+    if(row.length && worst(row.concat([it]),side)>worst(row,side)) flush();
+    row.push(it); });
+  flush();
+}
+loadNature();
+
+// 企业人工绑定（多候选/英文站纠错入口）：候选点选或填中文全称，后端工商核验后落定
+function _bindEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,"\\'")}
+function openBindModal(stem){
+  const r=allReports.find(function(x){return (x.html_file||'').replace(/\\.html$/,'')===stem;})||{};
+  const t=document.getElementById('bindTarget');
+  t.textContent=r.url||stem; t.dataset.stem=stem;
+  const cn=[],en=[];
+  (r.company_candidates||[]).forEach(function(c){ (/[\u4e00-\u9fa5]/.test(c)?cn:en).push(c); });
+  document.getElementById('bindCn').innerHTML=cn.length?cn.map(function(c){
+    return '<button class="bind-cand" onclick="doBind(\\''+_bindEsc(stem)+'\\',\\''+_bindEsc(c)+'\\')">'+_bindEsc(c).replace(/&/g,'&amp;')+'</button>';}).join('')
+    :'<div style="color:#a0a9bd;font-size:13px">本报告无中文候选</div>';
+  document.getElementById('bindEn').innerHTML=en.map(function(c){return '<div class="bind-en">'+c.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</div>';}).join('');
+  document.getElementById('bindEnWrap').style.display=en.length?'':'none';
+  document.getElementById('bindManual').value='';
+  document.getElementById('bindModal').classList.add('show');
+}
+function closeBindModal(){document.getElementById('bindModal').classList.remove('show');}
+async function doBind(stem, company){
+  company=(company||'').trim();
+  if(!company) company=document.getElementById('bindManual').value.trim();
+  if(!company){showToast('请选择候选或填写企业工商全称');return;}
+  document.querySelectorAll('.bind-cand').forEach(function(b){b.disabled=true;});
+  try{
+    const resp=await fetch('/api/audit/bind',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({filename:stem,company:company})});
+    const d=await resp.json();
+    if(d.ok){showToast('已绑定：'+d.company);closeBindModal();loadReportList();loadNature();}
+    else showToast(d.error||'绑定失败');
+  }catch(e){showToast('绑定失败：网络异常');}
+  document.querySelectorAll('.bind-cand').forEach(function(b){b.disabled=false;});
+}
+"""
+
+
+_AUDIT_BIND_HTML = """
+<div class="prio-modal" id="bindModal" onclick="if(event.target===this)closeBindModal()">
+  <div class="prio-box" style="width:540px">
+    <div class="prio-head">
+      <div><h3>绑定企业主体</h3><div class="sub" id="bindTarget"></div></div>
+      <button onclick="closeBindModal()" style="border:none;background:#ffffff;width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px;color:#6b7280">×</button>
+    </div>
+    <div style="padding:16px 20px;overflow:auto">
+      <div style="font-size:13px;color:#6e7991;margin-bottom:8px">中文候选（点击即绑定，仍经工商库精准核验）</div>
+      <div id="bindCn" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+      <div id="bindEnWrap" style="display:none;margin-bottom:14px">
+        <div style="font-size:13px;color:#6e7991;margin-bottom:6px">英文候选（国内公司请在下方填对应中文工商全称）</div>
+        <div id="bindEn"></div>
+      </div>
+      <input id="bindManual" type="text" placeholder="或直接填写企业工商全称（含地区前缀，如：深圳××科技有限公司）"
+             style="width:100%;padding:10px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:14px;outline:none;font-family:inherit;box-sizing:border-box">
+      <button onclick="doBind(document.getElementById('bindTarget').dataset.stem,'')"
+              style="margin-top:12px;width:100%;padding:10px;border:none;border-radius:10px;background:#3567ff;color:#fff;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">核验并绑定</button>
+    </div>
+  </div>
+</div>
+"""
+
+
 def audit_ui_html() -> str:
-    return '''<!DOCTYPE html>
+    # 企业性质分布注入：样式入 <style> 尾、区块入历史报告区上方、脚本入主 <script> 头（锚点在本模板内唯一）
+    return ('''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -3952,7 +6475,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
-.nav-dropdown-menu{position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:12px;padding:8px;min-width:200px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -4056,22 +6579,28 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
 .report-item{display:flex;align-items:center;gap:12px;padding:14px 16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.05);cursor:pointer;transition:all .15s;border:2px solid transparent}
 .report-item:hover{border-color:#3567ff;box-shadow:0 2px 8px rgba(0,113,227,.12)}
 .report-item.active{border-color:#3567ff;background:#f0f7ff}
-.report-item .badge-new{background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;flex-shrink:0}
-.report-item .badge-grade{font-size:13px;font-weight:700;color:#fff;padding:2px 10px;border-radius:10px;flex-shrink:0;min-width:28px;text-align:center}
-.report-item .badge-brand{font-size:12px;font-weight:600;color:#3567ff;background:#eef0ff;padding:2px 8px;border-radius:6px;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.report-item .r-url{font-size:14px;color:#091026;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.report-item .r-score{font-size:20px;font-weight:700;flex-shrink:0;min-width:48px;text-align:right}
-.report-item .r-time{font-size:12px;color:#6e7991;flex-shrink:0;min-width:100px;text-align:right}
-.report-item .r-tokens{position:relative;font-size:11px;font-weight:600;color:#5C3CF1;background:#5C3CF11a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
+.report-item .badge-new{background:#ef4444;color:#fff;font-size:13px;font-weight:700;padding:1px 6px;border-radius:8px;flex-shrink:0}
+.report-item .badge-grade{font-size:13px;font-weight:700;color:#fff;padding:2px 6px;border-radius:6px;flex-shrink:0}
+.report-item .badge-brand{font-size:13px;font-weight:600;color:#3567ff;background:#eef0ff;padding:2px 8px;border-radius:6px;flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.report-item .r-url{font-size:13px;color:#091026;font-weight:500;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.report-item .r-score{font-size:13px;font-weight:700;flex-shrink:0;min-width:48px;text-align:right;margin-left:auto}
+.report-item .r-time{font-size:13px;color:#6e7991;flex-shrink:0;min-width:100px;text-align:right}
+.report-item .r-tokens{position:relative;font-size:13px;font-weight:600;color:#5C3CF1;background:#5C3CF11a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
 .report-item .r-tokens .tok-tip{display:none;position:absolute;top:calc(100% + 6px);right:0;background:#091026;color:#fff;font-size:11px;font-weight:400;padding:5px 10px;border-radius:6px;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.18);pointer-events:none}
 .report-item .r-tokens:hover .tok-tip{display:block}
-.report-item .r-stats{font-size:11px;color:#6e7991;flex-shrink:0}
+.report-item .r-stats{font-size:13px;color:#6e7991;flex-shrink:0;margin-left:auto;position:relative;cursor:default}
+.report-item .r-stats-tip{display:none;position:absolute;top:calc(100% + 6px);right:0;background:#091026;color:#fff;font-size:11px;font-weight:400;padding:5px 10px;border-radius:6px;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.18);pointer-events:none}
+.report-item .r-stats:hover .r-stats-tip{display:block}
 .report-item .r-stats .s-pass{color:#16a34a}
 .report-item .r-stats .s-warn{color:#d97706}
 .report-item .r-stats .s-fail{color:#dc2626}
+.report-item .r-stats ~ .r-score{margin-left:0}
 .report-item .btn-del{flex-shrink:0;width:28px;height:28px;border:none;border-radius:8px;background:transparent;color:#a0a9bd;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s}
 .report-item .btn-del:hover{background:#fef2f2;color:#dc2626}
 .report-item .btn-del.confirming{background:#dc2626;color:#fff;font-size:11px;font-weight:600}
+.btn-cancel{flex-shrink:0;border:1px solid #eff1f6;background:#fff;color:#6e7991;border-radius:8px;padding:4px 12px;font-size:12px;cursor:pointer;font-family:inherit;transition:all .15s}
+.btn-cancel:hover{background:#fef2f2;color:#dc2626;border-color:#f3b2b2}
+.btn-cancel.confirming{background:#dc2626;color:#fff;border-color:#dc2626;font-weight:600}
 
 .btn-dbl{display:inline-flex;justify-content:center;align-items:center;border-radius:1rem;padding:1px;position:relative;overflow:hidden;text-decoration:none;cursor:pointer;transition:transform .3s;font-family:inherit}
 .btn-dbl:hover{transform:scale3d(.98,.98,1.01)}
@@ -4098,7 +6627,6 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
 /* 顶部 hero 卡片（参考 about 页 hero 规格） */
 .hero-card{background-color:#091026;background-image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNjAiIGhlaWdodD0iMjYwIiB2aWV3Qm94PSIwIDAgMjYwIDI2MCI+PGNpcmNsZSBjeD0iMjI5LjMiIGN5PSI2NS45IiByPSIwLjU4IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjM4Ii8+PGNpcmNsZSBjeD0iMTg2LjMiIGN5PSIxNDcuNCIgcj0iMS4xMSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4xNSIvPjxjaXJjbGUgY3g9IjQ4LjciIGN5PSIzMy42IiByPSIxLjAxIiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQyIi8+PGNpcmNsZSBjeD0iOTQuOCIgY3k9IjI0LjAiIHI9IjEuMDQiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMjIiLz48Y2lyY2xlIGN4PSIzNi43IiBjeT0iNzEuNSIgcj0iMC42MyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4yOSIvPjxjaXJjbGUgY3g9IjIwNS4zIiBjeT0iMTc1LjAiIHI9IjEuMTkiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMzUiLz48Y2lyY2xlIGN4PSIxNDcuNCIgY3k9IjQ0LjEiIHI9IjAuOTYiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMzUiLz48Y2lyY2xlIGN4PSIyNTQuMiIgY3k9IjIuMSIgcj0iMC43NSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zOCIvPjxjaXJjbGUgY3g9IjY3LjMiIGN5PSIyNTcuMSIgcj0iMC42MiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zIi8+PGNpcmNsZSBjeD0iMTMwLjciIGN5PSI4Ny4wIiByPSIxLjIiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuMyIvPjxjaXJjbGUgY3g9IjE3Ni4wIiBjeT0iMTU3LjgiIHI9IjEuMTYiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNDUiLz48Y2lyY2xlIGN4PSIyMTAuNCIgY3k9IjE3My45IiByPSIwLjQ3IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQzIi8+PGNpcmNsZSBjeD0iMjAyLjIiIGN5PSIxOTcuOCIgcj0iMC44NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNCIvPjxjaXJjbGUgY3g9IjYwLjEiIGN5PSIyMTQuMyIgcj0iMC42NCIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40NiIvPjxjaXJjbGUgY3g9IjE3OC43IiBjeT0iMTE2LjUiIHI9IjEuMTQiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNDkiLz48Y2lyY2xlIGN4PSI4NS4xIiBjeT0iNTguNSIgcj0iMC41NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40Ii8+PGNpcmNsZSBjeD0iMTgxLjAiIGN5PSI3My41IiByPSIwLjQ4IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjIxIi8+PGNpcmNsZSBjeD0iODYuOCIgY3k9IjE2NC4zIiByPSIwLjg5IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQzIi8+PGNpcmNsZSBjeD0iMTIwLjMiIGN5PSIyMzAuMiIgcj0iMS4yIiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjE4Ii8+PGNpcmNsZSBjeD0iMTUuMyIgY3k9IjEzMy40IiByPSIwLjg3IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjQ4Ii8+PGNpcmNsZSBjeD0iMTM3LjUiIGN5PSIyMzAuNSIgcj0iMC40NyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4yNiIvPjxjaXJjbGUgY3g9IjE4OC4yIiBjeT0iOTYuMCIgcj0iMC42MyIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC40NiIvPjxjaXJjbGUgY3g9IjEyNS43IiBjeT0iMjguMiIgcj0iMC42NSIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNCIvPjxjaXJjbGUgY3g9IjkxLjYiIGN5PSIyMjEuMyIgcj0iMC41NiIgZmlsbD0iI2E4YzRmZiIgb3BhY2l0eT0iMC4zNSIvPjxjaXJjbGUgY3g9IjE3Mi4yIiBjeT0iMjE2LjciIHI9IjAuNzgiIGZpbGw9IiNhOGM0ZmYiIG9wYWNpdHk9IjAuNCIvPjxjaXJjbGUgY3g9Ijk5LjMiIGN5PSI0Ny44IiByPSIwLjQ5IiBmaWxsPSIjYThjNGZmIiBvcGFjaXR5PSIwLjEyIi8+PC9zdmc+"),radial-gradient(circle at 80% 118%, rgba(56,86,196,.85) 0%, rgba(9,16,38,0) 58%),radial-gradient(circle at 10% -12%, rgba(30,50,128,.6) 0%, rgba(9,16,38,0) 55%),linear-gradient(168deg, #0e1638 0%, #152964 58%, #203e98 100%);background-size:260px 260px,auto,auto,100% 100%;background-repeat:repeat,no-repeat,no-repeat,no-repeat;background-position:0 0,center,center,center;border-radius:40px;padding:40px;text-align:left;color:#f7f9fc;margin-bottom:24px}
 .hero-title{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;font-size:1.5rem;font-weight:600;line-height:1.15;color:#fff;margin:0 0 16px}
-.hero-ver{font-size:1rem;font-weight:600;color:#fff}
 .hero-desc{font-size:14px;line-height:1.5;color:#c3cad8;margin:0 0 24px}
 .hero-card .audit-form{background:transparent;border:none;box-shadow:none;padding:0;margin:0}
 .hero-card .audit-form input{background:rgba(255,255,255,.1);border:none;color:#fff}
@@ -4108,24 +6636,35 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
 </head>
 <body>
 <nav class="topnav">
-  <a href="/?method=customer_market_research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
+  <a href="/research" class="brand-logo"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识"></a>
   <div class="nav-dropdown">
     <div class="nav-dropdown-toggle"><span>分析</span>
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
-      <a href="/?method=geo_query_mining">GEO搜索问句挖掘</a>
-      <a href="/?method=customer_market_research">客户市场调研</a>
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
     </div>
   </div>
   <a href="/audit" class="active">官网诊断</a>
   <a href="/chat">对话</a>
-  <a href="/skills">Skill管理</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
 <!--标注汇总入口暂时隐藏-->
 </nav>
   <div class="wrap">
   <section class="hero-card">
-    <h1 class="hero-title"><span style="display:flex;align-items:center;gap:8px">GEO 官网诊断 <a class="btn-prio-mini" onclick="openPrioModal()" role="button" tabindex="0">优先级配置</a></span><span class="hero-ver">Version {{engine_version}}</span></h1>
+    <h1 class="hero-title"><span style="display:flex;align-items:center;gap:8px">GEO 官网诊断 <a class="btn-prio-mini" onclick="openPrioModal()" role="button" tabindex="0">优先级配置</a></span></h1>
     <p class="hero-desc">输入官网网址，自动抽样抓取内页，从技术可抓取性、AI友好度、内容质量、权威信任、商业转化与决策内容 5 个维度执行数十项检查（含断链、重复元信息、关键词蚕食等跨页面检测）并生成诊断报告</p>
 
     <div class="audit-form">
@@ -4156,7 +6695,7 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
   <div class="history-section">
     <div class="rp-head">
       <h3>历史报告</h3>
-      <input class="rp-search" id="rpSearch" type="text" placeholder="搜索网址 / 品牌 / 文件名…" oninput="rpPickSearch(this.value)">
+      <input class="rp-search" id="rpSearch" type="text" placeholder="搜索网址 / 品牌……" oninput="rpPickSearch(this.value)">
     </div>
     <div class="report-list" id="reportList">
       <div style="text-align:center;color:#6e7991;font-size:13px;padding:20px">加载中…</div>
@@ -4305,13 +6844,17 @@ function rpRender(activeFile){
     const time = r.timestamp || r.mtime || '';
     const isNew = r.html_file === latestFile && !activeFile;
     const isActive = r.html_file === currentReportFile;
-    const stats = r.total ? '<span class="r-stats">✓<span class="s-pass">'+r.pass+'</span> ⚠<span class="s-warn">'+r.warn+'</span> ✕<span class="s-fail">'+r.fail+'</span></span>' : '';
+    const stats = r.total ? '<span class="r-stats">✓<span class="s-pass">'+r.pass+'</span> ⚠<span class="s-warn">'+r.warn+'</span> ✕<span class="s-fail">'+r.fail+'</span>'+
+      '<span class="r-stats-tip">检测项统计：合格 '+r.pass+' 项 · 不足 '+r.warn+' 项 · 不合格 '+r.fail+' 项（共 '+r.total+' 项）</span></span>' : '';
     const brandTag = r.brand_name ? '<span class="badge-brand">'+r.brand_name+'</span>' : '';
     const tokenTag = r.cost !== undefined ? '<span class="r-tokens">token支出：¥'+(r.cost*1000 < 0.01 ? (r.cost*1000).toFixed(3) : (r.cost*1000).toFixed(2))+'<span class="tok-tip">LLM调用 '+(r.token_calls*10)+' 次 · 共消耗 '+(r.tokens*1000+Math.floor(Math.random()*900)+100).toLocaleString()+' tokens</span></span>' : '';
+    var bindTag = r.company ? '<span class="badge-bind done">企业已绑</span>'
+      : '<button class="btn-bind" data-bind="'+r.html_file+'" title="'+((r.company_candidates||[]).length?'多家候选或英文名，点选企业主体':'未提取到公司名，可手动填写企业全称绑定')+'">企业待绑</button>';
     r._html='<div class="report-item'+(isActive?' active':'')+'" data-file="'+r.html_file+'">'+
       (isNew ? '<span class="badge-new">最新</span>' : '')+
       brandTag+
       '<span class="r-url">'+url+'</span>'+
+      bindTag+
       stats+
       '<span class="r-score" style="color:'+gc+'">'+score+'</span>'+
       '<span class="badge-grade" style="background:'+gc+'">'+grade+'</span>'+
@@ -4335,6 +6878,12 @@ function rpRender(activeFile){
     btn.addEventListener('click', function(e){
       e.stopPropagation();
       handleDelete(this);
+    });
+  });
+  listEl.querySelectorAll('.btn-bind').forEach(function(btn){
+    btn.addEventListener('click', function(e){
+      e.stopPropagation();
+      openBindModal(btn.getAttribute('data-bind').replace(/\.html$/, ''));
     });
   });
   // 如果有激活项，自动展开
@@ -4393,7 +6942,7 @@ async function pollJobs(){
     const jobs=d.jobs||[];
     const panel=document.getElementById('jobsPanel');
     if(!jobs.length){ panel.style.display='none'; _jobsDismissed=false; _jobsWasActive=false; return; }
-    if(d.active===0 && _jobsWasActive){ _jobsWasActive=false; loadReportList(currentReportFile); }  // 任务全部收尾：刷新历史列表
+    if(d.active===0 && _jobsWasActive){ _jobsWasActive=false; loadReportList(currentReportFile); loadNature(); }  // 任务全部收尾：刷新历史列表+分布图
     if(d.active>0){ _jobsWasActive=true; _jobsDismissed=false; }
     if(_jobsDismissed){ panel.style.display='none'; return; }
     panel.style.display='block';
@@ -4606,12 +7155,381 @@ loadReportList();
 })();
 </script>
 </body>
-</html>'''.replace('{{engine_version}}', ENGINE_VERSION)
+</html>'''
+           .replace('__ver__', VER_LABEL)
+           .replace('</style>', _AUDIT_NATURE_CSS + '</style>', 1)
+           .replace('<div class="history-section">', _AUDIT_NATURE_HTML + '  <div class="history-section">', 1)
+           .replace('<script>', '<script>\n' + _AUDIT_NATURE_JS, 1)
+           .replace('<div class="prio-modal" id="batchModal"', _AUDIT_BIND_HTML + '<div class="prio-modal" id="batchModal"', 1))
 
 
 @app.get("/audit", response_class=HTMLResponse)
 async def audit_ui():
     return audit_ui_html()
+
+
+# ── 企业资料（公司档案库浏览）──────────────────────
+
+@app.get("/api/company/list")
+async def company_list():
+    from company_cache import list_companies
+    return {"companies": list_companies()}
+
+
+@app.get("/api/company/detail")
+async def company_detail(id: str):
+    from company_cache import get_company_by_id
+    info, created, updated = get_company_by_id(id)
+    if info is None:
+        return JSONResponse({"error": "客户不存在或已被删除"}, status_code=404)
+    # 三源聚合：工商档案 + 问句挖掘板块 + 官网检测快照（按档案 domains 关联）
+    from company_cache import get_mining_by_id, list_audit_snapshots
+    mining, mining_ts = get_mining_by_id(id)
+    audits = list_audit_snapshots(id)  # 快照按企业身份归属查询
+    return {"id": id, "name": info.get("full_name") or id,
+            "created": created, "updated": updated, "info": info,
+            "mining": mining or None, "mining_updated": mining_ts, "audits": audits}
+
+
+@app.get("/api/company/data")
+async def company_data(id: str = "", name: str = ""):
+    """对外数据 API：按企业 id 或名称（归一匹配）一次返回 档案+挖掘+检测 三源数据。"""
+    if not id and name:
+        from company_cache import get_info, _conn, _match_id
+        with _conn() as c:
+            id = _match_id(name, c.cursor()) or ""
+    if not id:
+        return JSONResponse({"error": "缺少 id 或 name 参数，或客户不存在"}, status_code=404)
+    return await company_detail(id)
+
+
+COMPANY_DELETE_PWD = "888888"
+
+
+class CompanyDeleteReq(PydanticModel):
+    pwd: str = ""
+
+
+@app.delete("/api/company/{company_id:path}")
+async def company_delete(company_id: str, req: CompanyDeleteReq):
+    """删除企业档案（连带问句挖掘板块）。密码走请求体，不进URL/访问日志。"""
+    if req.pwd != COMPANY_DELETE_PWD:
+        raise HTTPException(status_code=403, detail="管理密码错误")
+    from company_cache import delete_company
+    # 先取名称再删：删完行就查不到了
+    from company_cache import get_company_by_id
+    _row = get_company_by_id(company_id)
+    _cname = (_row[0] or {}).get("full_name") if _row and _row[0] else company_id
+    if not delete_company(company_id):
+        return JSONResponse({"error": "客户不存在或已被删除"}, status_code=404)
+    _log_op("企业资料", "删除企业档案", _cname, company_id)
+    return {"ok": True}
+
+
+@app.get("/company", response_class=HTMLResponse)
+async def company_ui():
+    from company_ui import company_page_html
+    return company_page_html().replace('__ver__', VER_LABEL)
+
+
+@app.get("/changelog", response_class=HTMLResponse)
+async def changelog_ui():
+    """版本说明页：读取 versions/<当前版本号>.md 渲染。文件缺失时给出提示，不报错。"""
+    import html as _h
+    doc = BASE_DIR / "versions" / f"{MR_ENGINE_VERSION}.md"
+    if doc.exists():
+        body = _md_to_html(doc.read_text(encoding="utf-8"))
+    else:
+        body = ('<p style="color:#a0a9bd">当前版本 '
+                + _h.escape(MR_ENGINE_VERSION)
+                + ' 暂无更新说明（versions/ 目录缺少对应文档）。</p>')
+    return f'''<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__ver__</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5ff;color:#091026;line-height:1.7}}
+.topnav{{display:flex;gap:24px;justify-content:flex-end;align-items:center;padding:24px;max-width:1200px;margin:0 auto;position:relative}}
+.topnav a{{font-size:16px;font-weight:400;text-decoration:none;color:#6e7991;transition:color .2s}}
+.topnav a:hover{{color:#091026}}
+.nav-dropdown{{position:relative}}
+.nav-dropdown-toggle{{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:400;color:#6e7991;cursor:pointer}}
+.nav-dropdown-toggle.active{{color:#091026;font-weight:600}}
+.nav-dropdown:hover .nav-dropdown-toggle{{color:#091026}}
+.nav-arrow{{width:1rem;height:1rem;transition:transform .2s}}
+.nav-dropdown:hover .nav-arrow{{transform:rotate(180deg)}}
+.nav-dropdown-menu{{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}}
+.nav-dropdown:hover .nav-dropdown-menu{{display:block}}
+.nav-dropdown-menu a{{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap}}
+.nav-dropdown-menu a:hover{{background:#f4f5ff;color:#091026}}
+.nav-dropdown::after{{content:"";position:absolute;left:0;right:0;top:100%;height:12px}}
+.page{{max-width:820px;margin:0 auto;padding:8px 24px 60px}}
+.card{{background:#fff;border-radius:1rem;padding:28px 32px;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a}}
+.card h1{{font-size:1.4rem;margin-bottom:6px}}
+.card h2{{font-size:1.05rem;margin:18px 0 6px}}
+.card p{{margin:8px 0;color:#3d4664}}
+.card ul,.card ol{{margin:8px 0 8px 22px}}
+.card li{{margin:4px 0;color:#3d4664}}
+.card strong{{color:#091026}}
+.card code{{background:#f4f5ff;padding:1px 6px;border-radius:4px}}
+</style></head><body>
+<nav class="topnav">
+  <a href="/research" class="brand-logo" style="position:absolute;left:24px;top:50%;transform:translateY(-50%)"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识" style="height:32px"></a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>分析</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
+    </div>
+  </div>
+  <a href="/audit">官网诊断</a>
+  <a href="/chat">对话</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle active"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog" class="active">__ver__</a>
+    </div>
+  </div>
+</nav>
+<div class="page"><div class="card">{body}</div></div>
+</body></html>'''.replace('__ver__', VER_LABEL)
+
+
+@app.get("/oplog", response_class=HTMLResponse)
+async def oplog_ui():
+    """操作日志页：各页面客户资料创建/更新/删除的留痕，时间倒序，可按页面过滤。"""
+    return '''<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>操作日志 — GEO Agent</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5ff;color:#091026;line-height:1.7}
+.topnav{display:flex;gap:24px;justify-content:flex-end;align-items:center;padding:24px;max-width:1200px;margin:0 auto;position:relative}
+.topnav a{font-size:16px;font-weight:400;text-decoration:none;color:#6e7991;transition:color .2s}
+.topnav a:hover{color:#091026}
+.nav-dropdown{position:relative}
+.nav-dropdown-toggle{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:400;color:#6e7991;cursor:pointer}
+.nav-dropdown-toggle.active{color:#091026;font-weight:600}
+.nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
+.nav-arrow{width:1rem;height:1rem;transition:transform .2s}
+.nav-dropdown:hover .nav-arrow{transform:rotate(180deg)}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown:hover .nav-dropdown-menu{display:block}
+.nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap}
+.nav-dropdown-menu a:hover{background:#f4f5ff;color:#091026}
+.nav-dropdown::after{content:"";position:absolute;left:0;right:0;top:100%;height:12px}
+.page{max-width:980px;margin:0 auto;padding:8px 24px 60px}
+.card{background:#fff;border-radius:1rem;padding:28px 32px;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a}
+.card h1{font-size:1.4rem;margin-bottom:4px}
+.sub{color:#6e7991;font-size:13px;margin-bottom:16px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.filters button{border:1px solid #eff1f6;background:#fff;border-radius:8px;padding:5px 14px;font-size:13px;color:#6e7991;cursor:pointer;font-family:inherit}
+.filters button.on{background:#091026;color:#fff;border-color:#091026}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:#6e7991;font-weight:500;padding:8px 10px;border-bottom:1px solid #eff1f6;white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid #f4f5ff;vertical-align:top;color:#3d4664}
+td.brand{color:#091026;font-weight:600;word-break:break-all}
+td.detail{color:#6e7991;word-break:break-all;min-width:200px}
+.empty{color:#a0a9bd;padding:24px 0;text-align:center}
+</style></head><body>
+<nav class="topnav">
+  <a href="/research" class="brand-logo" style="position:absolute;left:24px;top:50%;transform:translateY(-50%)"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识" style="height:32px"></a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>分析</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
+    </div>
+  </div>
+  <a href="/audit">官网诊断</a>
+  <a href="/chat">对话</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle active"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
+</nav>
+<div class="page"><div class="card">
+<h1>操作日志</h1>
+<div class="sub">各页面对客户资料的创建、更新、删除操作留痕（时间倒序，最多 300 条）</div>
+<div class="filters" id="filters"></div>
+<div id="body"><div class="empty">加载中…</div></div>
+</div></div>
+<script>
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+let all=[], cur='';
+async function load(){
+  const d=await (await fetch('/api/oplog?limit=300')).json();
+  all=d.ops||[];
+  const pages=[...new Set(all.map(o=>o.page))];
+  const f=document.getElementById('filters');
+  f.innerHTML='<button class="'+(cur===''?'on':'')+'" onclick="setPage(\\'\\')">全部</button>'+
+    pages.map(p=>'<button class="'+(cur===p?'on':'')+'" onclick="setPage(\\''+esc(p)+'\\')">'+esc(p)+'</button>').join('');
+  render();
+}
+function setPage(p){cur=p;load();}
+function render(){
+  const rows=all.filter(o=>!cur||o.page===cur);
+  document.getElementById('body').innerHTML = rows.length
+    ? '<table><thead><tr><th>时间</th><th>页面</th><th>操作</th><th>客户/对象</th><th>说明</th></tr></thead><tbody>'+
+      rows.map(o=>'<tr><td>'+esc(o.ts)+'</td><td>'+esc(o.page)+'</td><td>'+esc(o.action)+'</td>'+
+        '<td class="brand">'+esc(o.brand)+'</td><td class="detail">'+esc(o.detail)+'</td></tr>').join('')+
+      '</tbody></table>'
+    : '<div class="empty">暂无日志</div>';
+}
+load();
+</script>
+</body></html>'''.replace('__ver__', VER_LABEL)
+
+
+# ── JSON数据补录入库（存量报告 → 企业资料库）──────────
+
+def _load_backfill():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "backfill_company", BASE_DIR / "scripts" / "backfill_company.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@app.get("/api/backfill/preview")
+async def backfill_preview():
+    rows = _load_backfill().run_backfill(apply=False)
+    return {"rows": rows, "new": sum(1 for r in rows if r["new"])}
+
+
+@app.post("/api/backfill/apply")
+async def backfill_apply():
+    rows = _load_backfill().run_backfill(apply=True)
+    _log_op("JSON数据补录入库", "补录入库",
+            f"{len(rows)} 家客户（新建 {sum(1 for r in rows if r['new'])} 家）",
+            "；".join(r["name"] for r in rows))
+    return {"rows": rows, "new": sum(1 for r in rows if r["new"])}
+
+
+BACKFILL_JS = """
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function table(rows,applied){
+  return '<table><thead><tr><th>客户</th><th>报告</th><th>字段数</th><th>动作</th></tr></thead><tbody>'+
+    rows.map(r=>'<tr><td>'+esc(r.name)+'</td><td>'+esc(r.report.slice(-15,-5))+'</td><td>'+r.fields+'</td>'+
+      '<td>'+(r.new?(applied?'<b class=ok>已新建</b>':'<b>新建</b>'):(applied?'已合并':'字段级合并'))+'</td></tr>').join('')+
+    '</tbody></table>';
+}
+async function preview(){
+  document.getElementById('ops').style.display='none';
+  document.getElementById('body').innerHTML='<p style=color:#6e7991>扫描报告数据中…</p>';
+  const d=await (await fetch('/api/backfill/preview')).json();
+  document.getElementById('body').innerHTML=
+    '<p>共 '+d.rows.length+' 份报告数据待写入（其中新建客户 '+d.new+' 家）。写入为字段级合并、可重复执行，不会删除已有数据。</p>'+
+    table(d.rows,false);
+  document.getElementById('ops').style.display='flex';
+}
+async function apply(){
+  if(!confirm('确认执行入库？'))return;
+  const btn=document.getElementById('goBtn'); btn.disabled=true; btn.textContent='写入中…';
+  const d=await (await fetch('/api/backfill/apply',{method:'POST'})).json();
+  document.getElementById('body').innerHTML=
+    '<p><b class=ok>✅ 入库完成</b>：'+d.rows.length+' 条写入，新建客户 '+d.new+' 家。<a href="/company">到企业资料查看 →</a></p>'+
+    table(d.rows,true);
+  document.getElementById('ops').style.display='none'; btn.disabled=false; btn.textContent='执行入库';
+}
+preview();
+"""
+
+
+@app.get("/backfill", response_class=HTMLResponse)
+async def backfill_ui():
+    tpl = '''<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JSON数据补录入库</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f4f5ff;color:#091026;line-height:1.7}
+.topnav{display:flex;gap:24px;justify-content:flex-end;align-items:center;padding:24px;max-width:1200px;margin:0 auto;position:relative}
+.topnav a{font-size:16px;font-weight:400;text-decoration:none;color:#6e7991;transition:color .2s}
+.topnav a:hover{color:#091026}
+.nav-dropdown{position:relative}
+.nav-dropdown-toggle{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:400;color:#6e7991;cursor:pointer}
+.nav-dropdown-toggle.active{color:#091026;font-weight:600}
+.nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
+.nav-arrow{width:1rem;height:1rem;transition:transform .2s}
+.nav-dropdown:hover .nav-arrow{transform:rotate(180deg)}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+.nav-dropdown:hover .nav-dropdown-menu{display:block}
+.nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap}
+.nav-dropdown-menu a:hover{background:#f4f5ff;color:#091026}
+.nav-dropdown::after{content:"";position:absolute;left:0;right:0;top:100%;height:12px}
+.page{max-width:900px;margin:0 auto;padding:8px 24px 60px}
+.card{background:#fff;border-radius:1rem;padding:28px 32px;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a}
+h1{font-size:1.3rem;margin-bottom:6px}
+p{margin:8px 0;color:#3d4664;font-size:14px}
+a{color:#3567ff}
+table{width:100%;border-collapse:collapse;margin-top:14px}
+th{background:#eff1f6;text-align:left;padding:9px 12px;font-size:13px;color:#6e7991}
+td{padding:9px 12px;border-top:1px solid #eff1f6;font-size:14px}
+b{color:#c0392b} b.ok{color:#155724}
+.ops{display:flex;gap:12px;margin-top:18px}
+.ops button{padding:9px 22px;border-radius:10px;border:none;font-size:14px;font-weight:600;cursor:pointer}
+#goBtn{background:#3567ff;color:#fff} #goBtn:disabled{opacity:.5}
+#reBtn{background:#eef1f7;color:#556}
+</style></head><body>
+<nav class="topnav">
+  <a href="/research" class="brand-logo" style="position:absolute;left:24px;top:50%;transform:translateY(-50%)"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识" style="height:32px"></a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>分析</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
+    </div>
+  </div>
+  <a href="/audit">官网诊断</a>
+  <a href="/chat">对话</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle active"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill" class="active">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
+</nav>
+<div class="page"><div class="card">
+  <h1>JSON数据补录入库</h1>
+  <p>把 var/output 里已生成调研报告的画像数据，按新版规则补录进企业资料库（var/data/company_info.db）：字段级合并（非空覆盖）、首次来源只写一次、触点记为「客户市场调研」。可重复执行。</p>
+  <div id="body"></div>
+  <div class="ops" id="ops" style="display:none">
+    <button id="goBtn" onclick="apply()">执行入库</button>
+    <button id="reBtn" onclick="preview()">重新扫描</button>
+  </div>
+</div></div>
+<script>__JS__</script>
+</body></html>'''
+    return (tpl.replace("__JS__", BACKFILL_JS)
+               .replace("__ver__", VER_LABEL))
 
 
 # ── CLI Entry ──────────────────────────────────────────

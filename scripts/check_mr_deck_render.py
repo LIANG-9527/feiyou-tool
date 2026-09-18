@@ -73,7 +73,7 @@ assert _mr_deck_slides_html("非json{") == "" and _mr_deck_slides_html({"slides"
 
 tpl = (Path(__file__).parent.parent / "skills" / "mr_report_template.html").read_text(encoding="utf-8")
 assert ".sb-kw.d1" in tpl and ".sb-tablewrap th" in tpl, "模板构件CSS已就位"
-out = (Path(__file__).parent.parent / "output" / "_deck_preview.html")
+out = (Path(__file__).parent.parent / "var" / "output" / "_deck_preview.html")
 out.write_text(tpl.replace("__TITLE__", "版式预览").replace("__META__", "自检产物").replace("__SLIDES__", h)
                .replace("__TOTAL_PAGES__", "7").replace("__BRIEF__", "").replace("__REPORT__", ""), encoding="utf-8")
 print("OK", len(h), "chars →", out)

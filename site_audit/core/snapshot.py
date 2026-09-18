@@ -17,7 +17,8 @@ def save_snapshot(output_dir, name: str, pages: list, ai_engine=None) -> str:
     """把本次诊断的快照落盘。失败不阻断诊断，返回空串。
 
     - pages.json：每个被检页面（首页+抽样内页）的 URL/final_url/status_code
-      及结构化抽取内容（_extract_content 产出，即各 AI 检查实际看到的输入）
+      及结构化抽取内容（_extract_content 产出，即各 AI 检查实际看到的输入）；
+      顶层带 note 说明正文为有损摘要，防止调试时误当页面全文
     - llm_raw.json：本次诊断全部 LLM 调用的 system/user prompt 与原始响应
       （仅配置了 AI 引擎时生成）
     - search_raw.json：外部数据通道原始查询响应（百科品牌实体词条页正文片段等），
@@ -40,7 +41,12 @@ def save_snapshot(output_dir, name: str, pages: list, ai_engine=None) -> str:
                     "error": f"内容抽取失败: {e}",
                 })
         (snap_dir / "pages.json").write_text(
-            json.dumps(pages_snap, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps({
+                "note": "说明：正文(body_text)为有损摘要——仅收录正文段落、上限6000字，"
+                        "并剔除页眉/页脚/导航/侧栏等模板区，不代表页面全文；"
+                        "核验页脚或整站内容请以现场抓取为准。",
+                "pages": pages_snap,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         if ai_engine is not None:
             (snap_dir / "llm_raw.json").write_text(

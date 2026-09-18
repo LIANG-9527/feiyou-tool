@@ -13,7 +13,6 @@ methods:
       - step3_5
       - step4
       - step5
-      - step6
     input_fields:
       - name: brand
         label: 企业/品牌名称

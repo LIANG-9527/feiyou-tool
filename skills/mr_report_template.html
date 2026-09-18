@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>__TITLE__ 报告模板</title>
 <style>
-/* 本文件：客户市场调研报告的三页签模板（企业画像 / 销售情报简报 / 完整背调报告），单文件离线可用。
+/* 本文件：客户市场调研报告的三页签模板（企业画像 / 销售情报简报 / 完整调研报告），单文件离线可用。
    注入点（后端替换，勿在本注释中原样书写）：TITLE / META / SLIDES / TOTAL_PAGES / REPORT 五个带双下划线的占位标记。
    SLIDES 处注入若干张幻灯 div（class slide，内含 slide-k 页标签 / slide-t 观点标题 / slide-b 正文）；
    REPORT 处为完整报告正文（h2/h3/table/ul/blockquote 等） */
@@ -36,7 +36,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 body.deck-active .deck-nav{display:flex}
 .deck-nav button{border:none;background:rgba(255,255,255,.14);color:#fff;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1}
 .deck-nav button:hover{background:rgba(255,255,255,.28)}
-#view-report{max-width:960px;margin:0 auto;padding:40px 24px;background:#fff;border-radius:0 0 24px 24px}
+#view-report{max-width:1080px;margin:0 auto;padding:40px 24px;background:#fff;border-radius:0 0 24px 24px}
 #view-report h2{font-size:20px;font-weight:600;margin:32px 0 14px;padding-bottom:8px;border-bottom:2px solid #3567ff}
 #view-report h3{font-size:16px;font-weight:600;margin:22px 0 10px}
 #view-report h4{font-size:15px;font-weight:600;margin:16px 0 8px}
@@ -80,17 +80,19 @@ body.deck-active .deck-nav{display:flex}
 .rpt-export{display:flex;align-items:center;gap:6px;padding:8px 14px;font-size:13px;font-weight:600;color:#334155;background:#fff;border:1px solid #e2e8f0;border-radius:10px;cursor:pointer;transition:all .15s;flex-shrink:0;text-decoration:none}
 
 /* 企业画像：intel-deck 模板风（选择器全部限定在 .pf 内，避免与正文样式冲突） */
-#view-brief{background:#f2f4f8;padding:26px 16px;min-height:calc(100vh - 84px)}
+#view-brief{background:#f2f4f8;padding:26px 24px;min-height:calc(100vh - 84px)}
 #view-brief .brief{max-width:none;padding:0;margin:0}
-#view-brief .pf{max-width:960px;margin:0 auto;padding:0}
+#view-brief .pf{max-width:1080px;margin:0 auto;padding:0}
 #view-brief .pf-head{background:#fff;border:1px solid #e8ecf3;border-radius:14px;padding:22px 26px;margin-bottom:16px}
 #view-brief .pf-card{background:#fff;border:1px solid #e8ecf3;border-radius:14px;padding:22px 26px;margin-bottom:16px;overflow:hidden}
+/* 模块标题统一：01公司基本面 / 02企业分支机构 / 03企业文化 / 04发展历程 */
+#view-brief .pf .pf-head .k,#view-brief .pf .pf-card>.ct{font-size:16px;font-weight:700;color:#3567ff;letter-spacing:0;margin-bottom:10px}
 #view-brief .pf .k{font-size:12px;color:#8a93a6;letter-spacing:1.5px;margin-bottom:6px}
 #view-brief .pf-head .t{font-size:22px;font-weight:700;margin-bottom:6px;color:#1a1d29}
 #view-brief .pf .igrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
 #view-brief .pf .info-table{width:100%;border-collapse:collapse;margin-bottom:16px}
-#view-brief .pf .info-table th{width:120px;background:#f2f5fa;color:#667;font-weight:600;text-align:left;padding:9px 12px;border:1px solid #e3e7ef;font-size:12px;white-space:nowrap;vertical-align:top}
-#view-brief .pf .info-table td{padding:9px 12px;border:1px solid #e3e7ef;color:#1a1d29;font-size:12.5px;line-height:1.6}
+#view-brief .pf .info-table th{width:120px;background:#f2f5fa;color:#667;font-weight:600;text-align:left;padding:9px 12px;border:1px solid #e3e7ef;font-size:12px;white-space:nowrap;vertical-align:middle}
+#view-brief .pf .info-table td{padding:9px 12px;border:1px solid #e3e7ef;color:#1a1d29;font-size:12.5px;line-height:1.6;vertical-align:middle}
 #view-brief .pf .iitem{display:flex;justify-content:space-between;gap:8px;padding:9px 12px;background:#f7f9fc;border-radius:8px;border:1px solid #e8ecf3}
 #view-brief .pf .iitem .k2{font-size:11px;color:#8a93a6;white-space:nowrap}
 #view-brief .pf .iitem .v{font-size:12px;font-weight:600;text-align:right;color:#1a1d29}
@@ -101,12 +103,15 @@ body.deck-active .deck-nav{display:flex}
 #view-brief .pf .org-row::before{content:'';position:absolute;top:0;left:12%;right:12%;height:1px;background:#c9d2e0}
 #view-brief .pf .org-cell{background:#fff;border:1.5px solid #3567ff;border-radius:8px;padding:6px 12px;font-size:11.5px;font-weight:600;color:#1d2b53;text-align:center;max-width:280px}
 #view-brief .pf .org-cell.sub{border-color:#c9d2e0;color:#556;font-weight:500;font-size:11px}
+#view-brief .pf .org-cell.dead{border-color:#cf1322;color:#cf1322;text-decoration:line-through;font-weight:500;font-size:11px}
 #view-brief .pf .org-cap{font-size:11px;color:#8a93a6;margin-bottom:4px}
 #view-brief .pf .tl{position:relative;padding-left:22px;margin:4px 0 10px}
 #view-brief .pf .tl::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:linear-gradient(#3567ff,#8b5cf6);border-radius:2px}
 #view-brief .pf .tl-i{position:relative;margin-bottom:10px}
 #view-brief .pf .tl-i::before{content:'';position:absolute;left:-21px;top:5px;width:8px;height:8px;border-radius:50%;background:#3567ff;border:2px solid #fff}
 #view-brief .pf .tl-y{font-size:11px;color:#3567ff;font-weight:700}
+#view-brief .pf #tlPin{position:relative;margin:6px 0 10px;padding:10px 34px 10px 14px;background:#f5f8ff;border:1px solid #c9d8ff;border-radius:10px;font-size:12.5px;line-height:1.7;color:#1a1d29;user-select:text}
+#view-brief .pf #tlPin .tl-pin-x{position:absolute;top:8px;right:12px;cursor:pointer;color:#858ca6;font-size:14px}
 #view-brief .pf .tl-x{font-size:12px;color:#445}
 #view-brief .pf .card{border:1px solid #e8ecf3;border-radius:12px;padding:14px;margin-top:14px}
 #view-brief .pf .card .ct{font-size:13px;font-weight:700;margin-bottom:8px;color:#1a1d29}
@@ -172,7 +177,7 @@ body.deck-active .deck-nav{display:flex}
 #view-deck .sb-st.y{background:rgba(34,197,94,.18);color:#7ee2a8}
 #view-deck .sb-st.n{background:rgba(255,255,255,.1);color:#a9b7d8}
 #view-deck .sb-st.q{background:rgba(255,209,102,.16);color:#ffd166}
-#view-deck .sb-kws{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+#view-deck .sb-kws{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 #view-deck .sb-kw{border-radius:10px;padding:10px 12px;border:1px solid transparent}
 #view-deck .sb-kw.d1{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.35)}
 #view-deck .sb-kw.d2{background:rgba(53,103,255,.14);border-color:rgba(109,148,255,.4)}
@@ -190,7 +195,7 @@ body.deck-active .deck-nav{display:flex}
   <nav class="rpt-tabs">
     <button type="button" data-view="brief" onclick="rptTab('brief')">企业画像</button>
     <button type="button" class="on" data-view="deck" onclick="rptTab('deck')">情报简报</button>
-    <button type="button" data-view="report" onclick="rptTab('report')">完整背调报告</button>
+    <button type="button" data-view="report" onclick="rptTab('report')">完整调研报告</button>
   </nav>
   <button type="button" class="rpt-export" title="把本报告保存为本地 HTML 文件（离线可看，双击即开）" onclick="downloadReport()">
     <svg style="width:14px;height:14px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>导出报告</button>
@@ -212,6 +217,7 @@ function rptTab(v){
   document.body.classList.toggle('deck-active',v==='deck');
   document.querySelectorAll('.rpt-tabs button').forEach(b=>b.classList.toggle('on',b.dataset.view===v));
   if(v==='deck')deckRender();
+  if(v==='brief'&&typeof __initTlGraph==='function')__initTlGraph();  // 可见后再量宽初始化时间线
 }
 document.addEventListener('keydown',e=>{if(!document.body.classList.contains('deck-active'))return;if(e.key==='ArrowRight')deckGo(1);if(e.key==='ArrowLeft')deckGo(-1);});
 function downloadReport(){
@@ -231,7 +237,6 @@ rptTab('deck');
   if(!tree||!tree.length||!tree[0].children||!tree[0].children.length)return;
   const st=document.getElementById('orgStatic');if(st)st.hidden=true;
   const gd=document.getElementById('orgGraph');gd.hidden=false;
-  gd.insertAdjacentHTML('beforebegin','<div class="org-cap">组织架构图（粉色圆点=有下级，点击展开/收起；青色=明细；悬停看说明）</div>');
   const chart=echarts.init(gd);
   chart.setOption({
     backgroundColor:'transparent',
@@ -250,6 +255,105 @@ rptTab('deck');
   });
   window.addEventListener('resize',()=>chart.resize());
 })();
+/* 发展历程：ECharts 蛇形时间线（数据来自 #tlData；CDN 失败保留静态列表）。
+   延迟到企业画像页签可见后初始化——隐藏态量不到真实容器宽度，节点会挤在左侧。
+   节点=事件点，标签三行（阶段名/详情截断10字/日期），悬浮 tooltip 显示完整详情 */
+function __initTlGraph(){
+  if(window.__tlDone)return;
+  const el=document.getElementById('tlData');
+  if(!el||typeof echarts==='undefined')return;
+  let items;try{items=JSON.parse(el.textContent)}catch(e){return}
+  if(!items||items.length<2)return;
+  window.__tlDone=true;
+  // 页签刚切换/首屏时容器宽度未定型，延迟至布局稳定后再量宽建图
+  setTimeout(function(){
+    _buildTl(items,document.getElementById('tlGraph'),document.getElementById('tlStatic'));
+  },350);
+}
+function _buildTl(items,gd,st){
+  if(!gd)return;
+  const go=()=>{
+    const G=window.G6;
+    if(!G)return;
+    if(!window.__snakeReg){
+      class SnakePolyline extends G.Polyline{
+        getPoints(attributes){
+          const [sp,tp]=this.getEndpoints(attributes,false);
+          if(sp[1]===tp[1])return [sp,tp];
+          const prevId=this.context.model.getRelatedEdgesData(this.sourceNode.id)
+            .filter((e)=>e.target===this.sourceNode.id)[0]?.source;
+          if(!prevId)return [sp,tp];
+          const prev=G.positionOf(this.context.model.getNodeLikeDatum(prevId));
+          const offset=-(prev[0]-sp[0])/4;
+          return [sp,[sp[0]+offset,sp[1]],[tp[0]+offset,tp[1]],tp];
+        }
+      }
+      G.register(G.ExtensionCategory.EDGE,'s-polyline',SnakePolyline);
+      window.__snakeReg=true;
+    }
+    if(window.__tlChart){try{window.__tlChart.destroy()}catch(e){}}
+    const cols=items.length>6?Math.ceil(items.length/3):4,rh=150,pad=60;
+    const pf=document.querySelector('#view-brief .pf');
+    const W=(pf?pf.clientWidth:1080)-54||1026,cw=Math.floor((W-2*pad)/cols);
+    const nodes=[],edges=[];
+    items.forEach((it,i)=>{
+      const row=Math.floor(i/cols);
+      const col=(row%2===0)?i%cols:(cols-1-i%cols);
+      const tag=it.tag||it.date||'';
+      const ev=(it.event||'');
+      const evShort=ev.length>10?ev.slice(0,10)+'…':ev;
+      nodes.push({id:'t'+i,data:{name:tag,date:it.date||'',detail:ev,evShort},
+        style:{x:pad+col*cw+Math.floor(cw/2),y:70+row*rh}});
+      if(i>0)edges.push({source:'t'+(i-1),target:'t'+i});
+    });
+    gd.style.height=(Math.ceil(items.length/cols)*rh+80)+'px';
+    gd.hidden=false;  // G6 初始化需要容器可见定宽；渲染失败再隐藏
+    try{
+      const graph=new G.Graph({
+        container:gd,autoResize:true,zoomRange:[0.6,1.4],
+        data:{nodes,edges},
+        node:{style:{
+          fill:'#1783ff',size:10,stroke:'lightblue',lineWidth:2,
+          labelText:(d)=>d.data.name+'\n'+d.data.evShort+'\n'+d.data.date,
+          labelFill:'#42506b',labelFontSize:11,labelLineHeight:17,
+          labelPlacement:'bottom',labelOffsetY:12
+        }},
+        edge:{type:'s-polyline',style:{stroke:'#1783ff',lineWidth:3}},
+        plugins:[{type:'tooltip',trigger:'hover',
+          getContent:(e,els)=>{
+            const d=(els&&els[0]&&els[0].data)||{};
+            return '<div style="max-width:340px;line-height:1.6"><b>'+(d.name||'')+'　'+(d.date||'')+'</b><br>'+(d.detail||'')+'</div>';}
+        }],
+      });
+      graph.render().then(()=>{
+        window.__tlChart=graph;
+        if(st)st.hidden=true;
+        gd.hidden=false;
+        // 点击节点固定详情（可复制）。ponytail: G6 v5 node:click 在嵌入层不触发，改按坐标就近命中，阈值 40px
+        gd.addEventListener('click',(ev)=>{
+          const rect=gd.getBoundingClientRect();
+          const x=ev.clientX-rect.left, y=ev.clientY-rect.top;
+          let best=null,bd=40*40;
+          nodes.forEach(n=>{const dx=n.style.x-x,dy=n.style.y-y,d=dx*dx+dy*dy; if(d<bd){bd=d;best=n}});
+          const pin=document.getElementById('tlPin');
+          if(!best||!pin)return;
+          const dd=best.data;
+          pin.innerHTML='<span class="tl-pin-x">✕</span><b>'+dd.name+'　'+dd.date+'</b><br>'+dd.detail;
+          pin.hidden=false;
+          pin.querySelector('.tl-pin-x').onclick=()=>{pin.hidden=true};
+        });
+      }).catch(()=>{gd.hidden=true;if(st)st.hidden=false;});
+    }catch(e){gd.hidden=true;if(st)st.hidden=false;}
+  };
+  if(window.G6){go();return;}
+  if(window.__g6loading)return;
+  window.__g6loading=true;
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/@antv/g6@5/dist/g6.min.js';
+  s.onload=go;
+  s.onerror=()=>{window.__g6loading=false;};  // CDN 失败保留静态列表
+  document.head.appendChild(s);
+}
 
 </script>
 </body>
