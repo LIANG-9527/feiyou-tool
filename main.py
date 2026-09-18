@@ -83,12 +83,33 @@ def list_sessions() -> list:
     return sessions
 
 
+def _load_dotenv(p):
+    """极简 .env 加载（KEY=VALUE，已存在的环境变量不覆盖）。无文件静默跳过。"""
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+
 def load_config(config_path: str = None) -> dict:
     path = Path(config_path) if config_path else BASE_DIR / "config.yaml"
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path}。请复制 config.yaml 并填写 LLM API key。")
+    _load_dotenv(BASE_DIR / ".env")
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    # 密钥走环境变量（.env 的 GEO_LLM_API_KEY 或真实环境变量），config.yaml 只留空位
+    # ——防密钥随 git 外泄（2026-09-19 定版，历史提交中的旧密钥需在服务方轮换）
+    env_key = (os.environ.get("GEO_LLM_API_KEY") or "").strip()
+    if env_key:
+        config.setdefault("llm", {})["api_key"] = env_key
+    return config
 
 
 def build_agent(config: dict, thinking: bool | None = None) -> Agent:
@@ -4227,7 +4248,7 @@ header p{color:#6e7991;font-size:14px}
 .hero-card .input-card input{background:rgba(255,255,255,.1);border:none;color:#fff}
 
 .history-item{display:flex;align-items:center;gap:12px;padding:16px 20px}
-.history-item > div:first-child{flex:1;min-width:0}
+.history-item > div:first-of-type{flex:1;min-width:0}
 .history-brand{font-size:14px;font-weight:500;color:#091026}
 /* token 支出标签：样式复制自官网诊断历史列表 */
 .history-item .r-tokens{margin-left:auto;position:relative;font-size:11px;font-weight:600;color:#5C3CF1;background:#5C3CF11a;padding:2px 8px;border-radius:6px;flex-shrink:0;white-space:nowrap;cursor:default}
