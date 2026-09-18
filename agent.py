@@ -276,6 +276,13 @@ class Agent:
 
     async def _exec_single(self, skill: dict, ctx: dict) -> Any:
         context = self._build_context(skill, ctx)
+        # 两段式：先自由检索拿事实（聊天式提问，实测比结构化任务的检索效果好），
+        # 事实以 {{research_answer}} 注入主提示词只做整理；无 research_prompt 的技能不受影响
+        if skill.get("research_prompt"):
+            research = await self._llm_call(
+                self._render(skill["research_prompt"], context),
+                expect_json=False, label=f"{skill['id']}:自由调研")
+            context["research_answer"] = research
         prompt = self._render(skill["prompt"], context)
         # format: markdown 的 skill（如市场调研）需返回纯文本，不做 JSON 解析
         as_text = skill.get("format") == "markdown"
