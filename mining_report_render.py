@@ -8,6 +8,7 @@ render：读模板、注入数据、返回离线自包含单文件 HTML。
 import json
 import re
 from pathlib import Path
+from html import escape as _h_escape
 
 TEMPLATE = Path(__file__).resolve().parent / "skills" / "mining_report_template.html"
 _COLORS = ["cyan", "blue", "violet", "amber", "orange", "emerald", "rose", "teal"]
@@ -204,6 +205,9 @@ def render(result: dict) -> str:
         raise ValueError("模板无数据注入占位")
     data = json.dumps(build_data(result), ensure_ascii=False).replace("</", "<\\/")
     out = html.replace("__MINING_DATA_JSON__", data)
+    # 标签页标题：品牌名 + 报告名（模板占位符 __TITLE__ 原样残留会被浏览器当标题显示）
+    brand = result.get("brand") or ""
+    out = out.replace("__TITLE__", _h_escape(f"{brand} · GEO搜索问句挖掘报告"))
     return out
 
 
