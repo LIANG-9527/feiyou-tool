@@ -58,7 +58,12 @@ async function loadDetail(id){
     ['上市状态',info.listed],['所属行业',info.industry],['主要产品',info.products],['经营范围',info.business_scope]]);
   if(val(info.brands)!==''||val(info.aliases)!==''){
     archive+='<div class="blk"><div class="blk-t">品牌与别名</div>';
-    if(val(info.brands)!=='')archive+='<div class="kv"><span class="k">品牌名</span><span class="v">'+_arr(info.brands)+'</span></div>';
+    if(val(info.brands)!==''){
+      // 品牌来源标签（2026-09-19）：user_confirm=人工确认 / web_multichannel=七渠道联网核查 / 无=未核查
+      const _bs={'user_confirm':['人工确认','#16a34a','#f0fdf4','#bbf7d0'],'web_multichannel':['七渠道联网核查','#2f54eb','#eef3ff','#c9d8ff']}[info.brand_source]||['未核查','#8a93a8','#f4f5f7','#e3e6ec'];
+      const _bsChip='<span style="display:inline-block;padding:2px 8px;margin-left:6px;border:1px solid '+_bs[3]+';background:'+_bs[2]+';color:'+_bs[1]+';border-radius:999px;font-size:11px;font-weight:600;">'+_bs[0]+'</span>';
+      archive+='<div class="kv"><span class="k">品牌名</span><span class="v">'+_arr(info.brands)+_bsChip+'</span></div>';
+    }
     if(val(info.domains)!=='')archive+='<div class="kv"><span class="k">官网域名</span><span class="v">'+_arr(info.domains)+'</span></div>';
     archive+='<div class="kv"><span class="k">别名</span><span class="v">'+_arr(info.aliases)+
       ' <button id="aliasUpd" title="联网搜索该品牌的常见别名（简称/英文名/曾用名），增量并入" style="margin-left:8px;border:1px solid #c9d8ff;background:#f5f8ff;color:#2f54eb;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer;font-family:inherit">更新</button></span></div></div>';
