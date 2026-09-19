@@ -4579,7 +4579,8 @@ async function brandCheck(name) {
         '<button id="bcancel" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">知道了</button></div></div>';
       document.body.appendChild(ov);
       document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
-      ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+      ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });
+      ov.addEventListener('click', function(e){ if (e.target === ov && ov.__down) { ov.remove(); resolve(null); } });
     });
   }
 
@@ -4605,7 +4606,8 @@ async function brandCheck(name) {
         '<button id="bcancel" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">好的，重新输入</button></div></div>';
       document.body.appendChild(ov);
       document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
-      ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+      ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });
+      ov.addEventListener('click', function(e){ if (e.target === ov && ov.__down) { ov.remove(); resolve(null); } });
     });
   }
 
@@ -4625,7 +4627,7 @@ async function brandCheck(name) {
           '你输入的「<b>' + _besc(name) + '</b>」识别为：<br>' +
           '注册全称：<b>' + _besc(full) + '</b>' +
         '</div>' +
-        '<div style="font-size:13px;color:#091026;margin:6px 0 4px">品牌名称（自动识别预填，可人工修正；留空则不记录）</div>' +
+        '<div style="font-size:13px;color:#091026;margin:6px 0 4px"><b>品牌名称</b><span style="font-size:11px;color:#a0a9bd">（自动识别预填，可人工修正；留空则不记录）</span></div>' +
         '<input id="bbrand" value="' + _besc(d.brand || '') + '" placeholder="该企业对外使用的品牌名" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
         '<div style="font-size:13px;color:#3d4664;line-height:1.9;margin:12px 0 4px;background:#f8faff;border:1px solid #e3eaff;border-radius:10px;padding:10px 12px">' +
           '报告与档案的品牌字段固定使用上面的<b>注册全称</b>；你输入的「' + _besc(name) + '」将自动记入<b>别名字段</b>；品牌名用于检索锚定并入档。' +
@@ -4639,7 +4641,8 @@ async function brandCheck(name) {
         const b = (document.getElementById('bbrand').value || '').trim();
         ov.remove(); resolve({name: full, brandName: b || null});  // 全称锁死为核验结果；品牌名人工确认
       };
-      ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+      ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });
+      ov.addEventListener('click', function(e){ if (e.target === ov && ov.__down) { ov.remove(); resolve(null); } });
     });
   }
   return await new Promise(function(resolve){
@@ -4657,7 +4660,7 @@ async function brandCheck(name) {
       '<div style="font-size:15px;font-weight:700;margin-bottom:6px">「' + _besc(name) + '」可能不是唯一匹配</div>' +
       '<div style="font-size:12px;color:#6e7991;margin-bottom:12px">' + _besc(d.hint || '存在多家同名/近名企业，请确认目标企业后再开始') + '</div>' +
       (cands.length ? '<div id="bcandBox" style="margin-bottom:12px"></div>' : '') +
-      '<div style="font-size:13px;color:#091026;margin:10px 0 4px">品牌名称（选中企业后自动识别预填，可人工修正；留空则不记录）</div>' +
+      '<div style="font-size:13px;color:#091026;margin:10px 0 4px"><b>品牌名称</b><span style="font-size:11px;color:#a0a9bd">（选中企业后自动识别预填，可人工修正；留空则不记录）</span></div>' +
       '<input id="bbrand" value="" placeholder="先在上方选中一家企业" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
       '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
@@ -4699,7 +4702,8 @@ async function brandCheck(name) {
       const b = (document.getElementById('bbrand').value || '').trim();
       ov.remove(); resolve({name: bcSelected, brandName: b || null});
     };
-    ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
+    ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });
+      ov.addEventListener('click', function(e){ if (e.target === ov && ov.__down) { ov.remove(); resolve(null); } });
   });
 }
 
