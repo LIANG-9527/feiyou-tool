@@ -2155,10 +2155,12 @@ async def health():
 
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
-    # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称
-    _anchor, _alias, _verr = _resolve_verified_brand(req.brand, getattr(req, "brand_alias", None))
+    # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称；
+    # 凭证批准即消费（一次性）
+    _anchor, _alias, _verr, _vtok = _resolve_verified_brand(req.brand, getattr(req, "brand_alias", None))
     if _verr:
         raise HTTPException(status_code=422, detail=_verr)
+    _consume_verified_token(_vtok)
     req.brand = _anchor
     config = load_config()
     agent = build_agent(config)
@@ -2205,7 +2207,6 @@ async def analyze(req: AnalyzeRequest):
     _rt0 = time.time()
     files = save_output(result, config)
     _rev["dur"] = round(time.time() - _rt0, 1)
-    _consume_verified_token(_vtok)  # 同步链结束即删自己消费的核验凭证（异常路径靠TTL兜底）
 
     # Return summary (full data is in the saved files)
     return JSONResponse({
@@ -3618,13 +3619,9 @@ async def _run_analysis_task(task: Task):
     """任务入口按方法分流到各自独立的执行链——分析功能模块之间不混用流程。
     新增分析方法时：注册一个自己的 _run_xxx_task，在此挂一行分发，别复用别人的环节。"""
     method = task.method or "customer_market_research"
-    try:
-        if method == "geo_query_mining":
-            return await _run_mining_task(task)
-        return await _run_research_task(task)
-    finally:
-        # 任务结束只删自己消费的那条名称核验凭证（其他窗口的同名登记不受影响）
-        _consume_verified_token(task.extra.get("verify_token"))
+    if method == "geo_query_mining":
+        return await _run_mining_task(task)
+    return await _run_research_task(task)
 
 
 def _count_stage_clusters(sd) -> int:
@@ -3873,10 +3870,12 @@ async def create_task(req: CreateTaskRequest):
     """
     mgr = _get_task_mgr()
     # 服务端强制核验（2026-09-19）：品牌必须经名称核查登记，锚定一律取核验所得注册全称；
-    # 别名仅在接受与核验时原始输入一致——绕过前端直打接口无法注入编造名称/垃圾别名
+    # 别名仅在接受与核验时原始输入一致——绕过前端直打接口无法注入编造名称/垃圾别名。
+    # 凭证批准即消费（一次性），每次提交都需要一次新鲜核查
     anchor, alias, err, vtok = _resolve_verified_brand(req.brand, req.brand_alias)
     if err:
         raise HTTPException(status_code=422, detail=err)
+    _consume_verified_token(vtok)
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(
@@ -3886,7 +3885,6 @@ async def create_task(req: CreateTaskRequest):
         brand_alias=alias,
         thinking=req.thinking,
     )
-    task.extra["verify_token"] = vtok  # 任务结束只删自己消费的核验凭证
     # 保存额外参数
     task.extra["force_refresh"] = req.force_refresh
     # 启动后台执行
@@ -4031,10 +4029,12 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
     force_refresh：是否强制刷新企业基本信息（绕过本地缓存，调用工商API获取最新数据）。"""
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     method = method or "customer_market_research"
-    # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称
+    # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称；
+    # 凭证批准即消费（一次性）
     brand, brand_alias, _verr, _vtok = _resolve_verified_brand(brand, brand_alias)
     if _verr:
         raise HTTPException(status_code=422, detail=_verr)
+    _consume_verified_token(_vtok)
     config = load_config()
     agent = build_agent(config, thinking=None if thinking is None else thinking == "1")
 
