@@ -18,4 +18,11 @@ PID=$(lsof -nP -iTCP:8777 -sTCP:LISTEN -t | head -1)
 [ -n "$PID" ] && { kill "$PID"; sleep 2; }
 ./run.sh --mode server &
 sleep 3
+# 冒烟检查（2026-09-19）：重启后核心接口必须返回合法形状，异常大声报错不静默
+SMOKE_FAIL=0
+curl -sf http://127.0.0.1:8777/health >/dev/null || { echo "⚠️ 冒烟失败: /health 无响应"; SMOKE_FAIL=1; }
+BC=$(curl -sf "http://127.0.0.1:8777/api/brand/check?name=%E5%A5%BD%E8%8E%B1%E5%AE%A2" 2>/dev/null)
+echo "$BC" | grep -q '"exists"' || { echo "⚠️ 冒烟失败: 名称核查返回形状异常 → $BC"; SMOKE_FAIL=1; }
+curl -sf -o /dev/null http://127.0.0.1:8777/mining || { echo "⚠️ 冒烟失败: /mining 页面异常"; SMOKE_FAIL=1; }
+[ "$SMOKE_FAIL" = "1" ] && echo "═══ 冒烟检查未通过，服务带病运行，请排查 ═══" || echo "冒烟检查通过（/health、名称核查形状、/mining 页面）"
 curl -s -o /dev/null -w "重启后服务健康: %{http_code}\n" http://127.0.0.1:8777/health
