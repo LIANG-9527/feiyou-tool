@@ -4664,9 +4664,9 @@ async function brandCheck(name) {
   }
 
   if (d.unique) {
-    // 唯一匹配也可能只是客户偷懒输的简称：输的不是注册全称时弹确认，预填全称、品牌名预填识别结果可人工修正
+    // 唯一匹配一律弹确认框：品牌确认是必经环节（2026-09-19：废除全称直通捷径）
     const full = d.resolved_full || '';
-    if (!full || full === name) return {name: name, brandName: null};
+    if (!full) return {name: name, brandName: null};
     return await new Promise(function(resolve){
       const ov = document.createElement('div');
       ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
