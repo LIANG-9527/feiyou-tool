@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 import asyncio
+from business_api_client import BusinessAPIError  # 顶层导入：工商异常类型供 except 绑定
 import json
 import os
 import re
@@ -2076,7 +2077,7 @@ async def _llm_pick_brand(full_name: str, candidates: list) -> str:
         return ""
 
 
-async def _web_verify_brand(full_name: str, hints: list) -> str:
+async def _web_verify_brand(full_name: str, hints: list) -> list:
     """七渠道联网多方核查品牌名（公众号/官方账号/官网域名/活动新闻/百科/媒体报道/商标）。
     档案候选只作线索；排除服务词与全称机械截断；核查到更准的官方品牌名以联网为准。"""
     _lc = load_config().get("llm", {})
@@ -2086,7 +2087,7 @@ async def _web_verify_brand(full_name: str, hints: list) -> str:
     hint_line = (f"档案中已有的品牌候选（历史写入，未必正确，仅供线索）：{json.dumps(hints, ensure_ascii=False)}。\n"
                  if hints else "")
     prompt = (f"「{full_name}」是一家公司的工商注册全称。请联网多方核查这家公司对外使用的品牌名称"
-              "（商标/官网/产品上的叫法，不是公司注册名本身）。应交叉核对以下证据渠道：\n"
+              "（商标/官网/产品上的叫法，不是公司注册名本身；一家公司可以有多个官方品牌名）。应交叉核对以下证据渠道：\n"
               "① 微信公众号名称；② 今日头条/官方自媒体账号名；③ 官网域名及官网署名；"
               "④ 线下活动、新闻稿中的品牌描述；⑤ 百科词条（百度百科/维基等）；"
               "⑥ 第三方媒体报道中的称呼；⑦ 商标注册信息。\n"
@@ -2094,45 +2095,65 @@ async def _web_verify_brand(full_name: str, hints: list) -> str:
               "排除：服务/业务描述词（如\"国外公司注册\"）；公司全称的机械截断"
               "（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」也不算品牌名）。\n"
               "多个渠道指向同一叫法才可采信；若核查发现比候选更准确的官方品牌名，以其为准。\n"
-              "语言一致：候选（或用户已确认）的品牌名与证据相符时，沿用其原文原文语言，"
+              "语言一致：候选（或用户已确认）的品牌名与证据相符时，沿用其原文和语言，"
               "不要替换成外文/其他语言版本；仅当候选全部被排除时才返回新名。\n"
-              '只返回 JSON：{"brand": "品牌名", "evidence": "依据了哪些渠道、各渠道叫法"}；'
-              '核查不到返回 {"brand": ""}。不要返回其他内容。')
+              '只返回 JSON：{"brands": ["核验通过的品牌名1", "品牌名2"], "evidence": "渠道名：该渠道叫法（逐渠道简写）"}。\n'
+              "硬性要求：brands 数组必须填入核验通过的品牌名（哪怕只有一个）——"
+              "evidence 里提到的每个品牌名都必须同时出现在 brands 中；"
+              'brands 留空仅限完全未检索到任何品牌信息的场合，此时 evidence 写"未检索到"。不要返回其他内容。')
     try:
         r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
-        b = str(r.get("brand") or "").strip() if isinstance(r, dict) else ""
-        logger.info(f"品牌核查（七渠道联网）{full_name}: brand={b!r} evidence={str(r.get('evidence') or '')[:200]}")
-        return b
+        raw = r.get("brands") if isinstance(r, dict) else None
+        if not raw and isinstance(r, dict) and r.get("brand"):
+            raw = [r.get("brand")]  # 兼容：模型有证据但只填了单数 brand 字段（实测出现过）
+        out = []
+        for x in (raw or []):
+            n = str(x or "").strip()
+            if n and n != full_name and n not in out:
+                out.append(n)
+        ev = str(r.get('evidence') or '') if isinstance(r, dict) else ''
+        logger.info(f"品牌核查（七渠道联网）{full_name}: brands={out} evidence={ev[:200]}")
+        return out, ev
     except Exception as e:
         logger.warning(f"品牌联网核查失败 {full_name}: {e}")
-        return ""
+        return [], ""
 
 
-async def _lookup_brand_name(full_name: str) -> str:
+async def _lookup_brand_name(full_name: str) -> dict:
     """查公司对外品牌名：只有七渠道联网核查过的主品牌才直接采用；
     人工确认、离线裁决、历史存量一律重新走七渠道联网核查（人工确认作优先线索）。
     核查不到退离线裁决/档案首位兜底（不写可信来源，下次再核）。"""
-    from company_cache import get_info
+    from company_cache import get_info, set_verified_brands, _brand_items
     info, _ = get_info(full_name)
     primary = str((info or {}).get("brand_primary") or "").strip()
     src = str((info or {}).get("brand_source") or "").strip()
-    brands = [str(b).strip() for b in ((info or {}).get("brands") or []) if str(b).strip()]
+    items = _brand_items((info or {}).get("brands"))
     # 来源定信任级（2026-09-19 用户定版）：只有七渠道联网核查过的才免检；
     # 人工确认的品牌名也不被信任——作为优先线索进入联网核查，联网结论说了算
-    if primary and src == "web_multichannel":
-        return primary
-    b = await _web_verify_brand(full_name, brands)
-    if b and b != full_name:
-        from company_cache import prefer_brand
-        prefer_brand(full_name, b, origin="名称核查·多方核查", source="web_multichannel")
-        return b
-    # 联网失败退离线裁决兜底（不写来源 → 下次识别会再触发联网补核）
-    if primary:
-        return primary
-    if brands:
-        picked = await _llm_pick_brand(full_name, brands)
-        return picked or brands[0]
-    return ""
+    if primary and src == "web_multichannel" and items \
+            and all(i["source"] == "web_multichannel" for i in items):
+        return {"items": items, "primary": items[0]["name"]}
+    hints = [i["name"] for i in items]
+    verified, evidence = await _web_verify_brand(full_name, hints)
+    # 机械后处理：候选名被证据提及且非全称机械截断 → 纳入并排前
+    # （模型偶发只回外文商标丢中文名、甚至 brands 留空只写证据——证据是机器可查的事实，直接回捞）
+    from company_cache import norm_name
+    # 截断判定必须用档案注册全称，不能用本次输入名——输入名往往是简称，
+    # 简称天然是自身前缀，会把证据回捞的候选全部误杀（实测好莱客案例）
+    f = norm_name(str((info or {}).get("full_name") or full_name))
+    kept = [h for h in hints
+            if norm_name(h) in evidence and not f.startswith(norm_name(h))]
+    final = kept + [v for v in verified if v not in kept]
+    if final:
+        set_verified_brands(full_name, final, origin="名称核查·多方核查")
+        return {"items": [{"name": n, "source": "web_multichannel"} for n in final],
+                "primary": final[0]}
+    # 联网失败/确实查无：退离线裁决兜底（不写可信来源 → 下次识别会再触发联网补核）
+    names = [i["name"] for i in items]
+    if names:
+        picked = await _llm_pick_brand(full_name, names) or (primary or names[0])
+        return {"items": items, "primary": picked}
+    return {"items": [], "primary": ""}
 
 
 @app.post("/api/audit/bind")
@@ -3006,7 +3027,9 @@ async def api_brand_check(name: str):
                     # 唯一匹配也不能放任客户偷懒输的简称：给出注册全称与品牌名，
                     # 前端据此弹确认换正名（2026-09-19 需求：报告锚定用正名不用简称）
                     resp["resolved_full"] = candidates[0]["name"]
-                    resp["brand"] = await _lookup_brand_name(resp["resolved_full"])
+                    _lb = await _lookup_brand_name(resp["resolved_full"])
+                    resp["brands"] = _lb["items"]
+                    resp["brand"] = _lb["primary"]
                 # 核验登记（多候选逐个登记，选中哪个哪个就是合法锚点）
                 for c in candidates:
                     _register_verified_name(c["name"], resp.get("brand") or "", name)
@@ -3017,8 +3040,10 @@ async def api_brand_check(name: str):
         if arch:
             full = arch["candidates"][0]["name"]
             arch["resolved_full"] = full
-            arch["brand"] = await _lookup_brand_name(full)
-            _register_verified_name(full, arch["brand"] or "", name)
+            _lb = await _lookup_brand_name(full)
+            arch["brands"] = _lb["items"]
+            arch["brand"] = _lb["primary"]
+            _register_verified_name(full, _lb["primary"] or "", name)
             logger.info(f"工商API查无 '{name}'，企业档案命中: {full}")
             return arch
         logger.info(f"工商API名称核查：未找到 '{name}' 的匹配企业")
@@ -3036,8 +3061,10 @@ async def api_brand_check(name: str):
         if arch:
             full = arch["candidates"][0]["name"]
             arch["resolved_full"] = full
-            arch["brand"] = await _lookup_brand_name(full)
-            _register_verified_name(full, arch["brand"] or "", name)
+            _lb = await _lookup_brand_name(full)
+            arch["brands"] = _lb["items"]
+            arch["brand"] = _lb["primary"]
+            _register_verified_name(full, _lb["primary"] or "", name)
             return arch
         return {"ok": False, "error": f"工商接口调用失败：{e}"}
     except ImportError as e:
@@ -3981,8 +4008,8 @@ async def refresh_company(req: RefreshCompanyRequest):
 @app.get("/api/brand/lookup-brand")
 async def api_brand_lookup(name: str):
     """按需识别企业品牌名（弹窗选中候选时前端调用）：档案有则直接用，否则联网查一次并入档。"""
-    b = await _lookup_brand_name((name or "").strip())
-    return {"ok": True, "brand": b}
+    lb = await _lookup_brand_name((name or "").strip())
+    return {"ok": True, "brands": lb["items"], "brand": lb["primary"]}
 
 
 @app.post("/api/tasks")
@@ -4004,9 +4031,10 @@ async def create_task(req: CreateTaskRequest):
     if confirmed_brand and confirmed_brand != anchor:
         from company_cache import prefer_brand
         prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认")  # 先落档为线索
-        _v = await _lookup_brand_name(anchor)  # 人工确认不 trusted：强制七渠道联网核查
-        if _v:
-            confirmed_brand = _v  # 核查结论说了算（一致则原样，不一致以联网为准）
+        _lb = await _lookup_brand_name(anchor)  # 人工确认不 trusted：强制七渠道联网核查
+        _vnames = [i["name"] for i in _lb.get("items", [])]
+        if _vnames and confirmed_brand not in _vnames:
+            confirmed_brand = _lb["primary"] or _vnames[0]  # 核查结论说了算（一致则原样，不一致以联网为准）
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(
@@ -4741,8 +4769,8 @@ async function brandCheck(name) {
           '你输入的「<b>' + _besc(name) + '</b>」识别为：<br>' +
           '注册全称：<b>' + _besc(full) + '</b>' +
         '</div>' +
-        '<div style="font-size:13px;color:#091026;margin:6px 0 4px"><b>品牌名称</b><span style="font-size:11px;color:#a0a9bd">（自动识别预填，可人工修正；留空则不记录）</span></div>' +
-        '<input id="bbrand" value="' + _besc(d.brand || '') + '" placeholder="该企业对外使用的品牌名" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
+        '<div style="font-size:13px;color:#091026;margin:6px 0 4px"><b>品牌名称</b><span style="font-size:11px;color:#a0a9bd">（七渠道联网核查结论，需选择一个）</span></div>' +
+        '<div id="bbrandBox"></div>' +
         '<div style="font-size:13px;color:#3d4664;line-height:1.9;margin:12px 0 4px;background:#f8faff;border:1px solid #e3eaff;border-radius:10px;padding:10px 12px">' +
           '报告与档案的品牌字段固定使用上面的<b>注册全称</b>；你输入的「' + _besc(name) + '」将自动记入<b>别名字段</b>；品牌名用于检索锚定并入档。' +
         '</div>' +
@@ -4750,10 +4778,25 @@ async function brandCheck(name) {
         '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
         '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">确认并开始</button></div></div>';
       document.body.appendChild(ov);
+      (function(){
+        const box = document.getElementById('bbrandBox');
+        const bs = d.brands || [];
+        if (bs.length > 1) {
+          box.innerHTML = bs.map(function(b){
+            return '<label style="display:flex;gap:6px;align-items:center;padding:5px 2px;font-size:13px;cursor:pointer">' +
+              '<input type="radio" name="bbrandPick" value="' + _besc(b.name) + '"' + (b.name === d.brand ? ' checked' : '') + '>' +
+              '<span>' + _besc(b.name) + '<span style="font-size:11px;color:#2f54eb;background:#eef3ff;border-radius:999px;padding:1px 6px;margin-left:6px">七渠道核查</span></span></label>';
+          }).join('');
+        } else {
+          box.innerHTML = '<input id="bbrand" value="' + _besc(d.brand || '') + '" placeholder="该企业对外使用的品牌名" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">';
+        }
+      })();
       document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
       document.getElementById('bok').onclick = function(){
-        const b = (document.getElementById('bbrand').value || '').trim();
-        ov.remove(); resolve({name: full, brandName: b || null});  // 全称锁死为核验结果；品牌名人工确认
+        const sel = document.querySelector('input[name=bbrandPick]:checked');
+        const inp = document.getElementById('bbrand');
+        const b = sel ? sel.value : ((inp && inp.value) || '').trim();
+        ov.remove(); resolve({name: full, brandName: b || null});  // 全称锁死为核验结果；品牌取选中项
       };
       ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });
       ov.addEventListener('click', function(e){ if (e.target === ov && ov.__down) { ov.remove(); resolve(null); } });
@@ -4774,8 +4817,8 @@ async function brandCheck(name) {
       '<div style="font-size:15px;font-weight:700;margin-bottom:6px">「' + _besc(name) + '」可能不是唯一匹配</div>' +
       '<div style="font-size:12px;color:#6e7991;margin-bottom:12px">' + _besc(d.hint || '存在多家同名/近名企业，请确认目标企业后再开始') + '</div>' +
       (cands.length ? '<div id="bcandBox" style="margin-bottom:12px"></div>' : '') +
-      '<div style="font-size:13px;color:#091026;margin:10px 0 4px"><b>品牌名称</b><span style="font-size:11px;color:#a0a9bd">（选中企业后自动识别预填，可人工修正；留空则不记录）</span></div>' +
-      '<input id="bbrand" value="" placeholder="先在上方选中一家企业" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
+      '<div style="font-size:13px;color:#091026;margin:10px 0 4px"><b>品牌名称</b><span style="font-size:11px;color:#a0a9bd">（选中企业后自动七渠道核查；多品牌时需选择一个）</span></div>' +
+      '<div id="bbrandBox"><input id="bbrand" value="" placeholder="先在上方选中一家企业" disabled style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box"></div>' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
       '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
       '<button id="bok" disabled style="padding:8px 18px;border:none;background:#a8bbf5;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:not-allowed">请先选中一家企业</button></div></div>';
@@ -4800,22 +4843,31 @@ async function brandCheck(name) {
         rb.addEventListener('change', function(){
           bcSelected = this.value;
           const ok = document.getElementById('bok');
-          const bIn = document.getElementById('bbrand');
           const seq = ++bcFetchSeq;
           // 品牌识别进行中禁止提交（2026-09-19：堵住识别未完成就创建任务的时序洞）
           ok.disabled = true; ok.style.background = '#a8bbf5'; ok.style.cursor = 'not-allowed'; ok.textContent = '品牌识别中…';
-          bIn.value = ''; bIn.placeholder = '正在识别品牌名…';
+          document.getElementById('bbrandBox').innerHTML = '<input id="bbrand" placeholder="正在识别品牌名…" disabled style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">';
           fetch('/api/brand/lookup-brand?name=' + encodeURIComponent(this.value))
             .then(function(r){ return r.json(); })
             .then(function(j){
               if (seq !== bcFetchSeq) return;  // 用户已切换其他企业，丢弃过期识别结果
-              bIn.value = (j && j.brand) || '';
-              bIn.placeholder = bIn.value ? '可人工修正；留空则不记录' : '识别不到，可手填或留空';
+              const bs = (j && j.brands) || [];
+              const box = document.getElementById('bbrandBox');
+              if (bs.length > 1) {
+                box.innerHTML = bs.map(function(b){
+                  return '<label style="display:flex;gap:6px;align-items:center;padding:5px 2px;font-size:13px;cursor:pointer">' +
+                    '<input type="radio" name="bbrandPick" value="' + _besc(b.name) + '"' + (b.name === j.brand ? ' checked' : '') + '>' +
+                    '<span>' + _besc(b.name) + '<span style="font-size:11px;color:#2f54eb;background:#eef3ff;border-radius:999px;padding:1px 6px;margin-left:6px">七渠道核查</span></span></label>';
+                }).join('');
+              } else {
+                const only = (j && j.brand) || (bs[0] && bs[0].name) || '';
+                box.innerHTML = '<input id="bbrand" value="' + _besc(only) + '" placeholder="识别不到，可手填或留空" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">';
+              }
               ok.disabled = false; ok.style.background = '#3567ff'; ok.style.cursor = 'pointer'; ok.textContent = '用该企业开始';
             })
             .catch(function(){
               if (seq !== bcFetchSeq) return;
-              bIn.placeholder = '识别失败，可手填或留空';
+              document.getElementById('bbrandBox').innerHTML = '<input id="bbrand" placeholder="识别失败，可手填或留空" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">';
               ok.disabled = false; ok.style.background = '#3567ff'; ok.style.cursor = 'pointer'; ok.textContent = '用该企业开始';
             });
         });
@@ -4825,7 +4877,9 @@ async function brandCheck(name) {
     document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
     document.getElementById('bok').onclick = function(){
       if (!bcSelected) return;
-      const b = (document.getElementById('bbrand').value || '').trim();
+      const sel = document.querySelector('input[name=bbrandPick]:checked');
+      const inp = document.getElementById('bbrand');
+      const b = sel ? sel.value : ((inp && inp.value) || '').trim();
       ov.remove(); resolve({name: bcSelected, brandName: b || null});
     };
     ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });

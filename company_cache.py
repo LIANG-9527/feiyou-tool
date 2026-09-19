@@ -25,6 +25,8 @@ _CACHE_FIELDS = (
     "revenue", "qualifications", "patents", "founder", "status",
     # 品牌资料：品牌名与别名均允许数组（多品牌；品牌名是别名的其中一个）
     "brands", "aliases", "nature", "domains",
+    # 品牌信任字段（2026-09-19）：主品牌与获取方式来源（user_confirm/web_multichannel）
+    "brand_primary", "brand_source",
     # 工商接口全量字段（API 给什么存什么，2026-09-16 与用户确认）
     "license_number", "org_code", "regit_address", "province", "city", "district",
     "industry_code", "staff_number", "social_security_num", "social_security_from",
@@ -260,6 +262,13 @@ def prefer_brand(name: str, brand: str, origin: str = "", source: str = "user_co
             d = json.loads(row[0]) if row else {}
             if d.get("brand_primary") == brand and d.get("brand_source") == source:
                 return
+            items = _brand_items(d.get("brands"))
+            for it in items:
+                if it["name"] == brand:
+                    it["source"] = max(it["source"], source, key=lambda x: (x == "web_multichannel", x == "user_confirm"))
+            if brand not in [it["name"] for it in items]:
+                items.append({"name": brand, "source": source})
+            d["brands"] = items
             d["brand_primary"] = brand
             d["brand_source"] = source
             d["nature"] = derive_nature(d)
@@ -392,23 +401,64 @@ def add_domains(name: str, domain: str, origin: str = ""):
         pass
 
 
+def _brand_name(x) -> str:
+    """品牌条目 → 名称字符串（兼容旧字符串条目与新结构化条目 {name, source}）。"""
+    if isinstance(x, dict):
+        return str(x.get("name") or "").strip()
+    return str(x or "").strip()
+
+
+def _brand_items(brands_field) -> list:
+    """brands 字段 → [{name, source}]；旧字符串条目视为 legacy（无来源，核查落档时清除）。"""
+    out = []
+    for x in (brands_field or []):
+        nm = _brand_name(x)
+        if not nm:
+            continue
+        src = str(x.get("source") or "legacy") if isinstance(x, dict) else "legacy"
+        out.append({"name": nm, "source": src})
+    return out
+
+
 def add_brands_alias(name: str, brand: str, origin: str = ""):
-    """把用户输入的短名（品牌）增量并入正牌行的 品牌名+别名 两清单（去重）。"""
+    """把用户输入的短名（品牌）增量并入正牌行的 品牌名+别名 两清单（去重）。
+    品牌名清单为结构化条目：线索级写入 source=user_confirm（未经联网核查）。"""
     brand = str(brand or "").strip()
     if not name or not brand or brand == name:
         return
     try:
         old, _ = get_info(name)
         old = old or {}
-        brands = [b for b in (old.get("brands") or []) if b]
+        brands = _brand_items(old.get("brands"))
         aliases = [a for a in (old.get("aliases") or []) if a]
         ch = False
-        if brand not in brands:
-            brands.append(brand); ch = True
+        if brand not in [b["name"] for b in brands]:
+            brands.append({"name": brand, "source": "user_confirm"}); ch = True
         if brand not in aliases:
             aliases.append(brand); ch = True
         if ch:
             upsert_info(name, {"brands": brands, "aliases": aliases}, origin=origin)
+    except Exception:
+        pass
+
+
+def set_verified_brands(name: str, names: list, origin: str = ""):
+    """七渠道核查结论落档：品牌名清单整体替换为核验通过条目（全部 web_multichannel），
+    清除 legacy/未核条目；主品牌取首个；名称同步并入别名清单。"""
+    names = [str(n).strip() for n in (names or []) if str(n).strip()]
+    if not name or not names:
+        return
+    try:
+        old, _ = get_info(name)
+        old = old or {}
+        aliases = [a for a in (old.get("aliases") or []) if a]
+        for n in names:
+            if n not in aliases:
+                aliases.append(n)
+        upsert_info(name, {"brands": [{"name": n, "source": "web_multichannel"} for n in names],
+                           "aliases": aliases,
+                           "brand_primary": names[0],
+                           "brand_source": "web_multichannel"}, origin=origin)
     except Exception:
         pass
 
@@ -453,7 +503,7 @@ def _match_id(name: str, cur: sqlite3.Cursor) -> str | None:
         return None
     for rid, data in cur.execute("SELECT id, data FROM company").fetchall():
         d = json.loads(data)
-        names = [d.get("full_name") or "", *(str(x) for x in (d.get("brands") or [])),
+        names = [d.get("full_name") or "", *(_brand_name(x) for x in (d.get("brands") or [])),
                  *(str(x) for x in (d.get("aliases") or []))]
         for cand in names:
             on = norm_name(cand)

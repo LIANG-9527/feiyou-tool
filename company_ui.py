@@ -59,10 +59,17 @@ async function loadDetail(id){
   if(val(info.brands)!==''||val(info.aliases)!==''){
     archive+='<div class="blk"><div class="blk-t">品牌与别名</div>';
     if(val(info.brands)!==''){
-      // 品牌来源标签（2026-09-19）：user_confirm=人工确认 / web_multichannel=七渠道联网核查 / 无=未核查
-      const _bs={'user_confirm':['人工确认','#16a34a','#f0fdf4','#bbf7d0'],'web_multichannel':['七渠道联网核查','#2f54eb','#eef3ff','#c9d8ff']}[info.brand_source]||['未核查','#8a93a8','#f4f5f7','#e3e6ec'];
-      const _bsChip='<span style="display:inline-block;padding:2px 8px;margin-left:6px;border:1px solid '+_bs[3]+';background:'+_bs[2]+';color:'+_bs[1]+';border-radius:999px;font-size:11px;font-weight:600;">'+_bs[0]+'</span>';
-      archive+='<div class="kv"><span class="k">品牌名</span><span class="v">'+_arr(info.brands)+_bsChip+'</span></div>';
+      // 品牌逐条展示 + 逐条来源标签（2026-09-19 定版：每个品牌名都有来源）
+      const _tag = src => ({user_confirm:['人工确认','#16a34a','#f0fdf4','#bbf7d0'],
+        web_multichannel:['七渠道联网核查','#2f54eb','#eef3ff','#c9d8ff']})[src] || ['未核查','#8a93a8','#f4f5f7','#e3e6ec'];
+      const items = Array.isArray(info.brands) ? info.brands : [info.brands];
+      const html = items.map(function(it){
+        const name = (typeof it === 'object') ? (it.name || '') : it;
+        const t = _tag((typeof it === 'object' && it.source) || '');
+        return '<span style="display:inline-block;margin:0 10px 4px 0"><b>' + esc(name) + '</b>' +
+          '<span style="display:inline-block;padding:1px 6px;margin-left:5px;border:1px solid '+t[3]+';background:'+t[2]+';color:'+t[1]+';border-radius:999px;font-size:11px;">'+t[0]+'</span></span>';
+      }).join('');
+      archive += '<div class="kv"><span class="k">品牌名</span><span class="v">' + html + '</span></div>';
     }
     if(val(info.domains)!=='')archive+='<div class="kv"><span class="k">官网域名</span><span class="v">'+_arr(info.domains)+'</span></div>';
     archive+='<div class="kv"><span class="k">别名</span><span class="v">'+_arr(info.aliases)+
