@@ -171,10 +171,13 @@ class Agent:
     async def run(self, brand: str, product: Optional[str] = None,
                   on_progress: Callable = None,
                   method_id: str = None,
-                  known_facts: str = None) -> dict:
+                  known_facts: str = None,
+                  brand_hint: str = None) -> dict:
         ctx: dict[str, Any] = {"brand": brand, "product": product}
         if known_facts:
             ctx["known_facts"] = known_facts
+        if brand_hint:
+            ctx["brand_hint"] = brand_hint
         if product:
             ctx["product_hint"] = f"用户特别关注产品/服务: {product}"
         else:

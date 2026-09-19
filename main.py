@@ -3656,9 +3656,13 @@ async def _run_mining_task(task: Task):
     from company_cache import known_facts_text, add_brands_alias
     if task.brand_alias and task.brand_alias != brand:
         add_brands_alias(brand, task.brand_alias, origin="GEO搜索问句挖掘")  # 弹窗确认换全称后短名不丢：入品牌+别名
+    # 弹窗确认的品牌名作为第一步自由检索的锚点（检索品牌名比检索全称命中率高得多）
+    bn = (task.extra.get("brand_name") or "").strip()
+    brand_hint = f"用户已确认该公司的品牌名为「{bn}」，请优先用品牌名检索，并围绕品牌名整理产品信息。" if bn else ""
     result = await agent.run(brand, task.product, on_progress=on_progress,
                              method_id="geo_query_mining",
-                             known_facts=known_facts_text(brand))
+                             known_facts=known_facts_text(brand),
+                             brand_hint=brand_hint)
     result["brand_alias"] = task.brand_alias or ""
     result["_process_log"] = _plog
     result["total_elapsed"] = round(time.time() - _t_run0, 1)
@@ -3765,6 +3769,7 @@ class CreateTaskRequest(PydanticModel):
     product: Optional[str] = None
     method: Optional[str] = None
     brand_alias: Optional[str] = None
+    brand_name: Optional[str] = None   # 弹窗里人工确认/修正的品牌名（入档案，挖掘第一步作检索锚点）
     thinking: Optional[str] = None
     force_refresh: bool = False
 
@@ -3862,6 +3867,13 @@ async def refresh_company(req: RefreshCompanyRequest):
     return {"task_id": task.task_id, "status": task.status, "brand": task.brand}
 
 
+@app.get("/api/brand/lookup-brand")
+async def api_brand_lookup(name: str):
+    """按需识别企业品牌名（弹窗选中候选时前端调用）：档案有则直接用，否则联网查一次并入档。"""
+    b = await _lookup_brand_name((name or "").strip())
+    return {"ok": True, "brand": b}
+
+
 @app.post("/api/tasks")
 async def create_task(req: CreateTaskRequest):
     """创建分析任务并立即在后台启动，返回 task_id。
@@ -3876,6 +3888,11 @@ async def create_task(req: CreateTaskRequest):
     if err:
         raise HTTPException(status_code=422, detail=err)
     _consume_verified_token(vtok)
+    # 弹窗里人工确认/修正的品牌名：增量并入档案（去重），挖掘第一步作检索锚点
+    confirmed_brand = (req.brand_name or "").strip()[:40]
+    if confirmed_brand and confirmed_brand != anchor:
+        from company_cache import add_brands_alias
+        add_brands_alias(anchor, confirmed_brand, origin="名称核查·品牌确认")
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(
@@ -3887,6 +3904,7 @@ async def create_task(req: CreateTaskRequest):
     )
     # 保存额外参数
     task.extra["force_refresh"] = req.force_refresh
+    task.extra["brand_name"] = confirmed_brand
     # 启动后台执行
     await mgr.start_task(task.task_id, _run_analysis_task)
     _log_op(_METHOD_NAMES.get(task_method, task_method), "创建任务", anchor,
@@ -4592,9 +4610,9 @@ async function brandCheck(name) {
   }
 
   if (d.unique) {
-    // 唯一匹配也可能只是客户偷懒输的简称：输的不是注册全称时弹确认，预填全称、品牌名随行
+    // 唯一匹配也可能只是客户偷懒输的简称：输的不是注册全称时弹确认，预填全称、品牌名预填识别结果可人工修正
     const full = d.resolved_full || '';
-    if (!full || full === name) return name;
+    if (!full || full === name) return {name: name, brandName: null};
     return await new Promise(function(resolve){
       const ov = document.createElement('div');
       ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
@@ -4605,19 +4623,21 @@ async function brandCheck(name) {
         '</div>' +
         '<div style="font-size:13px;color:#3d4664;line-height:1.9;margin-bottom:12px">' +
           '你输入的「<b>' + _besc(name) + '</b>」识别为：<br>' +
-          '注册全称：<b>' + _besc(full) + '</b><br>' +
-          (d.brand ? '品牌名称：<b style="color:#16a34a">' + _besc(d.brand) + '</b>（已记入档案，问句生成可用品牌称呼）' : '') +
+          '注册全称：<b>' + _besc(full) + '</b>' +
         '</div>' +
+        '<div style="font-size:13px;color:#091026;margin:6px 0 4px">品牌名称（自动识别预填，可人工修正；留空则不记录）</div>' +
+        '<input id="bbrand" value="' + _besc(d.brand || '') + '" placeholder="该企业对外使用的品牌名" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
         '<div style="font-size:13px;color:#3d4664;line-height:1.9;margin:12px 0 4px;background:#f8faff;border:1px solid #e3eaff;border-radius:10px;padding:10px 12px">' +
-          '报告与档案的品牌字段固定使用上面的<b>注册全称</b>；你输入的「' + _besc(name) + '」将自动记入<b>别名字段</b>。' +
+          '报告与档案的品牌字段固定使用上面的<b>注册全称</b>；你输入的「' + _besc(name) + '」将自动记入<b>别名字段</b>；品牌名用于检索锚定并入档。' +
         '</div>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
         '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
-        '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">用该名称开始</button></div></div>';
+        '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">确认并开始</button></div></div>';
       document.body.appendChild(ov);
       document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
       document.getElementById('bok').onclick = function(){
-        ov.remove(); resolve(full);  // 品牌字段只放核实的注册全称，客户原始输入走别名字段
+        const b = (document.getElementById('bbrand').value || '').trim();
+        ov.remove(); resolve({name: full, brandName: b || null});  // 全称锁死为核验结果；品牌名人工确认
       };
       ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
     });
@@ -4638,6 +4658,8 @@ async function brandCheck(name) {
       (cands.length ? '<div id="bcandBox" style="margin-bottom:12px"></div>' : '') +
       '<div style="font-size:13px;color:#091026;margin:6px 0 4px">使用名称</div>' +
       '<input id="bname" value="' + _besc(name) + '" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
+      '<div style="font-size:13px;color:#091026;margin:10px 0 4px">品牌名称（选中企业后自动识别预填，可人工修正；留空则不记录）</div>' +
+      '<input id="bbrand" value="" placeholder="先在上方选中一家企业" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
       '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
       '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">用该名称开始</button></div></div>';
@@ -4658,14 +4680,23 @@ async function brandCheck(name) {
       if (prev) prev.onclick = function(){ if (bcPage > 0) { bcPage--; renderBcPage(); } };
       if (next) next.onclick = function(){ if (bcPage < pages - 1) { bcPage++; renderBcPage(); } };
       ov.querySelectorAll('input[name=bcand]').forEach(function(rb){
-        rb.addEventListener('change', function(){ document.getElementById('bname').value = this.value; });
+        rb.addEventListener('change', function(){
+          document.getElementById('bname').value = this.value;
+          const bIn = document.getElementById('bbrand');
+          bIn.value = ''; bIn.placeholder = '正在识别品牌名…';
+          fetch('/api/brand/lookup-brand?name=' + encodeURIComponent(this.value))
+            .then(function(r){ return r.json(); })
+            .then(function(j){ bIn.value = (j && j.brand) || ''; bIn.placeholder = '识别不到可手填'; })
+            .catch(function(){ bIn.placeholder = '识别失败可手填'; });
+        });
       });
     }
     renderBcPage();
     document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
     document.getElementById('bok').onclick = function(){
       const v = document.getElementById('bname').value.trim() || name;
-      ov.remove(); resolve(v);
+      const b = (document.getElementById('bbrand').value || '').trim();
+      ov.remove(); resolve({name: v, brandName: b || null});
     };
     ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
   });
@@ -4696,11 +4727,14 @@ async function startAnalysis() {
   // 名称消歧预检：同名多家先弹纠正框，确认后才真正开始
   // 保存用户原始输入（品牌别名），用于搜索百度百科（百科词条名是品牌名不是公司全称）
   const originalBrand = params.brand || "";
+  let confirmedBrandName = null;
   if (params.brand) {
     btn.textContent = "名称核查中…";
     const resolved = await brandCheck(params.brand);
     if (resolved === null) { btn.disabled = false; btn.textContent = "开始分析"; return; }
-    params.brand = resolved;
+    const r = (resolved && typeof resolved === "object") ? resolved : {name: resolved, brandName: null};
+    params.brand = r.name;
+    confirmedBrandName = r.brandName;
     btn.textContent = "分析中...";
   }
 
@@ -4727,6 +4761,7 @@ async function startAnalysis() {
     product: params.product || null,
     method: currentMethod ? currentMethod.id : null,
     brand_alias: (originalBrand && originalBrand !== params.brand) ? originalBrand : null,
+    brand_name: confirmedBrandName,
     thinking: think ? (think.checked ? "1" : "0") : null
   };
 
