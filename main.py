@@ -2068,13 +2068,17 @@ async def _llm_adjudicate_brands(full_name: str, candidates: list, evidence: str
               f"候选名称：{json.dumps(candidates, ensure_ascii=False)}\n"
               + (f"七渠道核查证据：{evidence}\n" if evidence else "") +
               "逐一判断每个候选是否为这家公司对外的品牌名称（商标/官网/产品上的叫法）。\n"
-              "中国企业品牌惯例：品牌名通常=全称去掉行政区划（广东/深圳等）和行业/组织后缀（有限公司、股份、集团、企服等）后的**字号**——"
-              "候选与全称字号一致（如「和创企赢」之于「广东和创企赢企服集团有限公司」、「好莱客」之于「广州好莱客创意家居股份有限公司」）是典型的品牌形态，应当保留。\n"
+              "主品牌判定标准（必须严格执行）：**品牌名=官网/产品实际在用的名字**，优先于纯字号/公司简称，不看语言。\n"
+              "判定步骤：①从证据里找出官网域名/产品页实际在用的品牌名（如官网为 zstek.com，则在用品牌就是 ZSTEK）；"
+              "②brands 数组的第一个元素必须是这个实际在用的品牌名；"
+              "③纯字号/公司简称（如兮元睿视之于 zstek.com）不得作为 brands 的第一个元素，除非证据显示官网/产品使用的就是它；"
+              "④当两个都是真实在用的产品品牌（如圆领与 HireNow 并存）时，本土市场主取中文圆领。\n"
               "中外双品牌：本土公司同时有中文名与海外英文名时，主品牌取中文市场在用的中文名"
               "（如上海魔法向量→圆领，而非海外站名 HireNow）；外资在华主体例外，沿用其全球品牌（如苹果在华仍取 Apple）。\n"
               "候选与 A 股证券简称/挂牌简称一致是强有力的品牌证据（如「极联股份」），优先于其他候选。\n"
               "排除：①公司全称的中间段截断（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」——多带了行业词且无独立使用证据）；"
-              "②服务项目、业务动作类描述词（如\"国外公司注册\"\"工商财税\"）。\n"
+              "②公司曾用名/历史名不算当前品牌（如曾用名\"中安视达\"），除非证据显示其仍为当前对外主品牌；"
+              "③服务项目、业务动作类描述词（如\"国外公司注册\"\"工商财税\"）。\n"
               "是真品牌名的都保留（可多个），按证据强度排序。\n"
               '只返回 JSON：{"brands": ["保留的候选原文", ...]}；没有真品牌名时返回 {"brands": []}。')
     try:
@@ -2113,6 +2117,9 @@ async def _web_verify_brand(full_name: str, hints: list) -> tuple:
               "中外双品牌：本土公司同时有中文名与海外英文名时，主品牌取中文市场在用的中文名；"
               "外资在华主体例外，沿用其全球品牌。\n"
               '只返回 JSON：{"brands": ["核验通过的品牌名1", "品牌名2"], "evidence": "渠道名：该渠道叫法（逐渠道简写）"}。\n'
+              "曾用名不算当前品牌：公司曾用名/历史名（如曾用名\"中安视达\"）不得作为品牌返回，除非证据显示其仍为当前对外主品牌。\n"
+              "检索角度提示：除公司全称外，还应尝试「公司名+旗下产品」「公司名+APP」「公司名+官网」"
+              "「公司名+开发者」等组合反查——应用商店/开发者平台页面通常标注开发主体。\n"
               "硬性要求：brands 数组必须填入核验通过的品牌名（哪怕只有一个）——"
               "evidence 里提到的每个品牌名都必须同时出现在 brands 中；"
               'brands 留空仅限完全未检索到任何品牌信息的场合，此时 evidence 写"未检索到"。不要返回其他内容。')
@@ -2143,6 +2150,15 @@ async def _lookup_brand_name(full_name: str) -> dict:
     primary = str((info or {}).get("brand_primary") or "").strip()
     src = str((info or {}).get("brand_source") or "").strip()
     items = _brand_items((info or {}).get("brands"))
+    human = str((info or {}).get("brand_human") or "").strip()
+    # 人工钉选（2026-09-20 定版，按来源规则第4条）：钉选对象必是网核候选，
+    # 人只定主次，结果按公司缓存——钉选后直接采用，不再重复核查
+    if human:
+        its = [i["name"] for i in items]
+        if human not in its:
+            items.insert(0, {"name": human, "source": "user_confirm", "votes": 0})
+        items.sort(key=lambda i: 0 if i["name"] == human else 1)
+        return {"items": items, "primary": human, "verified": [human]}
     # 来源定信任级（2026-09-19 用户定版）：只有七渠道联网核查过的才免检；
     # 人工确认的品牌名也不被信任——作为优先线索进入联网核查，联网结论说了算
     if primary and src == "web_multichannel" and items \
@@ -2174,10 +2190,11 @@ async def _lookup_brand_name(full_name: str) -> dict:
                       key=lambda n: (-tops.get(n, 0), -tally[n]))
     if majority:
         set_verified_brands(full_name, majority, origin="名称核查·多方核查")
-        return {"items": [{"name": n, "source": "web_multichannel"} for n in majority],
-                "primary": majority[0]}
+        items = [{"name": n, "source": ("web_multichannel" if tally.get(n, 0) > _BRAND_VOTE_N / 2 else "candidate"),
+                  "votes": tally.get(n, 0)} for n in sorted(candidates, key=lambda n: -tally.get(n, 0))]
+        return {"items": items, "primary": majority[0], "verified": majority}
     # 无多数结论（票数分散=信息不足）：不落可信档，退档案兜底（弹窗人工选择，下次再核）
-    return {"items": items, "primary": primary or (hints[0] if hints else "")}
+    return {"items": items, "primary": primary or (hints[0] if hints else ""), "verified": []}
 
 
 @app.post("/api/audit/bind")
@@ -2959,6 +2976,24 @@ async def _archive_candidates_response(name: str):
     return resp
 
 
+async def _web_reverse_lookup(name: str) -> str:
+    """品牌→公司反查：联网查「名+运营主体/官网/APP开发者」，返回运营主体注册全称或空串。"""
+    _lc = load_config().get("llm", {})
+    llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
+                    temperature=0.2, max_tokens=_lc.get("max_tokens", 16384), timeout=60,
+                    max_retries=1, enable_search=True, enable_thinking=False, search_engine=["baidu"])
+    prompt = (f"「{name}」可能是一个品牌名、产品名或常用简称，而不是公司注册全称。"
+              "请联网反查它的运营主体：检索「" + name + " 运营主体」「" + name + " 官方网站」"
+              "「" + name + " APP 开发者」「" + name + " 公司」等组合。\n"
+              '只返回 JSON：{"full_name": "运营主体公司的工商注册全称"}；'
+              '查不到或不确定时返回 {"full_name": ""}。不要返回其他内容。')
+    try:
+        r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
+        return str(r.get("full_name") or "").strip() if isinstance(r, dict) else ""
+    except Exception:
+        return ""
+
+
 def _register_verified_name(full_name: str, brand: str, input_name: str) -> str:
     import uuid
     from company_cache import norm_name
@@ -3071,6 +3106,32 @@ async def api_brand_check(name: str):
             _register_verified_name(full, _lb["primary"] or "", name)
             logger.info(f"工商API查无 '{name}'，企业档案命中: {full}")
             return arch
+        # 工商查无+档案无：品牌→公司联网反查（2026-09-20 定版）——
+        # 「名+运营主体/官网/开发者」反查注册公司，命中则列为候选；仍无才走人工录入
+        rev = await _web_reverse_lookup(name)
+        if rev:
+            # 工商能查到则带核验标注；工商库缺数据（如近期更名主体）时，
+            # LLM 联网反查到的注册名也列为候选（标注"联网证据"，弹窗人工确认兜底防伪造）
+            vcands = []
+            try:
+                vr = await api_client.search_company(rev, page_size=5)
+                for r in (vr.get("records") or []):
+                    cname = re.sub(r"<[^>]+>", "", r.get("companyName", ""))
+                    if cname:
+                        loc = "，".join(str(r.get(k) or "") for k in ("province", "city") if r.get(k))
+                        vcands.append({"name": cname, "note": ("品牌反查命中（工商核验）：" + loc) if loc else "品牌反查命中（工商核验）"})
+            except Exception:
+                pass
+            if not vcands:
+                vcands = [{"name": rev, "note": "品牌反查命中（联网证据，建议人工核对工商登记）"}]
+            for c in vcands:
+                _register_verified_name(c["name"], "", name)
+            if vcands:
+                logger.info(f"品牌反查 '{name}' → {vcands[0]['name']}")
+                return {"ok": True, "unique": len(vcands) == 1, "exists": True,
+                        "candidates": vcands,
+                        "hint": "品牌反查命中以下企业，请确认是哪一家" if len(vcands) > 1 else "",
+                        "source": "brand_reverse"}
         logger.info(f"工商API名称核查：未找到 '{name}' 的匹配企业")
         return {
             "ok": True,
@@ -4055,11 +4116,15 @@ async def create_task(req: CreateTaskRequest):
     confirmed_brand = (req.brand_name or "").strip()[:40]
     if confirmed_brand and confirmed_brand != anchor:
         from company_cache import prefer_brand
-        prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认")  # 先落档为线索
-        _lb = await _lookup_brand_name(anchor)  # 人工确认不 trusted：强制七渠道联网核查
-        _vnames = [i["name"] for i in _lb.get("items", [])]
-        if _vnames and confirmed_brand not in _vnames:
-            confirmed_brand = _lb["primary"] or _vnames[0]  # 核查结论说了算（一致则原样，不一致以联网为准）
+        # 先走核查+投票（人工确认值作线索），再按"人只定主次"落钉选
+        _lb = await _lookup_brand_name(anchor)
+        _voted = [i["name"] for i in _lb.get("items", []) if i.get("votes")]
+        if confirmed_brand in _voted:
+            # 钉选的是网核候选 → 主品牌=所选（人只定主次，结果按公司缓存）
+            prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认",
+                         source="web_multichannel", human=True)
+        else:
+            prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认")  # 线索级缓存
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(
