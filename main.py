@@ -2031,14 +2031,58 @@ async def _llm_resolve_company_name(name: str) -> str:
         return ""
 
 
+def _brand_overlaps_full(brand: str, full_name: str) -> bool:
+    """品牌与全称的字面重合判定：品牌整体含于全称，或与全称有≥3字连续共同段。
+    「和创企赢」⊂「广东和创企赢企服集团有限公司」→ True；「国外公司注册」只有
+    「公司」2字重合 → False（服务词冒充品牌在此被天然排后）。"""
+    from company_cache import norm_name
+    b, f = norm_name(brand), norm_name(full_name)
+    if not b or b == f:
+        return False
+    if b in f:
+        return True
+    return any(b[i:i + 3] in f for i in range(len(b) - 2))
+
+
+async def _llm_pick_brand(full_name: str, candidates: list) -> str:
+    """模型语义裁决：候选里哪个是真正的品牌名，排除服务/业务描述词（如"国外公司注册"）。
+    纯语义判断不联网，小调用秒级。返回候选中的胜者；判无真品牌或异常返回空串。"""
+    if not candidates:
+        return ""
+    _lc = load_config().get("llm", {})
+    llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
+                    temperature=0, max_tokens=200, timeout=30,
+                    max_retries=1, enable_search=False, enable_thinking=False)
+    prompt = (f"公司工商注册全称：「{full_name}」。\n"
+              f"候选名称：{json.dumps(candidates, ensure_ascii=False)}\n"
+              "判断哪个候选是这家公司对外的品牌名称（商标/官网/产品上的叫法）。\n"
+              "排除标准：像服务项目、业务动作的词（如\"国外公司注册\"\"工商财税\"）不是品牌名。\n"
+              "多个候选都像品牌名时，选更完整、更正式的那个（通常是商标或官网全称，而非简称）。\n"
+              '只返回 JSON：{"brand": "选中的候选原文"}；候选里没有真品牌名时返回 {"brand": ""}。')
+    try:
+        r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
+        b = str(r.get("brand") or "").strip() if isinstance(r, dict) else ""
+        return b if b in candidates else ""
+    except Exception:
+        return ""
+
+
 async def _lookup_brand_name(full_name: str) -> str:
-    """查公司对外品牌名：档案 brands 有则直接用（免联网）；没有则联网问一次并回写档案。
-    查不到返回空串，绝不阻塞名称核查主流程。"""
-    from company_cache import get_info, upsert_info
+    """查公司对外品牌名。档案有候选时：字面重合预排序 + 模型语义裁决（排除服务词冒充）；
+    档案没有则联网查一次并回写（查回结果同样过语义裁决）。查不到返回空串，绝不阻塞主流程。"""
+    from company_cache import get_info, add_brands_alias
     info, _ = get_info(full_name)
+    primary = str((info or {}).get("brand_primary") or "").strip()
+    if primary:
+        return primary  # 人工确认过的主品牌：直接采用，权威高于模型裁决
     brands = [str(b).strip() for b in ((info or {}).get("brands") or []) if str(b).strip()]
     if brands:
-        return brands[0]
+        # 档案原始顺序（先确认的在先）交模型裁决；字面重合等信号模型看得到全称可自行权衡，
+        # 不做预排序——实测按重合预排序会把不含公司字号的已确认品牌（飞柚GEO）挤到后面
+        picked = await _llm_pick_brand(full_name, brands)
+        if picked:
+            return picked
+        return brands[0]  # LLM判无真品牌或异常时兜底：档案首位（弹窗可人工修正）
     _lc = load_config().get("llm", {})
     llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
                     temperature=0.2, max_tokens=_lc.get("max_tokens", 16384), timeout=60,
@@ -2052,10 +2096,13 @@ async def _lookup_brand_name(full_name: str) -> str:
     except Exception:
         return ""
     if b and b != full_name:
-        try:
-            upsert_info(full_name, {"brands": [b]}, origin="名称核查·品牌识别")
-        except Exception:
-            pass  # 档案写失败不影响返回品牌名
+        if await _llm_pick_brand(full_name, [b]):  # 联网查回的同样过语义裁决，防服务词冒充
+            try:
+                add_brands_alias(full_name, b, origin="名称核查·品牌识别")  # 增量并入，不覆盖已有品牌
+            except Exception:
+                pass  # 档案写失败不影响返回品牌名
+            return b
+        return ""
     return b
 
 
@@ -3888,11 +3935,11 @@ async def create_task(req: CreateTaskRequest):
     if err:
         raise HTTPException(status_code=422, detail=err)
     _consume_verified_token(vtok)
-    # 弹窗里人工确认/修正的品牌名：增量并入档案（去重），挖掘第一步作检索锚点
+    # 弹窗里人工确认/修正的品牌名：钉为档案主品牌（识别时直接采用，优先级高于模型裁决）
     confirmed_brand = (req.brand_name or "").strip()[:40]
     if confirmed_brand and confirmed_brand != anchor:
-        from company_cache import add_brands_alias
-        add_brands_alias(anchor, confirmed_brand, origin="名称核查·品牌确认")
+        from company_cache import prefer_brand
+        prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认")
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(

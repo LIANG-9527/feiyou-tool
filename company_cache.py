@@ -242,6 +242,31 @@ _LIST_KEYS = ("products", "personas", "journey", "journey_stages", "topics",
               "clusters", "verifications", "sample_queries")
 
 
+def prefer_brand(name: str, brand: str, origin: str = ""):
+    """人工确认的品牌名钉为主品牌（brand_primary）：识别时直接采用，优先级高于模型裁决。
+    同时增量并入 brands 清单去重。"""
+    brand = str(brand or "").strip()
+    if not name or not brand:
+        return
+    try:
+        add_brands_alias(name, brand, origin=origin)
+        with _conn() as c:
+            cur = c.cursor()
+            rid = _match_id(name, cur)
+            if not rid:
+                return
+            row = cur.execute("SELECT data FROM company WHERE id=?", (rid,)).fetchone()
+            d = json.loads(row[0]) if row else {}
+            if d.get("brand_primary") == brand:
+                return
+            d["brand_primary"] = brand
+            d["nature"] = derive_nature(d)
+            cur.execute("UPDATE company SET data=?, updated=? WHERE id=?",
+                        (json.dumps(d, ensure_ascii=False), time.strftime("%Y-%m-%d %H:%M"), rid))
+    except Exception:
+        pass  # 缓存写失败不影响主流程
+
+
 def upsert_mining(brand: str, payload: dict, origin: str = "", content_brand: str = ""):
     """问句挖掘板块产出写入 mining 表（键=公司身份 id）。
     每条内容打品牌标（content_brand=用户输入的品牌名，缺省用全称）；
