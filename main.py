@@ -2205,6 +2205,7 @@ async def analyze(req: AnalyzeRequest):
     _rt0 = time.time()
     files = save_output(result, config)
     _rev["dur"] = round(time.time() - _rt0, 1)
+    _consume_verified_token(_vtok)  # 同步链结束即删自己消费的核验凭证（异常路径靠TTL兜底）
 
     # Return summary (full data is in the saved files)
     return JSONResponse({
@@ -2813,43 +2814,55 @@ async def delete_report(filename: str):
 
 
 # ── 名称核验临时库（服务端内存，2026-09-19 定版）──
-# 前端核查命中后把"注册全称→品牌名→用户原始输入"登记在此；创建任务时后端只认
-# 库里有的名称——绕过前端直打接口无法注入编造名称/垃圾别名，且不产生第二次工商API费用。
-# 2小时过期惰性清理；重启即空（重启后从页面重新核查即可）。
+# 前端核查命中后每次登记为一条独立凭证（注册全称/品牌名/原始输入）；创建任务时校验并
+# 记住消费的凭证，任务结束只删自己那条——其他窗口的同名登记不受影响，杜绝交错误伤。
+# 绕过前端直打接口无法注入编造名称/垃圾别名，且零额外工商API费用。
+# 2小时过期惰性清理兜底孤儿条目（核查后未提交的）；重启即空。
 _VERIFIED_NAME_TTL = 2 * 3600
-_verified_names: dict = {}   # {归一全称: {"full":注册全称原文, "brand":品牌名, "inputs":{原始输入…}, "ts":时间戳}}
+_verified_names: dict = {}   # {核验凭证: {"full":注册全称, "brand":品牌名, "inputs":{原始输入…}, "ts":时间戳}}
 
 
-def _register_verified_name(full_name: str, brand: str, input_name: str):
+def _register_verified_name(full_name: str, brand: str, input_name: str) -> str:
+    import uuid
     from company_cache import norm_name
     now = time.time()
     for k in [k for k, v in _verified_names.items() if now - v["ts"] > _VERIFIED_NAME_TTL]:
         _verified_names.pop(k, None)
-    key = norm_name(full_name)
-    if not key:
-        return
-    e = _verified_names.setdefault(key, {"full": full_name, "brand": "", "inputs": set(), "ts": now})
-    e["ts"], e["full"] = now, full_name
-    if brand:
-        e["brand"] = brand
-    if input_name:
-        e["inputs"].add(input_name)
+    if not norm_name(full_name):
+        return ""
+    token = uuid.uuid4().hex
+    _verified_names[token] = {"full": full_name, "brand": brand or "",
+                              "inputs": {input_name} if input_name else set(), "ts": now}
+    return token
 
 
 def _resolve_verified_brand(brand: str, brand_alias: str) -> tuple:
-    """校验提交的品牌是否经过工商核验。返回 (锚点全称, 接受的别名或None, 错误或None)。"""
+    """校验提交的品牌是否经过工商核验。返回 (锚点全称, 接受的别名或None, 错误或None, 凭证)。"""
     from company_cache import norm_name
-    e = _verified_names.get(norm_name(brand))
-    if not e or time.time() - e["ts"] > _VERIFIED_NAME_TTL:
-        return None, None, "该企业名称未经工商核验或核验已过期（超过2小时），请从页面重新发起分析"
+    want = norm_name(brand)
+    now = time.time()
+    tok, hit = "", None
+    for k, v in _verified_names.items():   # 取匹配公司中最新的一条核验
+        if now - v["ts"] > _VERIFIED_NAME_TTL or norm_name(v["full"]) != want:
+            continue
+        if hit is None or v["ts"] >= hit["ts"]:
+            tok, hit = k, v
+    if hit is None:
+        return None, None, "该企业名称未经工商核验或核验已过期（超过2小时），请从页面重新发起分析", ""
     alias = None
-    if brand_alias and brand_alias.strip() and brand_alias.strip() != e["full"]:
+    if brand_alias and brand_alias.strip() and brand_alias.strip() != hit["full"]:
         a = brand_alias.strip()
-        if a in e["inputs"] and len(a) <= 40:
+        if a in hit["inputs"] and len(a) <= 40:
             alias = a
         else:
-            return None, None, f"别名「{a}」与核验记录不一致，已拒绝；请从页面重新核查后提交"
-    return e["full"], alias, None
+            return None, None, f"别名「{a}」与核验记录不一致，已拒绝；请从页面重新核查后提交", ""
+    return hit["full"], alias, None, tok
+
+
+def _consume_verified_token(token: str):
+    """任务结束只删自己消费的那条核验凭证。"""
+    if token:
+        _verified_names.pop(token, None)
 
 
 @app.get("/api/brand/check")
@@ -3605,9 +3618,13 @@ async def _run_analysis_task(task: Task):
     """任务入口按方法分流到各自独立的执行链——分析功能模块之间不混用流程。
     新增分析方法时：注册一个自己的 _run_xxx_task，在此挂一行分发，别复用别人的环节。"""
     method = task.method or "customer_market_research"
-    if method == "geo_query_mining":
-        return await _run_mining_task(task)
-    return await _run_research_task(task)
+    try:
+        if method == "geo_query_mining":
+            return await _run_mining_task(task)
+        return await _run_research_task(task)
+    finally:
+        # 任务结束只删自己消费的那条名称核验凭证（其他窗口的同名登记不受影响）
+        _consume_verified_token(task.extra.get("verify_token"))
 
 
 def _count_stage_clusters(sd) -> int:
@@ -3857,7 +3874,7 @@ async def create_task(req: CreateTaskRequest):
     mgr = _get_task_mgr()
     # 服务端强制核验（2026-09-19）：品牌必须经名称核查登记，锚定一律取核验所得注册全称；
     # 别名仅在接受与核验时原始输入一致——绕过前端直打接口无法注入编造名称/垃圾别名
-    anchor, alias, err = _resolve_verified_brand(req.brand, req.brand_alias)
+    anchor, alias, err, vtok = _resolve_verified_brand(req.brand, req.brand_alias)
     if err:
         raise HTTPException(status_code=422, detail=err)
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
@@ -3869,6 +3886,7 @@ async def create_task(req: CreateTaskRequest):
         brand_alias=alias,
         thinking=req.thinking,
     )
+    task.extra["verify_token"] = vtok  # 任务结束只删自己消费的核验凭证
     # 保存额外参数
     task.extra["force_refresh"] = req.force_refresh
     # 启动后台执行
@@ -4014,7 +4032,7 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     method = method or "customer_market_research"
     # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称
-    brand, brand_alias, _verr = _resolve_verified_brand(brand, brand_alias)
+    brand, brand_alias, _verr, _vtok = _resolve_verified_brand(brand, brand_alias)
     if _verr:
         raise HTTPException(status_code=422, detail=_verr)
     config = load_config()
