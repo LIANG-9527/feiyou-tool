@@ -2155,6 +2155,11 @@ async def health():
 
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
+    # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称
+    _anchor, _alias, _verr = _resolve_verified_brand(req.brand, getattr(req, "brand_alias", None))
+    if _verr:
+        raise HTTPException(status_code=422, detail=_verr)
+    req.brand = _anchor
     config = load_config()
     agent = build_agent(config)
 
@@ -2807,6 +2812,46 @@ async def delete_report(filename: str):
     return JSONResponse({"ok": True, "deleted": deleted})
 
 
+# ── 名称核验临时库（服务端内存，2026-09-19 定版）──
+# 前端核查命中后把"注册全称→品牌名→用户原始输入"登记在此；创建任务时后端只认
+# 库里有的名称——绕过前端直打接口无法注入编造名称/垃圾别名，且不产生第二次工商API费用。
+# 2小时过期惰性清理；重启即空（重启后从页面重新核查即可）。
+_VERIFIED_NAME_TTL = 2 * 3600
+_verified_names: dict = {}   # {归一全称: {"full":注册全称原文, "brand":品牌名, "inputs":{原始输入…}, "ts":时间戳}}
+
+
+def _register_verified_name(full_name: str, brand: str, input_name: str):
+    from company_cache import norm_name
+    now = time.time()
+    for k in [k for k, v in _verified_names.items() if now - v["ts"] > _VERIFIED_NAME_TTL]:
+        _verified_names.pop(k, None)
+    key = norm_name(full_name)
+    if not key:
+        return
+    e = _verified_names.setdefault(key, {"full": full_name, "brand": "", "inputs": set(), "ts": now})
+    e["ts"], e["full"] = now, full_name
+    if brand:
+        e["brand"] = brand
+    if input_name:
+        e["inputs"].add(input_name)
+
+
+def _resolve_verified_brand(brand: str, brand_alias: str) -> tuple:
+    """校验提交的品牌是否经过工商核验。返回 (锚点全称, 接受的别名或None, 错误或None)。"""
+    from company_cache import norm_name
+    e = _verified_names.get(norm_name(brand))
+    if not e or time.time() - e["ts"] > _VERIFIED_NAME_TTL:
+        return None, None, "该企业名称未经工商核验或核验已过期（超过2小时），请从页面重新发起分析"
+    alias = None
+    if brand_alias and brand_alias.strip() and brand_alias.strip() != e["full"]:
+        a = brand_alias.strip()
+        if a in e["inputs"] and len(a) <= 40:
+            alias = a
+        else:
+            return None, None, f"别名「{a}」与核验记录不一致，已拒绝；请从页面重新核查后提交"
+    return e["full"], alias, None
+
+
 @app.get("/api/brand/check")
 async def api_brand_check(name: str):
     """企业/品牌名唯一性预检：工商API模糊搜索获取真实候选公司。
@@ -2816,7 +2861,6 @@ async def api_brand_check(name: str):
     name = (name or "").strip()
     if not name:
         return {"ok": False, "unique": True}
-
     # ---- 优先用工商API模糊搜索（候选名称都是真实存在的公司）----
     try:
         from business_api_client import get_business_api_client, BusinessAPIError
@@ -2859,6 +2903,9 @@ async def api_brand_check(name: str):
                     # 前端据此弹确认换正名（2026-09-19 需求：报告锚定用正名不用简称）
                     resp["resolved_full"] = candidates[0]["name"]
                     resp["brand"] = await _lookup_brand_name(resp["resolved_full"])
+                # 核验登记（多候选逐个登记，选中哪个哪个就是合法锚点）
+                for c in candidates:
+                    _register_verified_name(c["name"], resp.get("brand") or "", name)
                 return resp
         # 工商API模糊搜索返回空结果：直接返回 exists=false，不回退到LLM
         # （工商API是权威数据源，找不到说明公司名称可能不准确）
@@ -3808,22 +3855,27 @@ async def create_task(req: CreateTaskRequest):
     客户端关闭网页不影响任务执行，可通过 task_id 查询进度和结果。
     """
     mgr = _get_task_mgr()
+    # 服务端强制核验（2026-09-19）：品牌必须经名称核查登记，锚定一律取核验所得注册全称；
+    # 别名仅在接受与核验时原始输入一致——绕过前端直打接口无法注入编造名称/垃圾别名
+    anchor, alias, err = _resolve_verified_brand(req.brand, req.brand_alias)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(
-        brand=req.brand,
+        brand=anchor,
         product=req.product,
         method=task_method,
-        brand_alias=req.brand_alias,
+        brand_alias=alias,
         thinking=req.thinking,
     )
     # 保存额外参数
     task.extra["force_refresh"] = req.force_refresh
     # 启动后台执行
     await mgr.start_task(task.task_id, _run_analysis_task)
-    _log_op(_METHOD_NAMES.get(task_method, task_method), "创建任务", req.brand,
-            f"调研对象 {req.brand}" + (f"（别名 {req.brand_alias}）" if req.brand_alias else ""))
-    return {"task_id": task.task_id, "status": task.status, "brand": task.brand}
+    _log_op(_METHOD_NAMES.get(task_method, task_method), "创建任务", anchor,
+            f"调研对象 {anchor}" + (f"（别名 {alias}）" if alias else ""))
+    return {"task_id": task.task_id, "status": task.status, "brand": anchor}
 
 
 @app.get("/api/tasks")
@@ -3961,6 +4013,10 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
     force_refresh：是否强制刷新企业基本信息（绕过本地缓存，调用工商API获取最新数据）。"""
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     method = method or "customer_market_research"
+    # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称
+    brand, brand_alias, _verr = _resolve_verified_brand(brand, brand_alias)
+    if _verr:
+        raise HTTPException(status_code=422, detail=_verr)
     config = load_config()
     agent = build_agent(config, thinking=None if thinking is None else thinking == "1")
 
