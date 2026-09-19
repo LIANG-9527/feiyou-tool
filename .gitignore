@@ -6,3 +6,4 @@ var/
 .zcode/
 server*.log
 dist/
+graphify-out/
