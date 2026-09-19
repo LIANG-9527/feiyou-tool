@@ -4644,6 +4644,7 @@ async function brandCheck(name) {
   }
   return await new Promise(function(resolve){
     const cands = d.candidates || [];
+    let bcSelected = null;
     const bcRows = cands.map(function(c){
       return '<label style="display:flex;gap:8px;align-items:flex-start;padding:8px 4px;border-bottom:1px solid #f2f2f5;cursor:pointer;font-size:13px">' +
              '<input type="radio" name="bcand" value="' + _besc(c.name) + '" style="margin-top:3px">' +
@@ -4656,13 +4657,11 @@ async function brandCheck(name) {
       '<div style="font-size:15px;font-weight:700;margin-bottom:6px">「' + _besc(name) + '」可能不是唯一匹配</div>' +
       '<div style="font-size:12px;color:#6e7991;margin-bottom:12px">' + _besc(d.hint || '存在多家同名/近名企业，请确认目标企业后再开始') + '</div>' +
       (cands.length ? '<div id="bcandBox" style="margin-bottom:12px"></div>' : '') +
-      '<div style="font-size:13px;color:#091026;margin:6px 0 4px">使用名称</div>' +
-      '<input id="bname" value="' + _besc(name) + '" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
       '<div style="font-size:13px;color:#091026;margin:10px 0 4px">品牌名称（选中企业后自动识别预填，可人工修正；留空则不记录）</div>' +
       '<input id="bbrand" value="" placeholder="先在上方选中一家企业" style="width:100%;padding:9px 12px;border:1.5px solid #eff1f6;border-radius:10px;font-size:13px;font-family:inherit;box-sizing:border-box">' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">' +
       '<button id="bcancel" style="padding:8px 18px;border:1px solid #eff1f6;background:#fff;border-radius:9px;font-size:13px;cursor:pointer">取消</button>' +
-      '<button id="bok" style="padding:8px 18px;border:none;background:#3567ff;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer">用该名称开始</button></div></div>';
+      '<button id="bok" disabled style="padding:8px 18px;border:none;background:#a8bbf5;color:#fff;border-radius:9px;font-size:13px;font-weight:600;cursor:not-allowed">请先选中一家企业</button></div></div>';
     document.body.appendChild(ov);
     function renderBcPage(){
       if (!cands.length) return;
@@ -4681,7 +4680,9 @@ async function brandCheck(name) {
       if (next) next.onclick = function(){ if (bcPage < pages - 1) { bcPage++; renderBcPage(); } };
       ov.querySelectorAll('input[name=bcand]').forEach(function(rb){
         rb.addEventListener('change', function(){
-          document.getElementById('bname').value = this.value;
+          bcSelected = this.value;
+          const ok = document.getElementById('bok');
+          ok.disabled = false; ok.style.background = '#3567ff'; ok.style.cursor = 'pointer'; ok.textContent = '用该企业开始';
           const bIn = document.getElementById('bbrand');
           bIn.value = ''; bIn.placeholder = '正在识别品牌名…';
           fetch('/api/brand/lookup-brand?name=' + encodeURIComponent(this.value))
@@ -4694,9 +4695,9 @@ async function brandCheck(name) {
     renderBcPage();
     document.getElementById('bcancel').onclick = function(){ ov.remove(); resolve(null); };
     document.getElementById('bok').onclick = function(){
-      const v = document.getElementById('bname').value.trim() || name;
+      if (!bcSelected) return;
       const b = (document.getElementById('bbrand').value || '').trim();
-      ov.remove(); resolve({name: v, brandName: b || null});
+      ov.remove(); resolve({name: bcSelected, brandName: b || null});
     };
     ov.addEventListener('click', function(e){ if (e.target === ov) { ov.remove(); resolve(null); } });
   });
