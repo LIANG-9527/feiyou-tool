@@ -2076,54 +2076,59 @@ async def _llm_pick_brand(full_name: str, candidates: list) -> str:
         return ""
 
 
-async def _lookup_brand_name(full_name: str) -> str:
-    """查公司对外品牌名。档案有候选时：字面重合预排序 + 模型语义裁决（排除服务词冒充）；
-    档案没有则联网查一次并回写（查回结果同样过语义裁决）。查不到返回空串，绝不阻塞主流程。"""
-    from company_cache import get_info, add_brands_alias
-    info, _ = get_info(full_name)
-    primary = str((info or {}).get("brand_primary") or "").strip()
-    if primary:
-        return primary  # 人工确认过的主品牌：直接采用，权威高于模型裁决
-    brands = [str(b).strip() for b in ((info or {}).get("brands") or []) if str(b).strip()]
-    if brands:
-        # 档案原始顺序（先确认的在先）交模型裁决；字面重合等信号模型看得到全称可自行权衡，
-        # 不做预排序——实测按重合预排序会把不含公司字号的已确认品牌（飞柚GEO）挤到后面
-        picked = await _llm_pick_brand(full_name, brands)
-        if picked:
-            # 裁决结论落档为主品牌：同公司后续核查直接秒回，不再重复调用模型（可被人工确认覆盖）
-            try:
-                from company_cache import prefer_brand
-                prefer_brand(full_name, picked, origin="名称核查·模型裁决")
-            except Exception:
-                pass
-            return picked
-        return brands[0]  # LLM判无真品牌或异常时兜底：档案首位（弹窗可人工修正）
+async def _web_verify_brand(full_name: str, hints: list) -> str:
+    """七渠道联网多方核查品牌名（公众号/官方账号/官网域名/活动新闻/百科/媒体报道/商标）。
+    档案候选只作线索；排除服务词与全称机械截断；核查到更准的官方品牌名以联网为准。"""
     _lc = load_config().get("llm", {})
     llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
                     temperature=0.2, max_tokens=_lc.get("max_tokens", 16384), timeout=60,
                     max_retries=1, enable_search=True, enable_thinking=False, search_engine=["baidu"])
+    hint_line = (f"档案中已有的品牌候选（历史写入，未必正确，仅供线索）：{json.dumps(hints, ensure_ascii=False)}。\n"
+                 if hints else "")
     prompt = (f"「{full_name}」是一家公司的工商注册全称。请联网多方核查这家公司对外使用的品牌名称"
               "（商标/官网/产品上的叫法，不是公司注册名本身）。应交叉核对以下证据渠道：\n"
               "① 微信公众号名称；② 今日头条/官方自媒体账号名；③ 官网域名及官网署名；"
               "④ 线下活动、新闻稿中的品牌描述；⑤ 百科词条（百度百科/维基等）；"
               "⑥ 第三方媒体报道中的称呼；⑦ 商标注册信息。\n"
-              "多个渠道指向同一叫法才可采信；证据冲突或查不到时如实返回空。\n"
-              '只返回 JSON：{"brand": "品牌名", "evidence": "依据了哪些渠道、各渠道叫法"}。不要返回其他内容。')
+              + hint_line +
+              "排除：服务/业务描述词（如\"国外公司注册\"）；公司全称的机械截断"
+              "（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」也不算品牌名）。\n"
+              "多个渠道指向同一叫法才可采信；若核查发现比候选更准确的官方品牌名，以其为准。\n"
+              '只返回 JSON：{"brand": "品牌名", "evidence": "依据了哪些渠道、各渠道叫法"}；'
+              '核查不到返回 {"brand": ""}。不要返回其他内容。')
     try:
         r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
         b = str(r.get("brand") or "").strip() if isinstance(r, dict) else ""
-        logger.info(f"品牌识别（联网多方核查）{full_name}: brand={b!r} evidence={str(r.get('evidence') or '')[:200]}")
-    except Exception:
+        logger.info(f"品牌核查（七渠道联网）{full_name}: brand={b!r} evidence={str(r.get('evidence') or '')[:200]}")
+        return b
+    except Exception as e:
+        logger.warning(f"品牌联网核查失败 {full_name}: {e}")
         return ""
+
+
+async def _lookup_brand_name(full_name: str) -> str:
+    """查公司对外品牌名。档案有候选时：字面重合预排序 + 模型语义裁决（排除服务词冒充）；
+    档案没有则联网查一次并回写（查回结果同样过语义裁决）。查不到返回空串，绝不阻塞主流程。"""
+    from company_cache import get_info
+    info, _ = get_info(full_name)
+    primary = str((info or {}).get("brand_primary") or "").strip()
+    src = str((info or {}).get("brand_source") or "").strip()
+    brands = [str(b).strip() for b in ((info or {}).get("brands") or []) if str(b).strip()]
+    # 来源定信任级：人工确认/七渠道联网核查过的直接采用；其余（含历史存量无来源的）重走联网核查
+    if primary and src in ("user_confirm", "web_multichannel"):
+        return primary
+    b = await _web_verify_brand(full_name, brands)
     if b and b != full_name:
-        if await _llm_pick_brand(full_name, [b]):  # 联网查回的同样过语义裁决，防服务词冒充
-            try:
-                add_brands_alias(full_name, b, origin="名称核查·品牌识别")  # 增量并入，不覆盖已有品牌
-            except Exception:
-                pass  # 档案写失败不影响返回品牌名
-            return b
-        return ""
-    return b
+        from company_cache import prefer_brand
+        prefer_brand(full_name, b, origin="名称核查·多方核查", source="web_multichannel")
+        return b
+    # 联网失败退离线裁决兜底（不写来源 → 下次识别会再触发联网补核）
+    if primary:
+        return primary
+    if brands:
+        picked = await _llm_pick_brand(full_name, brands)
+        return picked or brands[0]
+    return ""
 
 
 @app.post("/api/audit/bind")

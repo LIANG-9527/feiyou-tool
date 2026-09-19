@@ -242,9 +242,10 @@ _LIST_KEYS = ("products", "personas", "journey", "journey_stages", "topics",
               "clusters", "verifications", "sample_queries")
 
 
-def prefer_brand(name: str, brand: str, origin: str = ""):
-    """人工确认的品牌名钉为主品牌（brand_primary）：识别时直接采用，优先级高于模型裁决。
-    同时增量并入 brands 清单去重。"""
+def prefer_brand(name: str, brand: str, origin: str = "", source: str = "user_confirm"):
+    """钉主品牌（brand_primary）并记录获取方式（brand_source）：
+    user_confirm=人工弹窗确认；web_multichannel=七渠道联网核查。识别层只信任这两种，
+    其他来源（离线裁决/历史存量无来源）下次识别会重新触发联网核查更新。"""
     brand = str(brand or "").strip()
     if not name or not brand:
         return
@@ -257,9 +258,10 @@ def prefer_brand(name: str, brand: str, origin: str = ""):
                 return
             row = cur.execute("SELECT data FROM company WHERE id=?", (rid,)).fetchone()
             d = json.loads(row[0]) if row else {}
-            if d.get("brand_primary") == brand:
+            if d.get("brand_primary") == brand and d.get("brand_source") == source:
                 return
             d["brand_primary"] = brand
+            d["brand_source"] = source
             d["nature"] = derive_nature(d)
             cur.execute("UPDATE company SET data=?, updated=? WHERE id=?",
                         (json.dumps(d, ensure_ascii=False), time.strftime("%Y-%m-%d %H:%M"), rid))
