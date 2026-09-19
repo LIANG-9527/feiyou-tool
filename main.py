@@ -4795,17 +4795,29 @@ async function brandCheck(name) {
       const prev = document.getElementById('bcPrev'), next = document.getElementById('bcNext');
       if (prev) prev.onclick = function(){ if (bcPage > 0) { bcPage--; renderBcPage(); } };
       if (next) next.onclick = function(){ if (bcPage < pages - 1) { bcPage++; renderBcPage(); } };
+      let bcFetchSeq = 0;  // 识别序号：快速切换企业时只采纳最后一次结果
       ov.querySelectorAll('input[name=bcand]').forEach(function(rb){
         rb.addEventListener('change', function(){
           bcSelected = this.value;
           const ok = document.getElementById('bok');
-          ok.disabled = false; ok.style.background = '#3567ff'; ok.style.cursor = 'pointer'; ok.textContent = '用该企业开始';
           const bIn = document.getElementById('bbrand');
+          const seq = ++bcFetchSeq;
+          // 品牌识别进行中禁止提交（2026-09-19：堵住识别未完成就创建任务的时序洞）
+          ok.disabled = true; ok.style.background = '#a8bbf5'; ok.style.cursor = 'not-allowed'; ok.textContent = '品牌识别中…';
           bIn.value = ''; bIn.placeholder = '正在识别品牌名…';
           fetch('/api/brand/lookup-brand?name=' + encodeURIComponent(this.value))
             .then(function(r){ return r.json(); })
-            .then(function(j){ bIn.value = (j && j.brand) || ''; bIn.placeholder = '识别不到可手填'; })
-            .catch(function(){ bIn.placeholder = '识别失败可手填'; });
+            .then(function(j){
+              if (seq !== bcFetchSeq) return;  // 用户已切换其他企业，丢弃过期识别结果
+              bIn.value = (j && j.brand) || '';
+              bIn.placeholder = bIn.value ? '可人工修正；留空则不记录' : '识别不到，可手填或留空';
+              ok.disabled = false; ok.style.background = '#3567ff'; ok.style.cursor = 'pointer'; ok.textContent = '用该企业开始';
+            })
+            .catch(function(){
+              if (seq !== bcFetchSeq) return;
+              bIn.placeholder = '识别失败，可手填或留空';
+              ok.disabled = false; ok.style.background = '#3567ff'; ok.style.cursor = 'pointer'; ok.textContent = '用该企业开始';
+            });
         });
       });
     }
