@@ -1182,6 +1182,15 @@ def _html_self_check(checks):
 
 app = FastAPI(title="GEO Query Mining Agent", version="1.0.0")
 
+# 代码知识图谱可视化（graphify 建图产物，rebuild 后刷新页面即可）
+try:
+    from fastapi.staticfiles import StaticFiles
+    _graph_dir = BASE_DIR / "graphify-out"
+    if _graph_dir.is_dir():
+        app.mount("/graph", StaticFiles(directory=_graph_dir, html=True), name="graph")
+except Exception:
+    pass  # 图谱目录不存在（未建图）时跳过挂载，不影响服务
+
 
 class AnalyzeRequest(PydanticModel):
     brand: str = Field(..., description="企业/品牌名称（用户确认后的企业全称）")
