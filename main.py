@@ -2054,27 +2054,35 @@ def _brand_overlaps_full(brand: str, full_name: str) -> bool:
     return any(b[i:i + 3] in f for i in range(len(b) - 2))
 
 
-async def _llm_pick_brand(full_name: str, candidates: list) -> str:
-    """模型语义裁决：候选里哪个是真正的品牌名，排除服务/业务描述词（如"国外公司注册"）。
-    纯语义判断不联网，小调用秒级。返回候选中的胜者；判无真品牌或异常返回空串。"""
+async def _llm_adjudicate_brands(full_name: str, candidates: list, evidence: str = "") -> list:
+    """模型裁决：候选里哪些是真品牌名（可多个，按证据强度排序），排除——
+    ①公司全称的机械截断；②服务/业务描述词（如"国外公司注册"）。
+    纯语义判断不联网，秒级。异常返回空列表（调用方自行兜底）。"""
     if not candidates:
-        return ""
+        return []
     _lc = load_config().get("llm", {})
     llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
-                    temperature=0, max_tokens=200, timeout=30,
+                    temperature=0, max_tokens=300, timeout=30,
                     max_retries=1, enable_search=False, enable_thinking=False)
     prompt = (f"公司工商注册全称：「{full_name}」。\n"
               f"候选名称：{json.dumps(candidates, ensure_ascii=False)}\n"
-              "判断哪个候选是这家公司对外的品牌名称（商标/官网/产品上的叫法）。\n"
-              "排除标准：像服务项目、业务动作的词（如\"国外公司注册\"\"工商财税\"）不是品牌名。\n"
-              "多个候选都像品牌名时，选更完整、更正式的那个（通常是商标或官网全称，而非简称）。\n"
-              '只返回 JSON：{"brand": "选中的候选原文"}；候选里没有真品牌名时返回 {"brand": ""}。')
+              + (f"七渠道核查证据：{evidence}\n" if evidence else "") +
+              "逐一判断每个候选是否为这家公司对外的品牌名称（商标/官网/产品上的叫法）。\n"
+              "排除：①公司全称的机械截断（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」）；"
+              "②服务项目、业务动作类描述词（如\"国外公司注册\"\"工商财税\"）。\n"
+              "是真品牌名的都保留（可多个），按证据强度排序。\n"
+              '只返回 JSON：{"brands": ["保留的候选原文", ...]}；没有真品牌名时返回 {"brands": []}。')
     try:
         r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
-        b = str(r.get("brand") or "").strip() if isinstance(r, dict) else ""
-        return b if b in candidates else ""
+        raw = r.get("brands") if isinstance(r, dict) else None
+        out = []
+        for x in (raw or []):
+            n = str(x or "").strip()
+            if n in candidates and n not in out:
+                out.append(n)
+        return out
     except Exception:
-        return ""
+        return []
 
 
 async def _web_verify_brand(full_name: str, hints: list) -> list:
@@ -2135,25 +2143,29 @@ async def _lookup_brand_name(full_name: str) -> dict:
         return {"items": items, "primary": items[0]["name"]}
     hints = [i["name"] for i in items]
     verified, evidence = await _web_verify_brand(full_name, hints)
-    # 机械后处理：候选名被证据提及且非全称机械截断 → 纳入并排前
-    # （模型偶发只回外文商标丢中文名、甚至 brands 留空只写证据——证据是机器可查的事实，直接回捞）
+    # 证据回捞：候选名被证据提及且非全称机械截断 → 纳入候选
+    # （截断判定必须用档案注册全称——输入名往往是简称，简称天然是自身前缀会误杀，实测好莱客案例）
     from company_cache import norm_name
-    # 截断判定必须用档案注册全称，不能用本次输入名——输入名往往是简称，
-    # 简称天然是自身前缀，会把证据回捞的候选全部误杀（实测好莱客案例）
     f = norm_name(str((info or {}).get("full_name") or full_name))
-    kept = [h for h in hints
-            if norm_name(h) in evidence and not f.startswith(norm_name(h))]
-    final = kept + [v for v in verified if v not in kept]
-    if final:
-        set_verified_brands(full_name, final, origin="名称核查·多方核查")
-        return {"items": [{"name": n, "source": "web_multichannel"} for n in final],
-                "primary": final[0]}
-    # 联网失败/确实查无：退离线裁决兜底（不写可信来源 → 下次识别会再触发联网补核）
-    names = [i["name"] for i in items]
-    if names:
-        picked = await _llm_pick_brand(full_name, names) or (primary or names[0])
-        return {"items": items, "primary": picked}
-    return {"items": [], "primary": ""}
+    recalled = [h for h in hints
+                if norm_name(h) in evidence and not f.startswith(norm_name(h))]
+    candidates = []
+    for n in verified + recalled:
+        if n and n not in candidates and n != full_name:
+            candidates.append(n)
+    # 模型裁决后置（2026-09-19 用户定版）：逐候选排除机械截断与服务/业务描述词，
+    # 七渠道核查偶发把服务词当品牌核验通过（和创企赢案例），此处为最后防线
+    judged = await _llm_adjudicate_brands(full_name, candidates, evidence)
+    if judged:
+        set_verified_brands(full_name, judged, origin="名称核查·多方核查")
+        return {"items": [{"name": n, "source": "web_multichannel"} for n in judged],
+                "primary": judged[0]}
+    # 裁决无结论/联网失败：离线裁决兜底（不写可信来源 → 下次识别会再触发联网补核）
+    names = [i["name"] for i in candidates] or [i["name"] for i in items]
+    offline = await _llm_adjudicate_brands(full_name, names)
+    if offline:
+        return {"items": items, "primary": offline[0]}
+    return {"items": items, "primary": primary or (names[0] if names else "")}
 
 
 @app.post("/api/audit/bind")
