@@ -2070,6 +2070,9 @@ async def _llm_adjudicate_brands(full_name: str, candidates: list, evidence: str
               "逐一判断每个候选是否为这家公司对外的品牌名称（商标/官网/产品上的叫法）。\n"
               "中国企业品牌惯例：品牌名通常=全称去掉行政区划（广东/深圳等）和行业/组织后缀（有限公司、股份、集团、企服等）后的**字号**——"
               "候选与全称字号一致（如「和创企赢」之于「广东和创企赢企服集团有限公司」、「好莱客」之于「广州好莱客创意家居股份有限公司」）是典型的品牌形态，应当保留。\n"
+              "中外双品牌：本土公司同时有中文名与海外英文名时，主品牌取中文市场在用的中文名"
+              "（如上海魔法向量→圆领，而非海外站名 HireNow）；外资在华主体例外，沿用其全球品牌（如苹果在华仍取 Apple）。\n"
+              "候选与 A 股证券简称/挂牌简称一致是强有力的品牌证据（如「极联股份」），优先于其他候选。\n"
               "排除：①公司全称的中间段截断（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」——多带了行业词且无独立使用证据）；"
               "②服务项目、业务动作类描述词（如\"国外公司注册\"\"工商财税\"）。\n"
               "是真品牌名的都保留（可多个），按证据强度排序。\n"
@@ -2107,6 +2110,8 @@ async def _web_verify_brand(full_name: str, hints: list) -> tuple:
               "多个渠道指向同一叫法才可采信；若核查发现比候选更准确的官方品牌名，以其为准。\n"
               "语言一致：候选（或用户已确认）的品牌名与证据相符时，沿用其原文和语言，"
               "不要替换成外文/其他语言版本；仅当候选全部被排除时才返回新名。\n"
+              "中外双品牌：本土公司同时有中文名与海外英文名时，主品牌取中文市场在用的中文名；"
+              "外资在华主体例外，沿用其全球品牌。\n"
               '只返回 JSON：{"brands": ["核验通过的品牌名1", "品牌名2"], "evidence": "渠道名：该渠道叫法（逐渠道简写）"}。\n'
               "硬性要求：brands 数组必须填入核验通过的品牌名（哪怕只有一个）——"
               "evidence 里提到的每个品牌名都必须同时出现在 brands 中；"
@@ -2144,34 +2149,35 @@ async def _lookup_brand_name(full_name: str) -> dict:
             and all(i["source"] == "web_multichannel" for i in items):
         return {"items": items, "primary": items[0]["name"]}
     hints = [i["name"] for i in items]
+    # 行政区截断排除（2026-09-20 交接单第 2 件）：以市/省/区/县开头的截断串不是品牌
+    # （实测「市永盛工程建设」之于「深圳市永盛工程建设有限公司」）
+    hints = [h for h in hints if not re.match(r"^(市|省|自治区|县)", str(h or ""))]
     verified, evidence = await _web_verify_brand(full_name, hints)
-    # 档案候选全部交给裁决（含服务词等垃圾——裁决层有字号规则+服务词排除，由它weighing）；
-    # 七渠道核查偶发漏掉字号品牌（和创企赢案例），只喂核验结果会让裁决看不到正解
+    # 候选=核验结果+档案线索，全部交裁决
     candidates = []
     for n in verified + hints:
         if n and n not in candidates and n != full_name:
             candidates.append(n)
-    # 模型裁决后置（2026-09-19 用户定版）：逐候选排除机械截断与服务/业务描述词
-    judged = await _llm_adjudicate_brands(full_name, candidates, evidence)
-    # 机械终排（2026-09-19 用户定版，三个真实案例验收）：字号家族（候选含于注册全称）
-    # 必保留且排前，组内更短（更核心字号）优先——
-    # 丝路视觉>丝路视觉科技 ✓、和创企赢>和创财税 ✓、好莱客>HOLIKE ✓
-    # ponytail: 字号家族即便是裁决误删也强制回捞，代价是截断词偶发复活，出现再收紧
-    f = norm_name(str((info or {}).get("full_name") or full_name))
-    kept = [n for n in judged if norm_name(n) and norm_name(n) in f]
-    family = [h for h in hints if norm_name(h) in f and h not in kept]
-    final = kept + family + [n for n in judged if n not in kept and n not in family]
-    if final:
-        final = sorted(final, key=lambda n: (0 if norm_name(n) in f else 1, len(norm_name(n))))
-        set_verified_brands(full_name, final, origin="名称核查·多方核查")
-        return {"items": [{"name": n, "source": "web_multichannel"} for n in final],
-                "primary": final[0]}
-    # 裁决无结论/联网失败：离线裁决兜底（不写可信来源 → 下次识别会再触发联网补核）
-    names = [i["name"] for i in candidates] or [i["name"] for i in items]
-    offline = await _llm_adjudicate_brands(full_name, names)
-    if offline:
-        return {"items": items, "primary": offline[0]}
-    return {"items": items, "primary": primary or (names[0] if names else "")}
+    # 自洽性投票（2026-09-19 用户定版，替代全部正则截取启发式）：
+    # N 票并行语义裁决取多数，单次不稳由票数抹平——
+    # 三真实案例验收：丝路视觉、和创企赢、好莱客 5/5 票全一致命中
+    votes = await asyncio.gather(*[
+        _llm_adjudicate_brands(full_name, candidates, evidence) for _ in range(_BRAND_VOTE_N)
+    ])
+    tally, tops = {}, {}
+    for v in votes:
+        for i, n in enumerate(v):
+            tally[n] = tally.get(n, 0) + 1
+            if i == 0:
+                tops[n] = tops.get(n, 0) + 1
+    majority = sorted([n for n, c in tally.items() if c > _BRAND_VOTE_N / 2],
+                      key=lambda n: (-tops.get(n, 0), -tally[n]))
+    if majority:
+        set_verified_brands(full_name, majority, origin="名称核查·多方核查")
+        return {"items": [{"name": n, "source": "web_multichannel"} for n in majority],
+                "primary": majority[0]}
+    # 无多数结论（票数分散=信息不足）：不落可信档，退档案兜底（弹窗人工选择，下次再核）
+    return {"items": items, "primary": primary or (hints[0] if hints else "")}
 
 
 @app.post("/api/audit/bind")
@@ -2935,6 +2941,7 @@ async def delete_report(filename: str):
 # 绕过前端直打接口无法注入编造名称/垃圾别名，且零额外工商API费用。
 # 2小时过期惰性清理兜底孤儿条目（核查后未提交的）；重启即空。
 _VERIFIED_NAME_TTL = 2 * 3600
+_BRAND_VOTE_N = 5   # 品牌自洽性投票票数（并行，单次不稳由票数抹平）
 _verified_names: dict = {}   # {核验凭证: {"full":注册全称, "brand":品牌名, "inputs":{原始输入…}, "ts":时间戳}}
 
 
