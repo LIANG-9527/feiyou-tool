@@ -2890,6 +2890,20 @@ _VERIFIED_NAME_TTL = 2 * 3600
 _verified_names: dict = {}   # {核验凭证: {"full":注册全称, "brand":品牌名, "inputs":{原始输入…}, "ts":时间戳}}
 
 
+async def _archive_candidates_response(name: str):
+    """工商接口查无/故障时回退企业资料库：档案只收核验过的主体，可信。
+    命中返回唯一候选响应（已登记核验临时库），未命中返回 None。"""
+    from company_cache import get_info as _get_info
+    ainfo, _ = _get_info(name)
+    if not (ainfo and ainfo.get("full_name")):
+        return None
+    full = ainfo["full_name"]
+    resp = {"ok": True, "unique": True, "exists": True,
+            "candidates": [{"name": full, "note": "来自企业档案（已核验主体）"}],
+            "hint": "", "source": "local_archive"}
+    return resp
+
+
 def _register_verified_name(full_name: str, brand: str, input_name: str) -> str:
     import uuid
     from company_cache import norm_name
@@ -2988,8 +3002,16 @@ async def api_brand_check(name: str):
                 for c in candidates:
                     _register_verified_name(c["name"], resp.get("brand") or "", name)
                 return resp
-        # 工商API模糊搜索返回空结果：直接返回 exists=false，不回退到LLM
-        # （工商API是权威数据源，找不到说明公司名称可能不准确）
+        # 工商API模糊搜索对"地区前缀+字号"等写法会漏（实测 广州好莱客 查无而档案有）：
+        # 先回退企业资料库（只收核验过的主体），档案也没有才判查无
+        arch = await _archive_candidates_response(name)
+        if arch:
+            full = arch["candidates"][0]["name"]
+            arch["resolved_full"] = full
+            arch["brand"] = await _lookup_brand_name(full)
+            _register_verified_name(full, arch["brand"] or "", name)
+            logger.info(f"工商API查无 '{name}'，企业档案命中: {full}")
+            return arch
         logger.info(f"工商API名称核查：未找到 '{name}' 的匹配企业")
         return {
             "ok": True,
@@ -3001,6 +3023,13 @@ async def api_brand_check(name: str):
         }
     except BusinessAPIError as e:
         logger.warning(f"工商API名称核查失败: {e}")
+        arch = await _archive_candidates_response(name)
+        if arch:
+            full = arch["candidates"][0]["name"]
+            arch["resolved_full"] = full
+            arch["brand"] = await _lookup_brand_name(full)
+            _register_verified_name(full, arch["brand"] or "", name)
+            return arch
         return {"ok": False, "error": f"工商接口调用失败：{e}"}
     except ImportError as e:
         logger.warning(f"工商API client不可用: {e}")
