@@ -2090,6 +2090,12 @@ async def _lookup_brand_name(full_name: str) -> str:
         # 不做预排序——实测按重合预排序会把不含公司字号的已确认品牌（飞柚GEO）挤到后面
         picked = await _llm_pick_brand(full_name, brands)
         if picked:
+            # 裁决结论落档为主品牌：同公司后续核查直接秒回，不再重复调用模型（可被人工确认覆盖）
+            try:
+                from company_cache import prefer_brand
+                prefer_brand(full_name, picked, origin="名称核查·模型裁决")
+            except Exception:
+                pass
             return picked
         return brands[0]  # LLM判无真品牌或异常时兜底：档案首位（弹窗可人工修正）
     _lc = load_config().get("llm", {})
