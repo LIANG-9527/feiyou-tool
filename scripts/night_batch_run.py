@@ -37,14 +37,28 @@ def get(path):
     return json.loads(urllib.request.urlopen(BASE + path, timeout=30).read())
 
 
+def ensure_verified(brand):
+    """服务端要求名称先经工商核验登记（2026-09-19 反伪造定版）：核查登记后再提交任务。"""
+    import urllib.parse
+    r = get("/api/brand/check?name=" + urllib.parse.quote(brand))
+    if not r.get("exists"):
+        log(f"跳过 {brand}: 工商库查无此企业")
+        return False
+    return True
+
+
 def main():
     task_ids = {}
     for b in RESEARCH:
+        if not ensure_verified(b):
+            continue
         r = post("/api/tasks", {"brand": b, "method": "customer_market_research"})
         task_ids[r["task_id"]] = ("调研", b)
         log(f"提交调研 {b} → {r['task_id']}")
         time.sleep(1)
     for b in MINING:
+        if not ensure_verified(b):
+            continue
         r = post("/api/tasks", {"brand": b, "method": "geo_query_mining"})
         task_ids[r["task_id"]] = ("挖掘", b)
         log(f"提交挖掘 {b} → {r['task_id']}")

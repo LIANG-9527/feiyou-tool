@@ -3908,6 +3908,12 @@ class RefreshCompanyRequest(PydanticModel):
 @app.post("/api/refresh-company")
 async def refresh_company(req: RefreshCompanyRequest):
     """轻量刷新：只重跑企业档案+组织图+基本信息合并，重渲染回写原报告文件。"""
+    # 身份闸（2026-09-19 审计补）：只允许刷新企业档案里已有主体的报告，
+    # 防止绕过页面直打接口时借刷新通道为编造名称建档
+    from company_cache import get_info
+    info, _ = get_info(req.brand)
+    if not info:
+        raise HTTPException(status_code=422, detail=f"「{req.brand}」不在企业档案中（仅支持已建档主体的刷新）")
     mgr = _get_task_mgr()
     task = await mgr.create_task(brand=req.brand, method="customer_market_research",
                                  brand_alias=req.brand_alias)
