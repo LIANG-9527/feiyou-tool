@@ -2087,12 +2087,17 @@ async def _lookup_brand_name(full_name: str) -> str:
     llm = LLMClient(base_url=_lc["base_url"], api_key=_lc["api_key"], model=_lc["model"],
                     temperature=0.2, max_tokens=_lc.get("max_tokens", 16384), timeout=60,
                     max_retries=1, enable_search=True, enable_thinking=False, search_engine=["baidu"])
-    prompt = (f"「{full_name}」是一家公司的工商注册全称。请联网查询这家公司对外使用的品牌名称"
-              "（商标/官网/产品上的叫法，不是公司注册名本身）。\n"
-              '只返回 JSON：{"brand": "品牌名"} 或 {"brand": ""}（联网确认不了时）。不要返回其他内容。')
+    prompt = (f"「{full_name}」是一家公司的工商注册全称。请联网多方核查这家公司对外使用的品牌名称"
+              "（商标/官网/产品上的叫法，不是公司注册名本身）。应交叉核对以下证据渠道：\n"
+              "① 微信公众号名称；② 今日头条/官方自媒体账号名；③ 官网域名及官网署名；"
+              "④ 线下活动、新闻稿中的品牌描述；⑤ 百科词条（百度百科/维基等）；"
+              "⑥ 第三方媒体报道中的称呼；⑦ 商标注册信息。\n"
+              "多个渠道指向同一叫法才可采信；证据冲突或查不到时如实返回空。\n"
+              '只返回 JSON：{"brand": "品牌名", "evidence": "依据了哪些渠道、各渠道叫法"}。不要返回其他内容。')
     try:
         r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
         b = str(r.get("brand") or "").strip() if isinstance(r, dict) else ""
+        logger.info(f"品牌识别（联网多方核查）{full_name}: brand={b!r} evidence={str(r.get('evidence') or '')[:200]}")
     except Exception:
         return ""
     if b and b != full_name:
