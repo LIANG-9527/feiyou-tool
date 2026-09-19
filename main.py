@@ -2068,7 +2068,9 @@ async def _llm_adjudicate_brands(full_name: str, candidates: list, evidence: str
               f"候选名称：{json.dumps(candidates, ensure_ascii=False)}\n"
               + (f"七渠道核查证据：{evidence}\n" if evidence else "") +
               "逐一判断每个候选是否为这家公司对外的品牌名称（商标/官网/产品上的叫法）。\n"
-              "排除：①公司全称的机械截断（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」）；"
+              "中国企业品牌惯例：品牌名通常=全称去掉行政区划（广东/深圳等）和行业/组织后缀（有限公司、股份、集团、企服等）后的**字号**——"
+              "候选与全称字号一致（如「和创企赢」之于「广东和创企赢企服集团有限公司」、「好莱客」之于「广州好莱客创意家居股份有限公司」）是典型的品牌形态，应当保留。\n"
+              "排除：①公司全称的中间段截断（如「丝路视觉科技」之于「丝路视觉科技股份有限公司」——多带了行业词且无独立使用证据）；"
               "②服务项目、业务动作类描述词（如\"国外公司注册\"\"工商财税\"）。\n"
               "是真品牌名的都保留（可多个），按证据强度排序。\n"
               '只返回 JSON：{"brands": ["保留的候选原文", ...]}；没有真品牌名时返回 {"brands": []}。')
@@ -2085,7 +2087,7 @@ async def _llm_adjudicate_brands(full_name: str, candidates: list, evidence: str
         return []
 
 
-async def _web_verify_brand(full_name: str, hints: list) -> list:
+async def _web_verify_brand(full_name: str, hints: list) -> tuple:
     """七渠道联网多方核查品牌名（公众号/官方账号/官网域名/活动新闻/百科/媒体报道/商标）。
     档案候选只作线索；排除服务词与全称机械截断；核查到更准的官方品牌名以联网为准。"""
     _lc = load_config().get("llm", {})
@@ -2131,7 +2133,7 @@ async def _lookup_brand_name(full_name: str) -> dict:
     """查公司对外品牌名：只有七渠道联网核查过的主品牌才直接采用；
     人工确认、离线裁决、历史存量一律重新走七渠道联网核查（人工确认作优先线索）。
     核查不到退离线裁决/档案首位兜底（不写可信来源，下次再核）。"""
-    from company_cache import get_info, set_verified_brands, _brand_items
+    from company_cache import get_info, set_verified_brands, _brand_items, norm_name
     info, _ = get_info(full_name)
     primary = str((info or {}).get("brand_primary") or "").strip()
     src = str((info or {}).get("brand_source") or "").strip()
@@ -2143,23 +2145,27 @@ async def _lookup_brand_name(full_name: str) -> dict:
         return {"items": items, "primary": items[0]["name"]}
     hints = [i["name"] for i in items]
     verified, evidence = await _web_verify_brand(full_name, hints)
-    # 证据回捞：候选名被证据提及且非全称机械截断 → 纳入候选
-    # （截断判定必须用档案注册全称——输入名往往是简称，简称天然是自身前缀会误杀，实测好莱客案例）
-    from company_cache import norm_name
-    f = norm_name(str((info or {}).get("full_name") or full_name))
-    recalled = [h for h in hints
-                if norm_name(h) in evidence and not f.startswith(norm_name(h))]
+    # 档案候选全部交给裁决（含服务词等垃圾——裁决层有字号规则+服务词排除，由它weighing）；
+    # 七渠道核查偶发漏掉字号品牌（和创企赢案例），只喂核验结果会让裁决看不到正解
     candidates = []
-    for n in verified + recalled:
+    for n in verified + hints:
         if n and n not in candidates and n != full_name:
             candidates.append(n)
-    # 模型裁决后置（2026-09-19 用户定版）：逐候选排除机械截断与服务/业务描述词，
-    # 七渠道核查偶发把服务词当品牌核验通过（和创企赢案例），此处为最后防线
+    # 模型裁决后置（2026-09-19 用户定版）：逐候选排除机械截断与服务/业务描述词
     judged = await _llm_adjudicate_brands(full_name, candidates, evidence)
-    if judged:
-        set_verified_brands(full_name, judged, origin="名称核查·多方核查")
-        return {"items": [{"name": n, "source": "web_multichannel"} for n in judged],
-                "primary": judged[0]}
+    # 机械终排（2026-09-19 用户定版，三个真实案例验收）：字号家族（候选含于注册全称）
+    # 必保留且排前，组内更短（更核心字号）优先——
+    # 丝路视觉>丝路视觉科技 ✓、和创企赢>和创财税 ✓、好莱客>HOLIKE ✓
+    # ponytail: 字号家族即便是裁决误删也强制回捞，代价是截断词偶发复活，出现再收紧
+    f = norm_name(str((info or {}).get("full_name") or full_name))
+    kept = [n for n in judged if norm_name(n) and norm_name(n) in f]
+    family = [h for h in hints if norm_name(h) in f and h not in kept]
+    final = kept + family + [n for n in judged if n not in kept and n not in family]
+    if final:
+        final = sorted(final, key=lambda n: (0 if norm_name(n) in f else 1, len(norm_name(n))))
+        set_verified_brands(full_name, final, origin="名称核查·多方核查")
+        return {"items": [{"name": n, "source": "web_multichannel"} for n in final],
+                "primary": final[0]}
     # 裁决无结论/联网失败：离线裁决兜底（不写可信来源 → 下次识别会再触发联网补核）
     names = [i["name"] for i in candidates] or [i["name"] for i in items]
     offline = await _llm_adjudicate_brands(full_name, names)
