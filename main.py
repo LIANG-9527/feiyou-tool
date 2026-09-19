@@ -2107,15 +2107,17 @@ async def _web_verify_brand(full_name: str, hints: list) -> str:
 
 
 async def _lookup_brand_name(full_name: str) -> str:
-    """查公司对外品牌名。档案有候选时：字面重合预排序 + 模型语义裁决（排除服务词冒充）；
-    档案没有则联网查一次并回写（查回结果同样过语义裁决）。查不到返回空串，绝不阻塞主流程。"""
+    """查公司对外品牌名：只有七渠道联网核查过的主品牌才直接采用；
+    人工确认、离线裁决、历史存量一律重新走七渠道联网核查（人工确认作优先线索）。
+    核查不到退离线裁决/档案首位兜底（不写可信来源，下次再核）。"""
     from company_cache import get_info
     info, _ = get_info(full_name)
     primary = str((info or {}).get("brand_primary") or "").strip()
     src = str((info or {}).get("brand_source") or "").strip()
     brands = [str(b).strip() for b in ((info or {}).get("brands") or []) if str(b).strip()]
-    # 来源定信任级：人工确认/七渠道联网核查过的直接采用；其余（含历史存量无来源的）重走联网核查
-    if primary and src in ("user_confirm", "web_multichannel"):
+    # 来源定信任级（2026-09-19 用户定版）：只有七渠道联网核查过的才免检；
+    # 人工确认的品牌名也不被信任——作为优先线索进入联网核查，联网结论说了算
+    if primary and src == "web_multichannel":
         return primary
     b = await _web_verify_brand(full_name, brands)
     if b and b != full_name:
@@ -3999,7 +4001,10 @@ async def create_task(req: CreateTaskRequest):
     confirmed_brand = (req.brand_name or "").strip()[:40]
     if confirmed_brand and confirmed_brand != anchor:
         from company_cache import prefer_brand
-        prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认")
+        prefer_brand(anchor, confirmed_brand, origin="名称核查·品牌确认")  # 先落档为线索
+        _v = await _lookup_brand_name(anchor)  # 人工确认不 trusted：强制七渠道联网核查
+        if _v:
+            confirmed_brand = _v  # 核查结论说了算（一致则原样，不一致以联网为准）
     # 防御性默认值：method为None时默认使用客户市场调研，避免执行所有skills
     task_method = req.method or "customer_market_research"
     task = await mgr.create_task(
