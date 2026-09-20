@@ -2118,11 +2118,36 @@ async def _web_verify_brand(full_name: str, hints: list) -> tuple:
               "外资在华主体例外，沿用其全球品牌。\n"
               '只返回 JSON：{"brands": ["核验通过的品牌名1", "品牌名2"], "evidence": "渠道名：该渠道叫法（逐渠道简写）"}。\n'
               "曾用名不算当前品牌：公司曾用名/历史名（如曾用名\"中安视达\"）不得作为品牌返回，除非证据显示其仍为当前对外主品牌。\n"
-              "检索角度提示：除公司全称外，还应尝试「公司名+旗下产品」「公司名+APP」「公司名+官网」"
-              "「公司名+开发者」等组合反查——应用商店/开发者平台页面通常标注开发主体。\n"
+              "品牌检索必须使用的查询角度（逐个执行，专找产品页）：「公司名+旗下产品」「公司名+APP」"
+              "「公司名+应用商店（如应用宝）」「公司名+官网」「公司名+开发者」。"
+              "应用商店/开发者平台的产品页会直接标注「开发者/运营主体=该公司」，是最干净的关联证据。\n"
+              "禁止用以下背景词去查品牌（它们只能查到公司背景页，查不到产品页）："
+              "专利、软件著作权、企业价值观、企业使命、创始人、资质认证、注册资本。\n"
               "硬性要求：brands 数组必须填入核验通过的品牌名（哪怕只有一个）——"
               "evidence 里提到的每个品牌名都必须同时出现在 brands 中；"
               'brands 留空仅限完全未检索到任何品牌信息的场合，此时 evidence 写"未检索到"。不要返回其他内容。')
+    # 产品向机械补充检索（2026-09-20 交接单）：百炼摘要搜索捞不到应用商店/产品页，
+    # 用网页全文抓取层按产品角度主动抓一轮，页面节选作为附加证据喂给核查
+    # （应用商店/开发者平台的产品页会直接标注「开发者/运营主体=该公司」，是最干净的关联证据）
+    extra_ev = ""
+    try:
+        from web_fetcher import WebFetcher
+        wf = WebFetcher()
+        try:
+            for q in (f"{full_name} APP 开发者", f"{full_name} 官网"):
+                for p in (await wf.search_and_fetch(q, max_results=2)) or []:
+                    seg = (p.text or "")[:800]
+                    if seg.strip():
+                        extra_ev += f"\n【{q} | {p.url}】{seg}"
+        finally:
+            await wf.close()
+        if extra_ev.strip():
+            extra_ev = f"\n## 附加证据（产品向检索抓取的页面节选，已截断）\n{extra_ev[:3000]}\n"
+            logger.info(f"产品向补充检索 {full_name}: 抓到 {len(extra_ev)} 字节附加证据")
+    except Exception as e:
+        logger.warning(f"产品向补充检索失败 {full_name}: {e}")
+
+    prompt = prompt + extra_ev
     try:
         r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
         raw = r.get("brands") if isinstance(r, dict) else None

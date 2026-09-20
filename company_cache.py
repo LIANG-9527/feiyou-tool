@@ -244,7 +244,8 @@ _LIST_KEYS = ("products", "personas", "journey", "journey_stages", "topics",
               "clusters", "verifications", "sample_queries")
 
 
-def prefer_brand(name: str, brand: str, origin: str = "", source: str = "user_confirm"):
+def prefer_brand(name: str, brand: str, origin: str = "", source: str = "user_confirm",
+                 human: bool = False):
     """钉主品牌（brand_primary）并记录获取方式（brand_source）：
     user_confirm=人工弹窗确认；web_multichannel=七渠道联网核查。识别层只信任这两种，
     其他来源（离线裁决/历史存量无来源）下次识别会重新触发联网核查更新。"""
@@ -260,7 +261,7 @@ def prefer_brand(name: str, brand: str, origin: str = "", source: str = "user_co
                 return
             row = cur.execute("SELECT data FROM company WHERE id=?", (rid,)).fetchone()
             d = json.loads(row[0]) if row else {}
-            if d.get("brand_primary") == brand and d.get("brand_source") == source:
+            if d.get("brand_primary") == brand and d.get("brand_source") == source and not human:
                 return
             items = _brand_items(d.get("brands"))
             for it in items:
@@ -271,6 +272,9 @@ def prefer_brand(name: str, brand: str, origin: str = "", source: str = "user_co
             d["brands"] = items
             d["brand_primary"] = brand
             d["brand_source"] = source
+            if human:
+                # 人工钉选（人只定主次，钉的对象必是网核候选）：按公司缓存，非全局偏好
+                d["brand_human"] = brand
             d["nature"] = derive_nature(d)
             cur.execute("UPDATE company SET data=?, updated=? WHERE id=?",
                         (json.dumps(d, ensure_ascii=False), time.strftime("%Y-%m-%d %H:%M"), rid))
