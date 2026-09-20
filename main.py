@@ -2134,13 +2134,24 @@ async def _web_verify_brand(full_name: str, hints: list) -> tuple:
         from web_fetcher import WebFetcher
         wf = WebFetcher()
         try:
-            for q in (f"{full_name} APP 开发者", f"{full_name} 官网"):
-                for p in (await wf.search_and_fetch(q, max_results=2)) or []:
-                    seg = (p.text or "")[:800]
-                    if seg.strip():
-                        extra_ev += f"\n【{q} | {p.url}】{seg}"
+            # 两路查询并行 gather（2026-09-20：原串行 for 循环，17s 大头的可砍部分）
+            async def _fetch_q(q):
+                _t = time.time()
+                pages = (await wf.search_and_fetch(q, max_results=2)) or []
+                dt = time.time() - _t
+                logger.info(f"[品牌计时] {full_name}: 机械抓取「{q}」{dt:.1f}s（{len(pages)}页）")
+                return q, pages, dt
+            _results = await asyncio.gather(
+                _fetch_q(f"{full_name} APP 开发者"),
+                _fetch_q(f"{full_name} 官网"),
+            )
         finally:
             await wf.close()
+        for q, pages, dt in _results:
+            for p in (pages or []):
+                seg = (p.text or "")[:800]
+                if seg.strip():
+                    extra_ev += f"\n【{q} | {p.url}】{seg}"
         if extra_ev.strip():
             extra_ev = f"\n## 附加证据（产品向检索抓取的页面节选，已截断）\n{extra_ev[:3000]}\n"
             logger.info(f"产品向补充检索 {full_name}: 抓到 {len(extra_ev)} 字节附加证据")
@@ -3914,7 +3925,8 @@ async def _run_mining_task(task: Task):
     强制关网导致第一步凭公司名编造产品、全链失真；页面"仅联网/联网+思考"提示也以此为准）。
     单次调用超时 180s（原全局 600s×3 重试空烧是任务劣化到 30+ 分钟主因之一；调研链仍保持 600s 不动）。"""
     config = load_config()
-    config = {**config, "llm": {**config["llm"], "timeout": 180}}
+    # 180→400（2026-09-20）：挖掘链联网恢复后单调用可到 150~345s，180s×3 必现 ReadTimeout
+    config = {**config, "llm": {**config["llm"], "timeout": 400}}
     agent = build_agent(config, thinking=None if task.thinking is None else task.thinking == "1")
     brand = task.brand
     _plog = []

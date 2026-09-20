@@ -100,7 +100,7 @@ class LLMClient:
                     return text
             except Exception as e:
                 self.token_usage["failed_attempts"] += 1
-                logger.warning(f"LLM call attempt {attempt}/{self.max_retries} failed: {e}")
+                logger.warning(f"LLM call attempt {attempt}/{self.max_retries} failed: {type(e).__name__}: {e}")
                 if attempt < self.max_retries:
                     await asyncio.sleep(2 ** attempt)
                 else:
@@ -137,7 +137,7 @@ class LLMClient:
                     return data["choices"][0]["message"]
             except Exception as e:
                 self.token_usage["failed_attempts"] += 1
-                logger.warning(f"LLM tools call attempt {attempt}/{self.max_retries} failed: {e}")
+                logger.warning(f"LLM tools call attempt {attempt}/{self.max_retries} failed: {type(e).__name__}: {e}")
                 if attempt < self.max_retries:
                     await asyncio.sleep(2 ** attempt)
                 else:
