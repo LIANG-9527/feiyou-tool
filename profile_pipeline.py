@@ -14,6 +14,8 @@
 import asyncio
 import time
 import json
+
+from business_api_client import BusinessAPIError
 import re
 import logging
 from datetime import datetime, timezone
@@ -623,7 +625,11 @@ async def _extract_from_baike(llm, company: str, context: str, fields: list) -> 
 class ProfileError(Exception):
     """第一层核心字段多轮补查后仍缺失——按约定终止流程并向前端报错。"""
 
-    def __init__(self, missing: list):
+    def __init__(self, missing):
+        if isinstance(missing, str):   # 工商接口异常等直接给文案的场景
+            self.missing = []
+            super().__init__(missing)
+            return
         self.missing = missing
         # 核心字段（全称/信用代码/法人）全部缺失，说明公司根本查不到
         core_fields = {"full_name", "credit_code", "legal_person"}
@@ -967,11 +973,12 @@ async def build_profile(llm, company: str, on_progress=None,
                 if on_progress:
                     on_progress("企业档案", "工商API获取企业基础信息", 0)
             try:
-                from business_api_client import get_business_api_client, BusinessAPIClient, BusinessAPIError
+                from business_api_client import get_business_api_client, BusinessAPIClient
                 api_client = get_business_api_client()
 
                 # 优先用企业全称查询，失败则用品牌别名查询
                 api_detail = {}
+                api_error = None   # 工商接口调用异常留痕（外层据此区分接口异常/查无数据）
                 query_names = [company]
                 if brand_alias and brand_alias.strip() and brand_alias.strip() != company:
                     query_names.append(brand_alias.strip())
@@ -993,6 +1000,7 @@ async def build_profile(llm, company: str, on_progress=None,
                             break
                     except BusinessAPIError as e:
                         logger.warning(f"Business API query failed for '{qname}': {e}")
+                        api_error = e   # 留痕：外层据此区分"接口异常"与"查无数据"
                         if e.status_code in (401, 402, 403):
                             break  # 鉴权失败/过期/用量不足，不再重试
 
@@ -1039,12 +1047,20 @@ async def build_profile(llm, company: str, on_progress=None,
                             logger.info(f"Saved {len(valid_fields)} L1 fields to local DB")
                         except Exception as e:
                             logger.warning(f"Failed to save to local DB: {e}")
+                elif api_error is not None:
+                    # 接口调用异常（额度/鉴权/IP白名单等）：立即终止，文案带真实原因
+                    raise ProfileError(f"工商API接口异常，请检查：{type(api_error).__name__}: {api_error}") from api_error
                 else:
-                    logger.info(f"Business API: company not found for {company}")
+                    # 工商接口通但返回空（2026-09-20 用户定版）：立即终止任务，
+                    # 防止整份报告在无工商数据的地基上继续生成
+                    raise ProfileError(f"工商API接口异常，请检查（查询「{company}」返回为空）")
             except ImportError:
-                logger.warning("Business API client not available, skipping")
-            except Exception as e:
-                logger.warning(f"Business API integration failed: {e}")
+                # 组件缺失视为接口不可用：立即终止任务（2026-09-20 用户定版）
+                raise ProfileError("工商API接口异常，请检查：接口客户端不可用（组件加载失败）") from None
+            except BusinessAPIError as e:
+                # 接口不通/额度异常：立即终止任务，原始异常保留在日志
+                logger.warning(f"工商API调用异常: {type(e).__name__}: {e}")
+                raise ProfileError(f"工商API接口异常，请检查：{type(e).__name__}: {e}") from e
         else:
             logger.info(f"Skipping Business API call: {l1_from_cache}/9 L1 fields from cache")
         _record_timing("工商API调用", _t_api)
