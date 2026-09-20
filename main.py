@@ -27,7 +27,7 @@ from site_audit.core.ai_engine import estimate_cost_cny
 
 # 平台全局版本号（唯一来源），格式 Version：YY.MDDDi.N——年后两位、月日与当日序号连写、
 # 末尾 N=系统累计发布次数（与 versions/ 文档数一致）。发版：versions/ 新增 <版本号>.md + 改这里。
-MR_ENGINE_VERSION = "26.09202.10"
+MR_ENGINE_VERSION = "26.09202.11"
 
 logging.basicConfig(
     level=logging.INFO,
