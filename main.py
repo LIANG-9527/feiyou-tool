@@ -1882,7 +1882,12 @@ async def ensure_org_graph(result: dict, config: dict):
     """市场调研落盘前：组织架构实名图（工商API：详情+股东+分支机构，0次LLM）。
     获取失败抛 OrgGraphError 终止任务——生成前已有企业名称API校验与画像层校验
     两层前置，仍失败属真异常，不降级不静默。"""
-    if result.get("method_id") != "customer_market_research" or result.get("mr_org"):
+    # 无股东/分支机构不再致命（2026-09-20 用户定版）：降级为仅主体节点+档案标"组织图待补"，
+    # 报告照常生成落盘；下次重新生成/刷新时自动重查，查到即补全。
+    # 工商查无此企业/接口异常仍致命（画像层已在花 LLM token 前拦截，此处为落盘前兜底）。
+    if result.get("method_id") != "customer_market_research":
+        return
+    if result.get("mr_org") and not result["mr_org"].get("pending"):
         return
     brand = result.get("brand") or ""
     brief_info = ((result.get("mr_brief") or {}).get("info") or {}) if isinstance(result.get("mr_brief"), dict) else {}
@@ -1907,9 +1912,32 @@ async def ensure_org_graph(result: dict, config: dict):
     except Exception as e:
         raise OrgGraphError(f"组织架构工商API调用失败：{e}。请稍后重试或检查API配置。") from e
     if not (org and org.get("tree")):
-        raise OrgGraphError(
-            f"「{company}」在工商API中无股东与分支机构数据，组织架构无法生成。")
+        # 降级：仅主体节点的组织图 + pending 标记（渲染端按无树处理，档案标"组织图待补"）
+        from org_graph import _norm, CREDIT_RE
+        _code = str(detail.get("creditNumber") or "").strip().upper()
+        _sk = ("c:" + _code) if CREDIT_RE.match(_code) else ("n:" + _norm(detail.get("companyName") or company))
+        org = {"roots": [_sk], "seed_key": _sk,
+               "nodes": [{"id": _sk, "name": detail.get("companyName") or company,
+                          "credit_code": _code or None,
+                          "legal_person": detail.get("juridicalPerson"),
+                          "founder": None, "status": detail.get("businessStatus")}],
+               "tree": [], "weak": [], "siblings": [], "uncertain": [],
+               "has_natural_person_holder": False, "depth2_empty": True,
+               "pending": True, "source": "business_api"}
+        result["mr_org"] = org
+        try:
+            from company_cache import upsert_info
+            upsert_info(company, {"org_status": "待重查"}, origin="组织架构")
+        except Exception:
+            pass
+        logger.info(f"组织架构降级: 「{company}」无股东/分支机构数据，仅主体节点出图，档案标组织图待补（下次生成自动重查）")
+        return
     result["mr_org"] = org
+    try:
+        from company_cache import upsert_info
+        upsert_info(company, {"org_status": "已完成"}, origin="组织架构")
+    except Exception:
+        pass
     _seedn = next((n for n in org["nodes"] if n["id"] == org["seed_key"]), {})
     logger.info(f"组织架构实名图(API)完成: {len(org['nodes'])}节点/{len(org['tree'])}边, "
                 f"法人={_seedn.get('legal_person')}")

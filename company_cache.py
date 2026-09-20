@@ -27,6 +27,8 @@ _CACHE_FIELDS = (
     "brands", "aliases", "nature", "domains",
     # 品牌信任字段（2026-09-19）：主品牌与获取方式来源（user_confirm/web_multichannel）
     "brand_primary", "brand_source",
+    # 组织架构完成状态（2026-09-20）：待重查=无股东/分支降级出图，下次生成自动重查
+    "org_status",
     # 工商接口全量字段（API 给什么存什么，2026-09-16 与用户确认）
     "license_number", "org_code", "regit_address", "province", "city", "district",
     "industry_code", "staff_number", "social_security_num", "social_security_from",
