@@ -2176,6 +2176,9 @@ async def _lookup_brand_name(full_name: str) -> dict:
     src = str((info or {}).get("brand_source") or "").strip()
     items = _brand_items((info or {}).get("brands"))
     human = str((info or {}).get("brand_human") or "").strip()
+    _t_all = time.time()
+    _t_web = _t_vote = _t_set = 0.0
+    _vd = [0.0]
     # 人工钉选（2026-09-20 定版，按来源规则第4条）：钉选对象必是网核候选，
     # 人只定主次，结果按公司缓存——钉选后直接采用，不再重复核查
     if human:
@@ -2183,17 +2186,21 @@ async def _lookup_brand_name(full_name: str) -> dict:
         if human not in its:
             items.insert(0, {"name": human, "source": "user_confirm", "votes": 0})
         items.sort(key=lambda i: 0 if i["name"] == human else 1)
+        logger.info(f"[品牌计时] {full_name}: 人工钉选命中直接采用（{time.time()-_t_all:.1f}s）")
         return {"items": items, "primary": human, "verified": [human]}
     # 来源定信任级（2026-09-19 用户定版）：只有七渠道联网核查过的才免检；
     # 人工确认的品牌名也不被信任——作为优先线索进入联网核查，联网结论说了算
     if primary and src == "web_multichannel" and items \
             and all(i["source"] == "web_multichannel" for i in items):
+        logger.info(f"[品牌计时] {full_name}: 可信缓存免检直接返回（{time.time()-_t_all:.1f}s）")
         return {"items": items, "primary": items[0]["name"]}
     hints = [i["name"] for i in items]
     # 行政区截断排除（2026-09-20 交接单第 2 件）：以市/省/区/县开头的截断串不是品牌
     # （实测「市永盛工程建设」之于「深圳市永盛工程建设有限公司」）
     hints = [h for h in hints if not re.match(r"^(市|省|自治区|县)", str(h or ""))]
+    _t = time.time()
     verified, evidence = await _web_verify_brand(full_name, hints)
+    _t_web = time.time() - _t
     # 候选=核验结果+档案线索，全部交裁决
     candidates = []
     for n in verified + hints:
@@ -2202,9 +2209,15 @@ async def _lookup_brand_name(full_name: str) -> dict:
     # 自洽性投票（2026-09-19 用户定版，替代全部正则截取启发式）：
     # N 票并行语义裁决取多数，单次不稳由票数抹平——
     # 三真实案例验收：丝路视觉、和创企赢、好莱客 5/5 票全一致命中
-    votes = await asyncio.gather(*[
-        _llm_adjudicate_brands(full_name, candidates, evidence) for _ in range(_BRAND_VOTE_N)
-    ])
+    async def _vote_once():
+        _t = time.time()
+        r = await _llm_adjudicate_brands(full_name, candidates, evidence)
+        return r, time.time() - _t
+    _t = time.time()
+    _pairs = await asyncio.gather(*[_vote_once() for _ in range(_BRAND_VOTE_N)])
+    _t_vote = time.time() - _t
+    votes = [v for v, _ in _pairs]
+    _vd = sorted(d for _, d in _pairs)
     tally, tops = {}, {}
     for v in votes:
         for i, n in enumerate(v):
@@ -2214,10 +2227,14 @@ async def _lookup_brand_name(full_name: str) -> dict:
     majority = sorted([n for n, c in tally.items() if c > _BRAND_VOTE_N / 2],
                       key=lambda n: (-tops.get(n, 0), -tally[n]))
     if majority:
+        _t = time.time()
         set_verified_brands(full_name, majority, origin="名称核查·多方核查")
+        _t_set = time.time() - _t
         items = [{"name": n, "source": ("web_multichannel" if tally.get(n, 0) > _BRAND_VOTE_N / 2 else "candidate"),
                   "votes": tally.get(n, 0)} for n in sorted(candidates, key=lambda n: -tally.get(n, 0))]
+        logger.info(f"[品牌计时] {full_name}: 七渠道核查 {_t_web:.1f}s | 5票裁决 墙钟{_t_vote:.1f}s（单票 {_vd[0]:.1f}~{_vd[-1]:.1f}s）| 落档 {_t_set:.1f}s | 合计 {time.time()-_t_all:.1f}s")
         return {"items": items, "primary": majority[0], "verified": majority}
+    logger.info(f"[品牌计时] {full_name}: 七渠道核查 {_t_web:.1f}s | 裁决无多数结论 | 合计 {time.time()-_t_all:.1f}s")
     # 无多数结论（票数分散=信息不足）：不落可信档，退档案兜底（弹窗人工选择，下次再核）
     return {"items": items, "primary": primary or (hints[0] if hints else ""), "verified": []}
 
@@ -3064,18 +3081,29 @@ def _consume_verified_token(token: str):
 
 @app.get("/api/brand/check")
 async def api_brand_check(name: str):
+    _t0 = time.time()
+    try:
+        return await _brand_check_impl((name or "").strip(), _t0)
+    finally:
+        logger.info(f"[品牌计时] 名称核查 '{name}': 总计 {time.time()-_t0:.1f}s")
+
+
+async def _brand_check_impl(name: str, _t0: float):
     """企业/品牌名唯一性预检：工商API模糊搜索获取真实候选公司。
 
     失败/超时返回 ok=False + error 给前端明确报错并阻止开始（2026-09-19 定版，
     不再静默放行、不再回退 LLM 猜候选——工商库是权威数据源，查不到宁可不执行）。"""
-    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "unique": True}
     if not name:
         return {"ok": False, "unique": True}
     # ---- 优先用工商API模糊搜索（候选名称都是真实存在的公司）----
     try:
         from business_api_client import get_business_api_client, BusinessAPIError
         api_client = get_business_api_client()
+        _t = time.time()
         result = await api_client.search_company(name, page_size=10)
+        logger.info(f"[品牌计时] {name}: 工商查名 {time.time()-_t:.1f}s")
         records = result.get("records") or []
         if records:
             # 清理公司名称中的 <strong> 标签
