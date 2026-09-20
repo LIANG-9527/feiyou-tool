@@ -27,7 +27,7 @@ from site_audit.core.ai_engine import estimate_cost_cny
 
 # 平台全局版本号（唯一来源），格式 Version：YY.MDDDi.N——年后两位、月日与当日序号连写、
 # 末尾 N=系统累计发布次数（与 versions/ 文档数一致）。发版：versions/ 新增 <版本号>.md + 改这里。
-MR_ENGINE_VERSION = "26.09201.8"
+MR_ENGINE_VERSION = "26.09202.9"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -4598,6 +4598,10 @@ header p{color:#6e7991;font-size:14px}
 .history-list{display:flex;flex-direction:column;gap:8px}
 .history-item{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#fff;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06);text-decoration:none;color:inherit;transition:box-shadow .2s}
 .history-item{position:relative}
+.btn-spin{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:btnspin .7s linear infinite;margin-right:6px;vertical-align:-2px}
+@keyframes btnspin{to{transform:rotate(360deg)}}
+.brand-toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:1300;background:#091026;color:#fff;font-size:13px;padding:9px 18px;border-radius:999px;box-shadow:0 6px 24px rgba(0,0,0,.28);animation:brandtoast .25s ease}
+@keyframes brandtoast{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
 .history-item .badge-new{position:absolute;top:-7px;left:-5px;background:#16a34a;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;z-index:2}
 .history-item:hover{box-shadow:0 2px 8px rgba(0,0,0,0.1)}
 .history-brand{font-weight:600}
@@ -4826,6 +4830,14 @@ function setStepStatus(stepId, status) {
   }
 }
 
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'brand-toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(function(){ t.remove(); }, 2200);
+}
+
 function addLog(elapsed, message) {
   const box = document.getElementById("logBox");
   const line = document.createElement("div");
@@ -4897,9 +4909,12 @@ async function brandCheck(name) {
   }
 
   if (d.unique) {
-    // 唯一匹配一律弹确认框：品牌确认是必经环节（2026-09-19：废除全称直通捷径）
+    // 唯一匹配一律确认品牌（2026-09-19：废除全称直通捷径）；
+    // 2026-09-20：单品牌免弹窗轻提示直接过，多品牌/无品牌才弹框
     const full = d.resolved_full || '';
-    if (!full) return {name: name, brandName: null};
+    if (!full) return {name: name, brandName: null, toast: null};
+    const bs = d.brands || [];
+    if (bs.length === 1) return {name: full, brandName: bs[0].name, toast: '已识别品牌：' + bs[0].name};
     return await new Promise(function(resolve){
       const ov = document.createElement('div');
       ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:flex-start;justify-content:center';
@@ -4939,7 +4954,7 @@ async function brandCheck(name) {
         const sel = document.querySelector('input[name=bbrandPick]:checked');
         const inp = document.getElementById('bbrand');
         const b = sel ? sel.value : ((inp && inp.value) || '').trim();
-        ov.remove(); resolve({name: full, brandName: b || null});  // 全称锁死为核验结果；品牌取选中项
+        ov.remove(); resolve({name: full, brandName: b || null, toast: null});  // 全称锁死为核验结果；品牌取选中项
       };
       ov.addEventListener('mousedown', function(e){ ov.__down = (e.target === ov); });
       ov.addEventListener('click', function(e){ if (e.target === ov && ov.__down) { ov.remove(); resolve(null); } });
@@ -5057,13 +5072,15 @@ async function startAnalysis() {
   const originalBrand = params.brand || "";
   let confirmedBrandName = null;
   if (params.brand) {
-    btn.textContent = "名称核查中…";
+    btn.disabled = true;
+    btn.innerHTML = '<span class="btn-spin"></span>正在联网识别品牌…';
     const resolved = await brandCheck(params.brand);
     if (resolved === null) { btn.disabled = false; btn.textContent = "开始分析"; return; }
-    const r = (resolved && typeof resolved === "object") ? resolved : {name: resolved, brandName: null};
+    const r = (resolved && typeof resolved === "object") ? resolved : {name: resolved, brandName: null, toast: null};
     params.brand = r.name;
     confirmedBrandName = r.brandName;
-    btn.textContent = "分析中...";
+    if (r.toast) showToast(r.toast);   // 单品牌轻提示（多品牌已由弹窗确认）
+    btn.innerHTML = '<span class="btn-spin"></span>提交任务中…';
   }
 
   // 进度显示已移到下方历史报告列表，不再显示上方的进度区域
@@ -5105,6 +5122,7 @@ async function startAnalysis() {
     // 保存到 localStorage，页面刷新后可恢复
     localStorage.setItem("geo_current_task_id", taskId);
     localStorage.setItem("geo_current_task_brand", params.brand || "");
+    showToast("已提交任务，正在生成…");
   } catch (e) {
     alert("创建任务失败: " + e.message);
     btn.disabled = false;
