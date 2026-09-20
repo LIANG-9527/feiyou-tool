@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 import httpx
+import os
 
 logger = logging.getLogger("geo-agent.business-api")
 
@@ -489,8 +490,13 @@ class BusinessAPIClient:
 _client: Optional[BusinessAPIClient] = None
 
 
-def get_business_api_client() -> BusinessAPIClient:
-    """获取工商 API 客户端单例。"""
+def get_business_api_client():
+    """工商数据供应商开关（2026-09-20）：
+    BUSINESS_PROVIDER=qixin 且 QIXIN_APPKEY 在环境变量 → 启信慧眼客户端（同形方法）；
+    否则惊贤索客户端（现封存备用，代码保留随时切回）。"""
+    if os.environ.get("BUSINESS_PROVIDER", "").lower() == "qixin" and os.environ.get("QIXIN_APPKEY"):
+        from qixin_client import get_qixin_client
+        return get_qixin_client()
     global _client
     if _client is None:
         _client = BusinessAPIClient()
