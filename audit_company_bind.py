@@ -419,6 +419,38 @@ async def _llm_clean_candidates(cands: list[str]) -> list[str]:
     return cands
 
 
+async def _llm_identify_operator(site_url: str, site_brand: str) -> str:
+    """站内整页无公司注册名时的最后兜底：LLM 联网反查「域名/品牌」的运营主体注册全称。
+    返回名须过 is_org_name 闸（防幻觉编造）；查不到/不像组织名返回空串。
+    调用方仍走工商核验闸门——本函数只负责"找到候选"，不负责"证明真实"。"""
+    try:
+        import yaml
+        from company_cache import is_org_name
+        from llm_client import LLMClient
+        lc = _llm_cfg()
+        llm = LLMClient(base_url=lc["base_url"], api_key=lc["api_key"], model=lc["model"],
+                        temperature=0, max_tokens=512, timeout=60, max_retries=1,
+                        enable_search=True, enable_thinking=False, search_engine=["baidu"])
+        brand = f"（网站名称/品牌：{site_brand}）" if site_brand else ""
+        prompt = (f"网址 {site_url}{brand} 是一家公司运营的网站。"
+                  "请联网查证该网站的运营主体公司的工商注册全称："
+                  "可查 ICP备案、版权信息、页脚署名、应用商店开发者、关于我们页面。"
+                  '只返回 JSON {"full_name": "运营主体公司工商注册全称"}；'
+                  '无法确定返回 {"full_name": ""}。不要返回其他内容。')
+        r = await llm.chat([{"role": "user", "content": prompt}], expect_json=True)
+        nm = str((r or {}).get("full_name") or "").strip() if isinstance(r, dict) else ""
+        # 剥 ICP 备案号粘连（实测「粤ICP备2023098250号熵函数科技有限公司」）
+        m = re.search(r"ICP备\d+号", nm)
+        if m:
+            nm = nm[m.end():].strip()
+        from company_cache import norm_name as _nn
+        if nm and is_org_name(nm) and not _nn(site_url).endswith(_nn(nm)):
+            return nm
+        return ""
+    except Exception:
+        return ""
+
+
 async def bind_report(json_path: Path, api, cache_upsert) -> dict:
     """对一份诊断报告执行绑定：提取→核验→写回 JSON+沉淀档案。
     返回动作摘要（bound / candidates / unchanged / fallback_failed / api_error / skip）。不抛异常。
@@ -457,6 +489,15 @@ async def bind_report(json_path: Path, api, cache_upsert) -> dict:
                     if cf:
                         cand["cn_footer"] = cf
                         cand["cn"] = cf + [x for x in cand["cn"] if x not in cf]
+        # 站内两级兜底全空 = 页脚整页没有公司注册名（无版权行，2026-09-20 交接单案例）：
+        # LLM 联网反查「域名/品牌→运营主体」，反查到的名字仍走工商核验闸门，幻觉名进不了绑定
+        if not cand["cn_footer"] and not cand["cn"]:
+            ident = await _llm_identify_operator(
+                str(d.get("final_url") or d.get("url") or ""), str(d.get("site_brand") or ""))
+            if ident:
+                cand["cn_footer"] = [ident]
+                cand["cn"] = cand["cn"] + [ident]
+                fallback_notes.append(f"站内无公司名，LLM联网反查运营主体：{ident}")
         cn_use = cand["cn_footer"] or cand["cn"]  # 页脚档独占优先
         # 脏候选（菜单词粘连）升级：小输入LLM挑全称，挑出的仍走工商核验
         extra = [x for x in await _llm_clean_candidates(list(cn_use)) if x not in cn_use]
