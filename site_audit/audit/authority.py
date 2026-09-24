@@ -75,29 +75,19 @@ class AuthorityChecker(BaseChecker):
     def _check_trust_signals(self) -> CheckResult:
         item = self._item(
             "auth-01", "可信与安全信号", Priority.P0,
-            "是否有 ICP 备案、联系方式、隐私政策",
-            "检查页脚是否有备案号、联系方式、隐私政策链接，并校验备案号位数是否为工信部规范的 8 位",
-            "有ICP备案，真实联系方式，隐私政策页",
-            manual_check="拉到页面底部，看是否有 ICP 备案号、公司地址、电话/邮箱、隐私政策链接、关于我们页面",
-            purpose="AI 判断网站可信度时会看这些基础信号。没有备案和联系方式的站点会被 AI 视为低可信度，不会优先推荐",
-            excellent="有 ICP 备案号、完整公司信息（地址/电话/邮箱）、隐私政策、服务条款、关于我们页面，信息真实可验证",
-            normal="有 ICP 备案和基本联系方式，但可能缺少隐私政策或公司信息不完整",
-            failed="缺少 ICP 备案、联系方式、隐私政策中的2项以上，可信度严重不足",
+            "是否有联系方式、隐私政策",
+            "检查页脚是否有联系方式、隐私政策链接",
+            "有真实联系方式，隐私政策页",
+            manual_check="拉到页面底部，看是否有公司地址、电话/邮箱、隐私政策链接、关于我们页面",
+            purpose="AI 判断网站可信度时会看这些基础信号。没有联系方式的站点会被 AI 视为低可信度，不会优先推荐",
+            excellent="有完整公司信息（地址/电话/邮箱）、隐私政策、服务条款、关于我们页面，信息真实可验证",
+            normal="有基本联系方式，但可能缺少隐私政策或公司信息不完整",
+            failed="缺少联系方式、隐私政策，可信度严重不足",
         )
         page_text = self.get_text()
         soup = self.local_soup
         footer = soup.find("footer") or soup.find(class_=re.compile(r"footer", re.I))
         footer_text = footer.get_text() if footer else page_text
-        raw_html = self.page.html
-
-        # ICP 备案号可能由 JS 动态渲染，直接在原始 HTML 中搜索
-        # 格式：[省份简称]ICP备XXXXXXXX号[-数字]，不限定省份，兜底所有变体
-        has_icp = bool(re.search(r"ICP备\d+号", raw_html))
-        # 备案号为省简称+ICP备+数字+可选-序号。
-        # 2026-09-11 修正：工信部号码已扩展——老站 8 位（如 11044640），新站 10 位（如 2025459413），
-        # 原「必须 8 位」会把新号误判为异常，故放宽为 8~10 位。
-        icp_nums = re.findall(r"[京津沪渝冀晋辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云陕甘青蒙宁新藏]ICP备(\d+)号(?:-\d+)?", raw_html)
-        bad_icp = [n for n in icp_nums if len(n) not in (8, 10)]
 
         # 版权年份过期只作提示、不扣分：AI 评估企业活跃度时会往"可能停运"方向推一小步
         current_year = time.localtime().tm_year
@@ -144,20 +134,15 @@ class AuthorityChecker(BaseChecker):
                         "应有隐私政策作为告知载体" if features else None)
 
         signals = []
-        if has_icp:
-            signals.append("ICP备案")
         if has_contact:
             signals.append("联系方式")
         if has_privacy:
             signals.append("隐私政策")
 
-        icp_note = ("检测到 ICP 备案号位数异常（" + "、".join(bad_icp)
-                    + "），工信部备案号为 8 位（老站）或 10 位（新站）数字，位数不对会查不到，请核对"
-                    if bad_icp else None)
-        notes = "；".join(n for n in (privacy_note, feature_note, icp_note, copyright_note) if n)
+        notes = "；".join(n for n in (privacy_note, feature_note, copyright_note) if n)
 
         # 2026-09-10 V6：结论/示例/影响三段统一以"实际缺失清单"为准，不再各说各话
-        missing = [n for n, has in (("ICP备案", has_icp), ("联系方式", has_contact),
+        missing = [n for n, has in (("联系方式", has_contact),
                                     ("隐私政策入口", has_privacy)) if not has]
         if missing:
             item.suggestion = ("补充缺失的可信信号：" + "、".join(missing)
@@ -165,9 +150,6 @@ class AuthorityChecker(BaseChecker):
             item.impact = (f"缺少 {'、'.join(missing)} 会直接削弱 AI 与用户对站点可信度的判断，"
                            "降低推荐与引用概率")
         if len(signals) >= 2:
-            if icp_note:
-                return self._result(item, Status.WARN,
-                                    f"可信信号基本完善，但备案号无法验证: {', '.join(signals)}", detail=notes)
             return self._result(item, Status.PASS, f"可信信号完善: {', '.join(signals)}",
                                 detail=notes)
         if signals:
@@ -175,7 +157,7 @@ class AuthorityChecker(BaseChecker):
                                 f"可信信号不足，仅有: {', '.join(signals)}；缺少: {'、'.join(missing)}",
                                 detail=notes)
         return self._result(item, Status.FAIL,
-                            "可信信号严重缺失：ICP备案、联系方式、隐私政策入口均未检出",
+                            "可信信号严重缺失：联系方式、隐私政策入口均未检出",
                             detail=notes)
 
     # 30. 客户评价与证言
