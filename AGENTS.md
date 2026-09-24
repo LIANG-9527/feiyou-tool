@@ -13,7 +13,7 @@
 > **🔴 打包即四步，用户说「打包」就全自动执行（2026-09-20 定版）**：
 > ①更新版本号（main.py 的 MR_ENGINE_VERSION，格式 YY.MDDDi.N：月日连写+当日序号 i，N=累计发布次数+1）；
 > ②写 versions/<版本号>.md 版本说明（本包相对上一版的交付内容）；
-> ③git 提交（版本号+版本说明+未落盘改动）；
+> ③提交仓库＝git commit＋git push 到 origin（GitHub），两步缺一不可，只 commit 不 push 不算提交仓库（版本号+版本说明+未落盘改动一起进 commit）；
 > ④bash scripts/pack.sh 打包（var/ 与 .env 永不入包）。
 >
 > **🔴 接到修改需求先查图谱圈定修改点（2026-09-20 定版）**：
