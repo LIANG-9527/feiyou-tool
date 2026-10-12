@@ -963,9 +963,10 @@ class TechnicalChecker(BaseChecker):
 
         for name, rules in techs.items():
             cats = rules.get("cats", [])
-            # 只关注 CMS(1), Web Frameworks(6), E-commerce(6), JS Frameworks(12),
-            # Static Site Generators(57), CDN(31), Web Servers(22), Programming Languages(27)
-            target_cats = {1, 6, 12, 57, 31, 22, 27}
+            # 只关注建站系统本身：CMS(1)、Web框架/电商(6)、JS框架(12)、静态站点生成器(57)。
+            # 2026-09-24 收窄：Web服务器(22，如Tengine/Nginx)、CDN(31)、编程语言(27) 属服务器环境，
+            # 与"网站用什么建站系统搭建"无关，剔除，不再混入识别结果。
+            target_cats = {1, 6, 12, 57}
             if not any(c in target_cats for c in cats):
                 continue
 

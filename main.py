@@ -15,9 +15,12 @@ import logging
 from pathlib import Path
 
 import yaml
+import hmac
+import secrets
+import urllib.parse
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse, FileResponse, Response, RedirectResponse
 from pydantic import BaseModel as PydanticModel, Field
 
 from llm_client import LLMClient
@@ -27,7 +30,7 @@ from site_audit.core.ai_engine import estimate_cost_cny
 
 # 平台全局版本号（唯一来源），格式 Version：YY.MDDDi.N——年后两位、月日与当日序号连写、
 # 末尾 N=系统累计发布次数（与 versions/ 文档数一致）。发版：versions/ 新增 <版本号>.md + 改这里。
-MR_ENGINE_VERSION = "26.09241.13"
+MR_ENGINE_VERSION = "26.10121.14"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1182,6 +1185,134 @@ def _html_self_check(checks):
 # ── FastAPI Server ──────────────────────────────────
 
 app = FastAPI(title="GEO Query Mining Agent", version="1.0.0")
+
+# ── 全站登录门禁（2026-09-24）──
+# 账号密码走 .env 的 GEO_AUTH_USER / GEO_AUTH_PASSWORD：两键都非空=门禁开启；
+# 任一为空=门禁关闭，一切行为与加门禁前完全一致（开发机/机器闸默认态）。
+# 门禁开启时：未登录访问任何页面 → 跳登录页（直接敲地址/收藏夹也拦得住）；
+# 未登录调接口 → 401。放行名单只有健康检查与登录本身。会话存内存（重启需重登），
+# 凭据与口令哈希永不落盘、不进报告、不进日志。
+AUTH_COOKIE = "geo_session"
+_sessions: "set[str]" = set()
+_auth_state: "dict[str, bool]" = {}
+
+
+def _auth_on() -> bool:
+    if "v" not in _auth_state:  # 进程内缓存：.env 改账号需重启服务生效
+        _load_dotenv(BASE_DIR / ".env")
+        _auth_state["v"] = bool((os.environ.get("GEO_AUTH_USER") or "").strip()
+                                and (os.environ.get("GEO_AUTH_PASSWORD") or "").strip())
+    return _auth_state["v"]
+
+
+@app.middleware("http")
+async def login_gate(request: Request, call_next):
+    if not _auth_on():
+        return await call_next(request)
+    path = request.url.path
+    if path in ("/health", "/login", "/api/login", "/docs", "/openapi.json"):
+        return await call_next(request)
+    sid = request.cookies.get(AUTH_COOKIE, "")
+    if sid and sid in _sessions:
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"ok": False, "error": "未登录或登录已过期，请重新登录"}, status_code=401)
+    nxt = urllib.parse.quote(path + ("?" + request.url.query if request.url.query else ""), safe="")
+    return RedirectResponse(f"/login?next={nxt}", status_code=303)
+
+
+_LOGIN_HTML = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · 市场调研引擎</title>
+<style>body{font-family:system-ui;display:grid;place-items:center;min-height:100vh;background:#f3f5f8;margin:0}
+.card{background:#fff;padding:36px 40px;border-radius:14px;box-shadow:0 8px 30px rgba(15,30,60,.08);width:320px}
+h1{font-size:18px;margin:0 0 20px;color:#1e2b3c}input{width:100%;box-sizing:border-box;padding:10px 12px;margin:6px 0 14px;border:1px solid #d5dbe3;border-radius:8px;font-size:14px}
+button{width:100%;padding:11px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:15px;cursor:pointer}
+#e{color:#c0392b;font-size:13px;min-height:18px;margin-top:8px}</style></head><body>
+<div class="card"><h1>市场调研引擎 · 登录</h1>
+<input id="u" placeholder="账号" autocomplete="username"><input id="p" type="password" placeholder="密码" autocomplete="current-password">
+<button onclick="doLogin()">登 录</button><div id="e"></div></div>
+<script>
+async function doLogin(){
+  const next = new URLSearchParams(location.search).get('next') || '/';
+  const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({username: document.getElementById('u').value,
+                          password: document.getElementById('p').value, next})});
+  if (r.ok) { const d = await r.json(); location.href = (d.next||'/').startsWith('/') ? (d.next||'/') : '/'; return; }
+  const d = await r.json().catch(()=>({})); document.getElementById('e').textContent = d.error || '登录失败';
+}
+document.getElementById('p').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
+</script></body></html>"""
+
+
+class LoginRequest(PydanticModel):
+    username: str = ""
+    password: str = ""
+    next: str = "/"
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(next: str = ""):
+    return _LOGIN_HTML
+
+
+@app.post("/api/login")
+async def api_login(req: LoginRequest):
+    if not _auth_on():
+        return JSONResponse({"ok": False, "error": "登录未启用"}, status_code=404)
+    want_u = (os.environ.get("GEO_AUTH_USER") or "").strip()
+    want_p = (os.environ.get("GEO_AUTH_PASSWORD") or "").strip()
+    if not (hmac.compare_digest(req.username, want_u) and hmac.compare_digest(req.password, want_p)):
+        return JSONResponse({"ok": False, "error": "账号或密码不正确"}, status_code=401)
+    sid = secrets.token_urlsafe(24)
+    _sessions.add(sid)
+    nxt = req.next or "/"
+    safe_next = nxt if nxt.startswith("/") and not nxt.startswith("//") else "/"
+    resp = JSONResponse({"ok": True, "next": safe_next})
+    resp.set_cookie(AUTH_COOKIE, sid, httponly=True, samesite="lax", max_age=7 * 86400)
+    return resp
+
+
+@app.post("/api/logout")
+async def api_logout(request: Request):
+    _sessions.discard(request.cookies.get(AUTH_COOKIE, ""))
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(AUTH_COOKIE)
+    return resp
+
+
+@app.get("/logout")
+async def logout_page(request: Request):
+    _sessions.discard(request.cookies.get(AUTH_COOKIE, ""))
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(AUTH_COOKIE)
+    return resp
+
+
+# 门禁开启时，在平台自身页面右下角注入「退出登录」浮钮。
+# 不注入名单：登录页；客户报告页（/audit-result、/result 交付客户，不得出现平台按钮）；图谱/品牌静态区。
+_LOGOUT_SNIPPET = ('<div style="position:fixed;bottom:14px;right:14px;z-index:2147483000">'
+                   '<button onclick="fetch(\'/api/logout\',{method:\'POST\'}).then(()=>location=\'/login\')"'
+                   ' style="padding:7px 14px;border:0;border-radius:8px;background:#1e2b3c;color:#fff;'
+                   'font-size:13px;cursor:pointer;opacity:.75">退出登录</button></div>')
+_NO_LOGOUT = ("/login", "/audit-result", "/result", "/brand", "/graph")
+
+
+@app.middleware("http")
+async def logout_injector(request: Request, call_next):
+    resp = await call_next(request)
+    path = request.url.path
+    if (_auth_on() and resp.status_code == 200
+            and not path.startswith(_NO_LOGOUT)
+            and resp.headers.get("content-type", "").startswith("text/html")):
+        it = getattr(resp, "body_iterator", None)
+        if it is not None:
+            body = b"".join([c async for c in it])
+            body = body.replace(b"</body>", _LOGOUT_SNIPPET.encode() + b"</body>", 1)
+            headers = {k: v for k, v in resp.headers.items() if k.lower() != "content-length"}
+            resp = Response(content=body, status_code=200, headers=headers,
+                            media_type=resp.media_type)
+    return resp
+
 
 # 代码知识图谱可视化（graphify 建图产物，rebuild 后刷新页面即可）
 try:

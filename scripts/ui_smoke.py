@@ -27,6 +27,8 @@ import sys
 from playwright.async_api import async_playwright, expect
 
 BASE = "http://127.0.0.1:8777"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _auth  # 门禁登录 helper：.env 未配账号（门禁关闭）时返回 None，脚本保持原行为
 BRAND_NOT_FOUND = "冠不存在的公司名xyz99887"   # 工商库必查无 → 未找到弹窗
 BRAND_UNIQUE = "广州好莱客"                    # 唯一匹配 → 品牌确认弹窗
 BRAND_MULTI = "好莱客"                         # 多候选 → 选择企业+异步识别弹窗
@@ -157,22 +159,30 @@ async def run():
         return 2
 
     task_posts = []
+    sid = _auth.login(BASE)  # 门禁开启时为浏览器上下文预置会话 Cookie；未启用返回 None
+
+    async def new_ctx(browser):
+        ctx = await browser.new_context()
+        if sid:
+            await ctx.add_cookies([{"name": "geo_session", "value": sid, "url": BASE}])
+        return ctx
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=os.environ.get("HEADED") != "1")
         # 用例1
-        ctx = await browser.new_context()
+        ctx = await new_ctx(browser)
         page = await ctx.new_page()
         new_task_tracker(page, task_posts)
         await case_not_found(page, task_posts)
         await page.close(); await ctx.close()
         # 用例2
-        ctx = await browser.new_context()
+        ctx = await new_ctx(browser)
         page = await ctx.new_page()
         new_task_tracker(page, task_posts)
         await case_unique(page, task_posts)
         await page.close(); await ctx.close()
         # 用例3
-        ctx = await browser.new_context()
+        ctx = await new_ctx(browser)
         page = await ctx.new_page()
         new_task_tracker(page, task_posts)
         await case_multi_race(page, task_posts)

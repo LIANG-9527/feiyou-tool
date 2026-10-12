@@ -17,6 +17,9 @@ import urllib.parse
 import urllib.request
 
 BASE = os.environ.get("BASE", "http://127.0.0.1:8777")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _auth
+_auth.install(BASE)  # 门禁开启时自动登录带会话；未配置账号=空操作
 CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brand_regression_cases.csv")
 FULL = os.environ.get("FULL") == "1"
 

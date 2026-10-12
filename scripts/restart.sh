@@ -20,9 +20,12 @@ PID=$(lsof -nP -iTCP:8777 -sTCP:LISTEN -t | head -1)
 sleep 3
 # 冒烟检查（2026-09-19）：重启后核心接口必须返回合法形状，异常大声报错不静默
 SMOKE_FAIL=0
+# 登录门禁（2026-09-24）：.env 配了账号则先登录拿会话，冒烟请求带 Cookie 走；未配置=门禁关闭，行为同旧
+AUTH_COOKIE=$(python3 -c "import sys; sys.path.insert(0,'scripts'); import _auth; v=_auth.login('http://127.0.0.1:8777'); print(v or '')" 2>/dev/null)
+CK=(-sf); [ -n "$AUTH_COOKIE" ] && CK=(-sf -H "Cookie: geo_session=$AUTH_COOKIE")
 curl -sf http://127.0.0.1:8777/health >/dev/null || { echo "⚠️ 冒烟失败: /health 无响应"; SMOKE_FAIL=1; }
-BC=$(curl -sf "http://127.0.0.1:8777/api/brand/check?name=%E5%A5%BD%E8%8E%B1%E5%AE%A2" 2>/dev/null)
+BC=$(curl "${CK[@]}" "http://127.0.0.1:8777/api/brand/check?name=%E5%A5%BD%E8%8E%B1%E5%AE%A2" 2>/dev/null)
 echo "$BC" | grep -q '"exists"' || { echo "⚠️ 冒烟失败: 名称核查返回形状异常 → $BC"; SMOKE_FAIL=1; }
-curl -sf -o /dev/null http://127.0.0.1:8777/mining || { echo "⚠️ 冒烟失败: /mining 页面异常"; SMOKE_FAIL=1; }
+curl "${CK[@]}" -o /dev/null http://127.0.0.1:8777/mining || { echo "⚠️ 冒烟失败: /mining 页面异常"; SMOKE_FAIL=1; }
 [ "$SMOKE_FAIL" = "1" ] && echo "═══ 冒烟检查未通过，服务带病运行，请排查 ═══" || echo "冒烟检查通过（/health、名称核查形状、/mining 页面）"
 curl -s -o /dev/null -w "重启后服务健康: %{http_code}\n" http://127.0.0.1:8777/health

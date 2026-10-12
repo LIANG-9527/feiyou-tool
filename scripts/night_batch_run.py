@@ -4,10 +4,15 @@
 诊断受"进行中≤10"限制，驱动按空位逐个补提交。状态每分钟记一次 var/log/batch_run.log。
 """
 import json
+import os
+import sys
 import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8777"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _auth
+_auth.install(BASE)  # 门禁开启时自动登录带会话；未配置账号=空操作
 LOG = "var/log/batch_run.log"
 
 RESEARCH = ["山西宜发同诚农业发展有限公司", "江西启帆教育科技有限公司", "浙江锦联国际物流有限公司",
