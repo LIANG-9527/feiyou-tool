@@ -30,7 +30,7 @@ from site_audit.core.ai_engine import estimate_cost_cny
 
 # 平台全局版本号（唯一来源），格式 Version：YY.MDDDi.N——年后两位、月日与当日序号连写、
 # 末尾 N=系统累计发布次数（与 versions/ 文档数一致）。发版：versions/ 新增 <版本号>.md + 改这里。
-MR_ENGINE_VERSION = "26.10121.14"
+MR_ENGINE_VERSION = "26.11161.15"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1186,23 +1186,67 @@ def _html_self_check(checks):
 
 app = FastAPI(title="GEO Query Mining Agent", version="1.0.0")
 
-# ── 全站登录门禁（2026-09-24）──
-# 账号密码走 .env 的 GEO_AUTH_USER / GEO_AUTH_PASSWORD：两键都非空=门禁开启；
-# 任一为空=门禁关闭，一切行为与加门禁前完全一致（开发机/机器闸默认态）。
-# 门禁开启时：未登录访问任何页面 → 跳登录页（直接敲地址/收藏夹也拦得住）；
-# 未登录调接口 → 401。放行名单只有健康检查与登录本身。会话存内存（重启需重登），
-# 凭据与口令哈希永不落盘、不进报告、不进日志。
+# ── 全站登录门禁 + 多账号角色（2026-11-15 员工权限隔离改造）──
+# 账号存 var/data/users.json（pbkdf2 加盐哈希）；.env 的 GEO_AUTH_USER/GEO_AUTH_PASSWORD
+# 两键都非空=门禁开启（首次启动用它引导建总监账号），任一为空且 users.json 无账号=门禁关闭，
+# 行为与无门禁时完全一致（开发机/机器闸默认态）。
+# 角色两档：总监=全量数据+配置管理+账号管理；员工=只见自己查询过的企业。
+# 门禁开启时：未登录访问任何页面 → 跳登录页；未登录调接口 → 401。
+# 会话存内存（重启需重登），会话值从 str 升级为 {user,name,role} dict。
+# 凭据与口令哈希永不落盘（users.json 只存哈希）、不进报告、不进日志。
 AUTH_COOKIE = "geo_session"
-_sessions: "set[str]" = set()
+_sessions: "dict[str, dict]" = {}
 _auth_state: "dict[str, bool]" = {}
 
 
+def _env_creds() -> tuple[str, str]:
+    _load_dotenv(BASE_DIR / ".env")
+    return ((os.environ.get("GEO_AUTH_USER") or "").strip(),
+            (os.environ.get("GEO_AUTH_PASSWORD") or "").strip())
+
+
 def _auth_on() -> bool:
-    if "v" not in _auth_state:  # 进程内缓存：.env 改账号需重启服务生效
-        _load_dotenv(BASE_DIR / ".env")
-        _auth_state["v"] = bool((os.environ.get("GEO_AUTH_USER") or "").strip()
-                                and (os.environ.get("GEO_AUTH_PASSWORD") or "").strip())
+    if "v" not in _auth_state:  # 进程内缓存：门禁开关改动需重启服务生效
+        u, p = _env_creds()
+        import user_store
+        user_store.bootstrap((u, p))
+        _auth_state["v"] = bool((u and p) or user_store.has_users())
     return _auth_state["v"]
+
+
+def current_user(request: Request) -> dict | None:
+    """当前会话用户 {username,name,role}；门禁关闭或未登录返回 None。"""
+    if not _auth_on():
+        return None
+    return _sessions.get(request.cookies.get(AUTH_COOKIE, ""))
+
+
+def is_director(request: Request) -> bool:
+    u = current_user(request)
+    return u is None or u.get("role") == "总监"  # 门禁关闭（开发机/脚本）视为总监
+
+
+def _require_director(request: Request):
+    if not is_director(request):
+        raise HTTPException(status_code=403, detail="仅总监可访问")
+
+
+# 员工权限边界（2026-11-15，配套 账号管理/企业归属隔离）：
+# ① 配置管理菜单仅总监：Skill管理、企业资料、操作日志、JSON补录、标注汇总、版本说明、账号管理。
+#    员工的数据入口=分析区（调研/挖掘/诊断），列表与直链按"查询归属+提交人"过滤。
+# ② 仅总监的接口：企业档案、操作日志、回灌、溯源审计、标注汇总、账号。
+# ③ 技能/方法/参考文件与检查项优先级配置：员工可读（调研/诊断页渲染需要），改配置仅总监。
+# 官网诊断对员工开放：任务面板/报告列表/报告直链/企业绑定按提交人过滤。
+# 对话不向员工开放（2026-11-16 定版）：菜单隐藏+页面/接口拦截，仅总监可用。
+_ADMIN_PAGES = ("/skills", "/oplog", "/backfill", "/users", "/annotations", "/company", "/changelog",
+                "/chat")
+_ADMIN_APIS = ("/api/oplog", "/api/backfill", "/api/users", "/api/company", "/api/company/data",
+               "/api/provenance", "/api/annotations/all", "/api/audit/snapshots", "/api/chat")
+_MUT_APIS = ("/api/skills", "/api/refs", "/api/methods", "/api/audit/priority-config")
+
+
+def _in_paths(path: str, prefixes) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in prefixes)
 
 
 @app.middleware("http")
@@ -1212,13 +1256,335 @@ async def login_gate(request: Request, call_next):
     path = request.url.path
     if path in ("/health", "/login", "/api/login", "/docs", "/openapi.json"):
         return await call_next(request)
-    sid = request.cookies.get(AUTH_COOKIE, "")
-    if sid and sid in _sessions:
-        return await call_next(request)
-    if path.startswith("/api/"):
-        return JSONResponse({"ok": False, "error": "未登录或登录已过期，请重新登录"}, status_code=401)
-    nxt = urllib.parse.quote(path + ("?" + request.url.query if request.url.query else ""), safe="")
-    return RedirectResponse(f"/login?next={nxt}", status_code=303)
+    sess = _sessions.get(request.cookies.get(AUTH_COOKIE, ""))
+    if not sess:
+        if path.startswith("/api/"):
+            return JSONResponse({"ok": False, "error": "未登录或登录已过期，请重新登录"}, status_code=401)
+        nxt = urllib.parse.quote(path + ("?" + request.url.query if request.url.query else ""), safe="")
+        return RedirectResponse(f"/login?next={nxt}", status_code=303)
+    # 员工旁路闸：手敲配置管理地址/直打总监接口/改配置写操作同样拦下
+    if sess.get("role") != "总监":
+        if _in_paths(path, _ADMIN_PAGES + _ADMIN_APIS) or \
+           (_in_paths(path, _MUT_APIS) and request.method not in ("GET", "HEAD")):
+            if path.startswith("/api/"):
+                return JSONResponse({"ok": False, "error": "仅总监可访问"}, status_code=403)
+            return RedirectResponse("/", status_code=303)
+    request.state.user = sess
+    return await call_next(request)
+
+
+# 查询归属登记（2026-11-15）：谁查询算谁的（总监提交也算，仅影响员工可见性）。
+# 门禁关闭（本地脚本/开发机）时无会话用户，跳过——行为与旧版一致。
+def _cur_username(request: Request) -> str:
+    u = current_user(request)
+    return (u or {}).get("username", "")
+
+
+def _register_owner(brand: str, user: str):
+    if not brand or not user:
+        return
+    from company_cache import add_owner, ensure_company
+    if add_owner(brand, user) is None:
+        ensure_company(brand, origin="提交分析")
+        add_owner(brand, user)
+
+
+class _Vis:
+    """企业/报告可见性判定：总监或门禁关闭=全量；员工=自己归属名下企业+自己提交的报告。"""
+
+    def __init__(self, request: Request):
+        self.director = is_director(request)
+        self.user = _cur_username(request)
+        self._names: set[str] | None = None
+
+    @property
+    def owned_norm(self) -> set[str]:
+        """员工归属档案的全部身份写法（全称/品牌/别名归一集），一次遍历缓存到实例。
+        ponytail: O(全档案)，企业到千级再上缓存。"""
+        if self._names is None:
+            from company_cache import owners_map, owned_archive_names
+            self._names = owned_archive_names(set(owners_map().keys())
+                                              if self.director else
+                                              {cid for cid, us in owners_map().items()
+                                               if self.user in us})
+        return self._names
+
+    def ok_brand(self, brand: str) -> bool:
+        if self.director:
+            return True
+        from company_cache import norm_name
+        bn = norm_name(brand or "")
+        return bool(bn) and bn in self.owned_norm
+
+    def ok_id(self, cid: str) -> bool:
+        if self.director:
+            return True
+        from company_cache import owners_map
+        return self.user in owners_map().get(cid, [])
+
+    def ok_report(self, d: dict, brand_fallback: str = "") -> bool:
+        """报告可见性：新报告按落盘的提交人判；旧报告/无提交人回退品牌归属判。"""
+        if self.director:
+            return True
+        if d.get("submitted_by") == self.user:
+            return True
+        if not d.get("submitted_by"):
+            return self.ok_brand(d.get("brand") or brand_fallback)
+        return False
+
+
+def _stamp_json(path, user: str):
+    """报告 JSON 落盘后补记提交人 submitted_by（员工侧列表/直链判可见性用）。
+    写失败不伤主流程；缺提交人的旧报告按品牌归属回退判定。"""
+    if not user or not path:
+        return
+    try:
+        p = Path(path)
+        if p.exists():
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if d.get("submitted_by") != user:
+                d["submitted_by"] = user
+                p.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _stamp_owner(files: dict, user: str):
+    if isinstance(files, dict) and files.get("json"):
+        _stamp_json(files["json"], user)
+
+
+# ── 账号管理（配置管理→账号管理，仅总监；旁路闸已拦员工）──────────
+
+class UserCreateReq(PydanticModel):
+    username: str = ""
+    name: str = ""
+    password: str = ""
+    role: str = "员工"
+
+
+class UserUpdateReq(PydanticModel):
+    name: str | None = None
+    password: str | None = None
+    role: str | None = None
+    enabled: bool | None = None
+
+
+@app.get("/api/users")
+async def users_list():
+    import user_store
+    return {"users": user_store.list_users()}
+
+
+@app.post("/api/users")
+async def users_add(req: UserCreateReq, request: Request):
+    import user_store
+    err = user_store.add_user(req.username, req.name, req.password, req.role)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    _log_op("账号管理", "新增账号", req.username.strip(), f"角色 {req.role}")
+    return {"ok": True}
+
+
+@app.put("/api/users/{username:path}")
+async def users_update(username: str, req: UserUpdateReq, request: Request):
+    import user_store
+    if req.enabled is False and _cur_username(request) == username:
+        return JSONResponse({"ok": False, "error": "不能停用当前登录账号"}, status_code=400)
+    err = user_store.update_user(username, name=req.name, password=req.password,
+                                 role=req.role, enabled=req.enabled)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    # 改密/改角色/禁用后旧会话立即失效（下次请求被门禁弹回登录页）；启用不动会话
+    if req.password or req.role is not None or req.enabled is False:
+        for sid, sess in list(_sessions.items()):
+            if sess.get("username") == username:
+                _sessions.pop(sid, None)
+    _act = ("重置密码" if req.password else
+            f"角色改为 {req.role}" if req.role else
+            "启用账号" if req.enabled is True else
+            "禁用账号（已强制下线）" if req.enabled is False else "改名")
+    _log_op("账号管理", "修改账号", username, _act)
+    return {"ok": True}
+
+
+@app.delete("/api/users/{username:path}")
+async def users_delete(username: str, request: Request):
+    import user_store
+    if _cur_username(request) == username:
+        return JSONResponse({"ok": False, "error": "不能删除当前登录账号"}, status_code=400)
+    err = user_store.delete_user(username)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    for sid, sess in list(_sessions.items()):
+        if sess.get("username") == username:
+            _sessions.pop(sid, None)
+    # 删除账号不销毁数据：其名下查询归属清空（企业转公共），由企业资料页总监重新指派
+    from company_cache import clear_owner
+    clear_owner(username)
+    _log_op("账号管理", "删除账号", username, "名下企业归属已转公共，待总监指派")
+    return {"ok": True}
+
+
+_USERS_HTML = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>账号管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,"PingFang SC",sans-serif;background:#f4f5ff;color:#091026}
+.wrap{max-width:1100px;margin:0 auto;padding:28px 20px}
+h1{font-size:20px;margin-bottom:16px}
+.card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 4px 18px rgba(15,30,60,.06);margin-bottom:18px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #eef0f6}
+th{color:#6e7991;font-weight:500;font-size:13px}
+.role-d{color:#2563eb;font-weight:600}.role-s{color:#556}
+button{border:0;border-radius:7px;padding:6px 14px;font-size:13px;cursor:pointer;background:#2563eb;color:#fff}
+button.ghost{background:#eef1f7;color:#556}button.danger{background:#fdecec;color:#c0392b}
+input,select{padding:8px 10px;border:1px solid #d5dbe3;border-radius:8px;font-size:14px}
+.addrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.err{color:#c0392b;font-size:13px;min-height:18px;margin-top:8px}
+.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}
+.mask{position:fixed;inset:0;background:rgba(9,16,38,.45);display:flex;align-items:center;justify-content:center;z-index:10}
+.modal{background:#fff;border-radius:12px;padding:24px;width:460px;max-width:92vw;display:flex;flex-direction:column;gap:6px}
+.modal b{font-size:15px;margin-bottom:6px}
+.modal label{font-size:13px;color:#556}
+.modal input,.modal select{width:100%}
+.modal .btns{display:flex;gap:8px;align-items:center;margin-top:12px}
+/* 状态滑块开关：左灰=禁用，右蓝=启用 */
+.sw{position:relative;display:inline-block;width:38px;height:20px}
+.sw input{opacity:0;width:0;height:0}
+.sw span{position:absolute;inset:0;background:#cdd4e0;border-radius:20px;transition:.15s;cursor:pointer}
+.sw span::before{content:"";position:absolute;width:16px;height:16px;left:2px;top:2px;background:#fff;border-radius:50%;transition:.15s}
+.sw input:checked + span{background:#2563eb}
+.sw input:checked + span::before{transform:translateX(18px)}
+.st-d{color:#8a93a6}.st-e{color:#1f9d55}
+/* 公共顶部导航（与企业资料页同款） */
+.topnav{display:flex;gap:24px;justify-content:flex-end;align-items:center;padding:24px;max-width:1200px;margin:0 auto;position:relative;box-sizing:border-box}
+.topnav a{font-size:16px;font-weight:400;text-decoration:none;color:#6e7991;transition:color .2s}
+.topnav a:hover{color:#091026}
+.topnav a.active{color:#091026;font-weight:600}
+.nav-dropdown{position:relative}
+.nav-dropdown-toggle{display:flex;align-items:center;gap:6px;font-size:16px;font-weight:400;color:#6e7991;cursor:pointer;transition:color .2s}
+.nav-dropdown:hover .nav-dropdown-toggle{color:#091026}
+.nav-arrow{width:1rem;height:1rem;transition:transform .2s}
+.nav-dropdown:hover .nav-arrow{transform:rotate(180deg)}
+.nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
+.nav-dropdown:hover .nav-dropdown-menu{display:flex;flex-direction:column;gap:4px}
+.nav-dropdown-menu a{padding:8px 16px;border-radius:.6rem;white-space:nowrap;font-size:14px}
+.nav-dropdown-menu a:hover{background:#f4f6fb;color:#091026}
+.nav-dropdown-menu a.active{background:#eef3ff;color:#2563eb;font-weight:600}
+</style></head><body>
+<nav class="topnav">
+  <a href="/research" class="brand-logo" style="position:absolute;left:24px;top:50%;transform:translateY(-50%)"><img src="/brand/logo.png" alt="飞柚 GEO 品牌标识" style="height:32px"></a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>分析</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/mining">GEO搜索问句挖掘</a>
+      <a href="/research">客户市场调研</a>
+    </div>
+  </div>
+  <a href="/audit">官网诊断</a>
+  <a href="/chat">对话</a>
+  <div class="nav-dropdown">
+    <div class="nav-dropdown-toggle"><span>配置管理</span>
+      <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="nav-dropdown-menu">
+      <a href="/users" class="active">账号管理</a>
+      <a href="/skills">Skill管理</a>
+      <a href="/company">企业资料</a>
+      <a href="/oplog">操作日志</a>
+      <a href="/backfill">JSON补录</a>
+      <a href="/changelog">__ver__</a>
+    </div>
+  </div>
+</nav>
+<div class="wrap">
+<div class="head"><h1 style="margin:0">账号管理</h1><button onclick="openAdd()">＋ 新增账号</button></div>
+<div class="card"><table id="tb"><thead><tr><th>登录名</th><th>姓名</th><th>角色</th><th>状态</th><th>创建时间</th><th style="width:280px">操作</th></tr></thead><tbody></tbody></table></div>
+<div style="font-size:12px;color:#6e7991">员工只能看到自己查询过的企业；总监可见全部并能进入配置管理。禁用账号立即强制下线且无法登录。</div>
+</div>
+<div id="mask" class="mask" style="display:none"><div class="modal">
+<b>新增账号</b>
+<label>登录名</label><input id="nu" placeholder="登录名（2~40位字母或数字）" pattern="[A-Za-z0-9]{2,40}" title="只能是字母或数字">
+<label>姓名</label><input id="nn" placeholder="姓名（可留空，默认同登录名）">
+<label>初始密码</label><input id="np" type="password" placeholder="初始密码">
+<label>角色</label><select id="nr"><option value="员工">员工</option><option value="总监">总监</option></select>
+<div class="btns"><button onclick="addUser()">提交</button><button class="ghost" onclick="closeAdd()">取消</button><span id="e" class="err" style="margin:0"></span></div>
+</div></div>
+<div id="rmask" class="mask" style="display:none"><div class="modal">
+<b>修改角色</b>
+<label>账号：<span id="ru"></span></label>
+<label>角色</label><select id="rv"><option value="员工">员工</option><option value="总监">总监</option></select>
+<div class="btns"><button onclick="submitRole()">确定</button><button class="ghost" onclick="closeRole()">取消</button><span id="re" class="err" style="margin:0"></span></div>
+</div></div>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load(){
+  const d=await (await fetch('/api/users')).json();
+  document.querySelector('#tb tbody').innerHTML=(d.users||[]).map(u=>{
+    const on=u.enabled!==false;
+    return '<tr><td>'+esc(u.username)+'</td><td>'+esc(u.name)+'</td>'+
+    '<td class="'+(u.role==='总监'?'role-d':'role-s')+'">'+esc(u.role)+'</td>'+
+    '<td><label class="sw"><input type="checkbox" '+(on?'checked':'')+' onchange="tgl(\\''+esc(u.username)+'\\',this)">'+
+    '<span></span></label> <span class="'+(on?'st-e':'st-d')+'">'+(on?'启用':'禁用')+'</span></td>'+
+    '<td>'+esc(u.created)+'</td>'+
+    '<td><button class="ghost" onclick="resetPwd(\\''+esc(u.username)+'\\')">重置密码</button> '+
+    '<button class="ghost" onclick="editRole(\\''+esc(u.username)+'\\',\\''+esc(u.role)+'\\')">修改角色</button> '+
+    ' <button class="danger" onclick="delUser(\\''+esc(u.username)+'\\')">删除</button></td></tr>';
+  }).join('');
+}
+async function tgl(u,box){
+  const r=await fetch('/api/users/'+encodeURIComponent(u),{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:box.checked})});
+  const d=await r.json().catch(()=>({}));
+  if(d.error){alert(d.error);box.checked=!box.checked;}
+  else{load();}
+}
+function openAdd(){mask.style.display='flex';nu.focus();}
+function closeAdd(){mask.style.display='none';e.textContent='';}
+mask&&mask.addEventListener('click',ev=>{if(ev.target===mask)closeAdd();});
+document.addEventListener('keydown',ev=>{if(ev.key==='Escape'){closeAdd();closeRole();}});
+async function addUser(){
+  const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({username:nu.value,name:nn.value,password:np.value,role:nr.value})});
+  const d=await r.json().catch(()=>({}));
+  e.textContent=d.error||'';
+  if(r.ok){closeAdd();nu.value=nn.value=np.value='';load();}
+}
+async function resetPwd(u){
+  const p=prompt('为「'+u+'」设置新密码：'); if(!p)return;
+  const r=await fetch('/api/users/'+encodeURIComponent(u),{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({password:p})});
+  const d=await r.json().catch(()=>({})); if(d.error)alert(d.error); else alert('已重置，该账号需重新登录');
+}
+/* 修改角色弹窗：选员工/总监后提交（最后一个启用中总监不可降由服务端拦） */
+let _roleU='';
+function editRole(u,cur){_roleU=u;ru.textContent=u;rv.value=cur;rmask.style.display='flex';}
+function closeRole(){rmask.style.display='none';re.textContent='';}
+rmask&&rmask.addEventListener('click',ev=>{if(ev.target===rmask)closeRole();});
+async function submitRole(){
+  const r=await fetch('/api/users/'+encodeURIComponent(_roleU),{method:'PUT',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({role:rv.value})});
+  const d=await r.json().catch(()=>{});
+  if(d.error){re.textContent=d.error;}
+  else{closeRole();alert('已改为'+rv.value+'，该账号需重新登录');load();}
+}
+async function delUser(u){
+  if(!confirm('删除账号「'+u+'」？其名下企业将转为公共（待指派），数据不删除。'))return;
+  const r=await fetch('/api/users/'+encodeURIComponent(u),{method:'DELETE'});
+  const d=await r.json().catch(()=>({})); if(d.error)alert(d.error); else load();
+}
+load();
+</script></body></html>"""
+
+
+@app.get("/users", response_class=HTMLResponse)
+async def users_ui():
+    return _USERS_HTML.replace('__ver__', VER_LABEL)
 
 
 _LOGIN_HTML = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
@@ -1259,14 +1625,17 @@ async def login_page(next: str = ""):
 async def api_login(req: LoginRequest):
     if not _auth_on():
         return JSONResponse({"ok": False, "error": "登录未启用"}, status_code=404)
-    want_u = (os.environ.get("GEO_AUTH_USER") or "").strip()
-    want_p = (os.environ.get("GEO_AUTH_PASSWORD") or "").strip()
-    if not (hmac.compare_digest(req.username, want_u) and hmac.compare_digest(req.password, want_p)):
+    import user_store
+    who = user_store.verify(req.username.strip(), req.password)
+    if who is None:
         return JSONResponse({"ok": False, "error": "账号或密码不正确"}, status_code=401)
     sid = secrets.token_urlsafe(24)
-    _sessions.add(sid)
+    _sessions[sid] = who
     nxt = req.next or "/"
     safe_next = nxt if nxt.startswith("/") and not nxt.startswith("//") else "/"
+    # 员工被引导回配置管理地址会再次被旁路闸弹回首页，这里直接归正
+    if who["role"] != "总监" and _in_paths(safe_next.split("?")[0], _ADMIN_PAGES):
+        safe_next = "/"
     resp = JSONResponse({"ok": True, "next": safe_next})
     resp.set_cookie(AUTH_COOKIE, sid, httponly=True, samesite="lax", max_age=7 * 86400)
     return resp
@@ -1274,7 +1643,7 @@ async def api_login(req: LoginRequest):
 
 @app.post("/api/logout")
 async def api_logout(request: Request):
-    _sessions.discard(request.cookies.get(AUTH_COOKIE, ""))
+    _sessions.pop(request.cookies.get(AUTH_COOKIE, ""), None)
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(AUTH_COOKIE)
     return resp
@@ -1282,18 +1651,29 @@ async def api_logout(request: Request):
 
 @app.get("/logout")
 async def logout_page(request: Request):
-    _sessions.discard(request.cookies.get(AUTH_COOKIE, ""))
+    _sessions.pop(request.cookies.get(AUTH_COOKIE, ""), None)
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(AUTH_COOKIE)
     return resp
 
 
-# 门禁开启时，在平台自身页面右下角注入「退出登录」浮钮。
+# 门禁开启时：①员工页面剥掉整个「配置管理」下拉（页面是静态模板、按会话角色
+# 服务端剥离；后端旁路闸仍兜底——藏菜单是体验，拦截在门禁）；②把「退出登录」
+# 注入到页面导航栏最右侧末尾（各页 <nav class="topnav"> 的 flex 行尾）；
+# 页面没有导航（兜底）才退回右下角浮钮。
 # 不注入名单：登录页；客户报告页（/audit-result、/result 交付客户，不得出现平台按钮）；图谱/品牌静态区。
-_LOGOUT_SNIPPET = ('<div style="position:fixed;bottom:14px;right:14px;z-index:2147483000">'
-                   '<button onclick="fetch(\'/api/logout\',{method:\'POST\'}).then(()=>location=\'/login\')"'
-                   ' style="padding:7px 14px;border:0;border-radius:8px;background:#1e2b3c;color:#fff;'
-                   'font-size:13px;cursor:pointer;opacity:.75">退出登录</button></div>')
+import re as _re_html
+_ADMIN_DROPDOWN = _re_html.compile(
+    r'[ \t]*<div class="nav-dropdown">\s*'
+    r'<div class="nav-dropdown-toggle"><span>配置管理</span>.*?</div>\s*</div>\s*\n',
+    _re_html.DOTALL)
+_CHAT_NAV = _re_html.compile(r'[ \t]*<a href="/chat">对话</a>\s*\n')
+_LOGOUT_NAV = ('<a href="/logout" title="退出登录" style="font-size:14px;color:#6e7991;'
+               'text-decoration:none;white-space:nowrap">退出登录</a>')
+_LOGOUT_FLOAT = ('<div style="position:fixed;bottom:14px;right:14px;z-index:2147483000">'
+                 '<button onclick="fetch(\'/api/logout\',{method:\'POST\'}).then(()=>location=\'/login\')"'
+                 ' style="padding:7px 14px;border:0;border-radius:8px;background:#1e2b3c;color:#fff;'
+                 'font-size:13px;cursor:pointer;opacity:.75">退出登录</button></div>')
 _NO_LOGOUT = ("/login", "/audit-result", "/result", "/brand", "/graph")
 
 
@@ -1307,7 +1687,16 @@ async def logout_injector(request: Request, call_next):
         it = getattr(resp, "body_iterator", None)
         if it is not None:
             body = b"".join([c async for c in it])
-            body = body.replace(b"</body>", _LOGOUT_SNIPPET.encode() + b"</body>", 1)
+            user = getattr(request.state, "user", None) or {}
+            if user.get("role") and user.get("role") != "总监":
+                text = body.decode("utf-8", errors="replace")
+                text = _ADMIN_DROPDOWN.sub("", text, count=1)
+                text = _CHAT_NAV.sub("", text)
+                body = text.encode("utf-8")
+            if b"</nav>" in body:
+                body = body.replace(b"</nav>", _LOGOUT_NAV.encode() + b"</nav>", 1)
+            else:
+                body = body.replace(b"</body>", _LOGOUT_FLOAT.encode() + b"</body>", 1)
             headers = {k: v for k, v in resp.headers.items() if k.lower() != "content-length"}
             resp = Response(content=body, status_code=200, headers=headers,
                             media_type=resp.media_type)
@@ -1395,10 +1784,10 @@ def _active_audit_count() -> int:
     return sum(1 for j in AUDIT_JOBS.values() if j["status"] == "running")
 
 
-def _start_audit_job(url: str) -> str:
-    """登记并后台启动一个诊断任务，返回 job_id。"""
+def _start_audit_job(url: str, user: str = "") -> str:
+    """登记并后台启动一个诊断任务，返回 job_id。user=提交人（员工权限隔离判可见性）。"""
     job_id = uuid.uuid4().hex[:12]
-    AUDIT_JOBS[job_id] = {"status": "running", "url": url, "started": time.time()}
+    AUDIT_JOBS[job_id] = {"status": "running", "url": url, "started": time.time(), "user": user}
     llm_config = load_config().get("llm", {})
     audit_dir = OUTPUT_DIR / "audit"
 
@@ -1407,6 +1796,16 @@ def _start_audit_job(url: str) -> str:
             result = run_site_audit(url, audit_dir, 12, llm_config)
             AUDIT_JOBS[job_id]["result"] = result
             _audit_bind_company_sync(result)  # 先绑定写回再报完成：列表刷新时绑定结果必已落盘
+            if user and result.get("json_file"):
+                # 员工隔离（2026-11-15）：报告记提交人；绑定成功的企业同时登记查询归属
+                _stamp_json(audit_dir / result["json_file"], user)
+                try:
+                    _full = json.loads((audit_dir / result["json_file"]).read_text(encoding="utf-8")).get("company_full_name") or ""
+                    if _full:
+                        from company_cache import add_owner
+                        add_owner(_full, user)
+                except Exception:
+                    pass
             AUDIT_JOBS[job_id]["status"] = "done"
         except Exception as e:
             AUDIT_JOBS[job_id]["status"] = "error"
@@ -1415,6 +1814,20 @@ def _start_audit_job(url: str) -> str:
 
     threading.Thread(target=_run, daemon=True).start()
     return job_id
+
+
+def _audit_report_visible(json_path, vis: "_Vis") -> bool:
+    """诊断报告可见性：新报告按提交人判；旧报告回退绑定企业归属判；未绑定未提交=员工不可见。"""
+    if vis.director:
+        return True
+    try:
+        d = json.loads(Path(json_path).read_text(encoding="utf-8")) if Path(json_path).exists() else {}
+    except (OSError, ValueError):
+        d = {}
+    if d.get("submitted_by"):
+        return d["submitted_by"] == vis.user
+    comp = str(d.get("company_full_name") or "")
+    return bool(comp) and vis.ok_brand(comp)
 
 
 async def _audit_bind_company(result: dict):
@@ -1447,7 +1860,7 @@ def _audit_bind_company_sync(result: dict):
 
 
 @app.post("/api/audit/start")
-async def api_audit_start(req: AuditRequest):
+async def api_audit_start(req: AuditRequest, request: Request):
     """提交诊断任务立即返回 job_id（诊断在后台线程执行）。
 
     诊断耗时 1~3 分钟，走同步接口时会被链路上的代理/nginx 掐断返回 HTML 错误页，
@@ -1460,11 +1873,11 @@ async def api_audit_start(req: AuditRequest):
                              "error": f"进行中的诊断任务已达上限（{AUDIT_MAX_ACTIVE} 个），请等待完成后再发起"},
                             status_code=429)
     _log_op("官网诊断", "发起检测", url, "后台任务方式")
-    return JSONResponse({"ok": True, "job_id": _start_audit_job(url)})
+    return JSONResponse({"ok": True, "job_id": _start_audit_job(url, _cur_username(request))})
 
 
 @app.post("/api/audit/batch")
-async def api_audit_batch(req: BatchAuditRequest):
+async def api_audit_batch(req: BatchAuditRequest, request: Request):
     """批量创建诊断任务：整批一起受理，进行中的任务总数不得超过上限。"""
     urls = list(dict.fromkeys(u.strip() for u in req.urls if u and u.strip()))
     if not urls:
@@ -1479,19 +1892,23 @@ async def api_audit_batch(req: BatchAuditRequest):
                              "error": f"进行中的任务 {active} 个 + 本次 {len(urls)} 个 超过上限 {AUDIT_MAX_ACTIVE}，请等待部分完成后再添加"},
                             status_code=429)
     _log_op("官网诊断", "批量发起检测", f"{len(urls)} 个网址", "；".join(urls))
-    jobs = [{"job_id": _start_audit_job(u), "url": u} for u in urls]
+    _user = _cur_username(request)
+    jobs = [{"job_id": _start_audit_job(u, _user), "url": u} for u in urls]
     return JSONResponse({"ok": True, "jobs": jobs})
 
 
 @app.get("/api/audit/jobs")
-async def api_audit_jobs():
-    """任务面板数据：进行中 + 最近完成/失败的任务（不含报告正文）。"""
+async def api_audit_jobs(request: Request):
+    """任务面板数据：进行中 + 最近完成/失败的任务（不含报告正文）；员工只见自己提交的。"""
+    vis = _Vis(request)
     # 完成/失败超1小时的任务连结果一起清掉，防常驻内存里攒大对象
     for jid in [k for k, v in AUDIT_JOBS.items()
                 if v["status"] != "running" and time.time() - v.get("finished", v["started"]) > 3600]:
         AUDIT_JOBS.pop(jid, None)
     items = []
     for jid, j in AUDIT_JOBS.items():
+        if not vis.director and j.get("user") != vis.user:
+            continue
         if j["status"] == "running":
             items.append({"job_id": jid, "url": j.get("url", ""), "status": "running",
                           "elapsed": int(time.time() - j["started"])})
@@ -1509,9 +1926,9 @@ async def api_audit_jobs():
 
 
 @app.get("/api/audit/job/{job_id}")
-async def api_audit_job(job_id: str):
+async def api_audit_job(job_id: str, request: Request):
     job = AUDIT_JOBS.get(job_id)
-    if not job:
+    if not job or (not is_director(request) and job.get("user") != _cur_username(request)):
         return JSONResponse({"ok": False,
                              "error": "任务不存在（可能服务刚重启过），请重新发起诊断"}, status_code=404)
     if job["status"] == "running":
@@ -1522,7 +1939,7 @@ async def api_audit_job(job_id: str):
 
 
 @app.post("/api/audit")
-async def api_audit(req: AuditRequest):
+async def api_audit(req: AuditRequest, request: Request):
     """运行 GEO 官网诊断，生成 HTML 报告，返回摘要。"""
     url = (req.url or "").strip()
     if not url:
@@ -1535,15 +1952,20 @@ async def api_audit(req: AuditRequest):
     if not result.get("ok"):
         return JSONResponse(result, status_code=422)
     await _audit_bind_company(result)
+    _user = _cur_username(request)
+    if _user and result.get("json_file"):
+        _stamp_json(audit_dir / result["json_file"], _user)
     return JSONResponse(result)
 
 
 @app.get("/audit-result/{filename:path}")
-async def get_audit_result(filename: str):
-    """提供官网诊断生成的 HTML / JSON 报告文件。"""
+async def get_audit_result(filename: str, request: Request):
+    """提供官网诊断生成的 HTML / JSON 报告文件（员工只见自己提交/归属企业的）。"""
     audit_dir = OUTPUT_DIR / "audit"
     file_path = audit_dir / filename
     if not file_path.exists():
+        return JSONResponse({"error": "file not found"}, status_code=404)
+    if not _audit_report_visible(audit_dir / (Path(filename).stem + ".json"), _Vis(request)):
         return JSONResponse({"error": "file not found"}, status_code=404)
     if filename.endswith(".html"):
         return HTMLResponse(content=file_path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"})
@@ -1658,10 +2080,11 @@ def _shorten_brand_name(full_name: str) -> str:
 
 
 @app.get("/api/audit/reports")
-async def list_audit_reports():
-    """列出所有历史诊断报告。"""
+async def list_audit_reports(request: Request):
+    """列出所有历史诊断报告（员工只见自己提交/归属企业的）。"""
     audit_dir = OUTPUT_DIR / "audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
+    vis = _Vis(request)
     reports = []
     for f in audit_dir.glob("*.html"):
         stem = f.stem
@@ -1669,6 +2092,8 @@ async def list_audit_reports():
         if "_regen_" in stem:
             continue
         json_file = audit_dir / f"{stem}.json"
+        if not _audit_report_visible(json_file, vis):
+            continue
         info = {"html_file": f.name, "filename": stem}
         if json_file.exists():
             try:
@@ -2009,13 +2434,41 @@ async def ensure_mr_brief_valid(result: dict, config: dict, on_progress=None):
     logger.info("画像字段已合并入库（管线证据池口径）")
 
 
+def _org_degraded(company: str, detail: "dict|None") -> "dict|None":
+    """降级组织图：仅主体节点+pending 标记（渲染端按无树处理，档案标"组织图待补"）。
+    detail=工商接口详情（有则优先）；接口不可用时读本地企业库的人工核验主体，
+    库里连全称+信用代码都没有则返回 None（无从降级）。"""
+    from org_graph import _norm, CREDIT_RE
+    if detail:
+        _code = str(detail.get("creditNumber") or "").strip().upper()
+        node = {"name": detail.get("companyName") or company, "credit_code": _code or None,
+                "legal_person": detail.get("juridicalPerson"), "founder": None,
+                "status": detail.get("businessStatus")}
+        source = "business_api"
+    else:
+        from company_cache import get_info
+        info, _ts = get_info(company)
+        if not (info and info.get("full_name") and info.get("credit_code")):
+            return None
+        _code = str(info.get("credit_code") or "").strip().upper()
+        node = {"name": info["full_name"], "credit_code": _code or None,
+                "legal_person": info.get("legal_person"), "founder": info.get("founder"),
+                "status": info.get("status")}
+        source = "local_archive"
+    _sk = ("c:" + _code) if CREDIT_RE.match(_code) else ("n:" + _norm(node["name"]))
+    return {"roots": [_sk], "seed_key": _sk, "nodes": [{"id": _sk, **node}],
+            "tree": [], "weak": [], "siblings": [], "uncertain": [],
+            "has_natural_person_holder": False, "depth2_empty": True,
+            "pending": True, "source": source}
+
+
 async def ensure_org_graph(result: dict, config: dict):
-    """市场调研落盘前：组织架构实名图（工商API：详情+股东+分支机构，0次LLM）。
-    获取失败抛 OrgGraphError 终止任务——生成前已有企业名称API校验与画像层校验
-    两层前置，仍失败属真异常，不降级不静默。"""
+    """市场调研落盘前：组织架构实名图（工商API：详情+股东+分支机构，0次LLM）。"""
     # 无股东/分支机构不再致命（2026-09-20 用户定版）：降级为仅主体节点+档案标"组织图待补"，
     # 报告照常生成落盘；下次重新生成/刷新时自动重查，查到即补全。
-    # 工商查无此企业/接口异常仍致命（画像层已在花 LLM token 前拦截，此处为落盘前兜底）。
+    # 接口异常/工商查无同样降级（2026-11-10 用户定版，推翻 09-20「接口异常仍致命」）：
+    # 本地企业库已存人工核验主体（全称+信用代码齐）即降级出图照常落盘——画像地基由本地库兜住，
+    # 此处只缺股东树明细；库里也无身份才终止。
     if result.get("method_id") != "customer_market_research":
         return
     if result.get("mr_org") and not result["mr_org"].get("pending"):
@@ -2026,35 +2479,34 @@ async def ensure_org_graph(result: dict, config: dict):
     if not company:
         return
     from org_graph import build_org_graph_from_api, OrgGraphError
+    detail: "dict|None" = None
+    org = None
+    api_err: "Exception|None" = None
     try:
         from business_api_client import get_business_api_client
         api = get_business_api_client()
         detail = await api.get_company_detail_by_name(company)
-        if not detail or not detail.get("id"):
+        if detail and detail.get("id"):
+            sh, br = await asyncio.gather(
+                api.get_shareholders(detail["id"], page_size=50),
+                api.get_branch_orgs(detail["id"], page_size=50))
+            org = build_org_graph_from_api(detail, sh, br)
+    except Exception as e:
+        api_err = e
+        logger.warning(f"组织架构工商API调用异常: {type(e).__name__}: {e}")
+    if org is None:
+        # 接口异常/查无：降级主体节点取自本地企业库
+        org = _org_degraded(company, None)
+        if org is None:
+            if api_err is not None:
+                raise OrgGraphError(f"组织架构工商API调用失败：{api_err}。请稍后重试或检查API配置。") from api_err
             raise OrgGraphError(
                 f"工商API未查到「{company}」的企业详情，组织架构无法生成。"
                 "请确认企业名称是否准确后重试。")
-        sh, br = await asyncio.gather(
-            api.get_shareholders(detail["id"], page_size=50),
-            api.get_branch_orgs(detail["id"], page_size=50))
-        org = build_org_graph_from_api(detail, sh, br)
-    except OrgGraphError:
-        raise
-    except Exception as e:
-        raise OrgGraphError(f"组织架构工商API调用失败：{e}。请稍后重试或检查API配置。") from e
+        logger.info(f"组织架构降级: 「{company}」工商接口不可用（{api_err or '查无记录'}），主体节点取自本地企业库")
     if not (org and org.get("tree")):
-        # 降级：仅主体节点的组织图 + pending 标记（渲染端按无树处理，档案标"组织图待补"）
-        from org_graph import _norm, CREDIT_RE
-        _code = str(detail.get("creditNumber") or "").strip().upper()
-        _sk = ("c:" + _code) if CREDIT_RE.match(_code) else ("n:" + _norm(detail.get("companyName") or company))
-        org = {"roots": [_sk], "seed_key": _sk,
-               "nodes": [{"id": _sk, "name": detail.get("companyName") or company,
-                          "credit_code": _code or None,
-                          "legal_person": detail.get("juridicalPerson"),
-                          "founder": None, "status": detail.get("businessStatus")}],
-               "tree": [], "weak": [], "siblings": [], "uncertain": [],
-               "has_natural_person_holder": False, "depth2_empty": True,
-               "pending": True, "source": "business_api"}
+        if detail and detail.get("id"):
+            org = _org_degraded(company, detail) or org
         result["mr_org"] = org
         try:
             from company_cache import upsert_info
@@ -2150,8 +2602,10 @@ async def ensure_deck_complete(result: dict, config: dict):
 
 
 @app.delete("/api/audit/reports/{filename}")
-async def delete_audit_report(filename: str):
+async def delete_audit_report(filename: str, request: Request):
     audit_dir = OUTPUT_DIR / "audit"
+    if not _audit_report_visible(audit_dir / (Path(filename).stem + ".json"), _Vis(request)):
+        return JSONResponse({"ok": False, "error": "文件不存在"}, status_code=404)
     deleted = []
     # 删除 HTML
     html_path = audit_dir / filename
@@ -2410,7 +2864,7 @@ async def _lookup_brand_name(full_name: str) -> dict:
 
 
 @app.post("/api/audit/bind")
-async def audit_bind_company(req: AuditBindRequest):
+async def audit_bind_company(req: AuditBindRequest, request: Request):
     """人工绑定诊断报告的企业主体（多候选/英文站场景的纠错入口）。
     中文名仍走工商精准核验，核验通过才落绑定与档案；查无此名称返回明确报错，绝不落错。"""
     company = (req.company or "").strip()
@@ -2422,7 +2876,7 @@ async def audit_bind_company(req: AuditBindRequest):
         if name.endswith(ext):
             name = name[: -len(ext)]
     json_path = OUTPUT_DIR / "audit" / f"{name}.json"
-    if not json_path.exists():
+    if not json_path.exists() or not _audit_report_visible(json_path, _Vis(request)):
         return JSONResponse({"ok": False, "error": "报告不存在"}, status_code=404)
     from audit_company_bind import verify_cn, _name_key
     from business_api_client import get_business_api_client, BusinessAPIClient
@@ -2453,6 +2907,10 @@ async def audit_bind_company(req: AuditBindRequest):
     merge_brand_aliases(full, str(d.get("site_brand") or ""))  # 品牌名/别名增量并入档案
     _merge_domain(full, str(d.get("url") or ""))               # 官网域名并入档案
     _log_op("官网诊断", "人工绑定企业", full, json_path.name)
+    _user = _cur_username(request)
+    if _user:
+        _stamp_json(json_path, _user)          # 报告记提交人（判可见性）
+        _register_owner(full, _user)           # 员工隔离：绑定企业即登记查询归属
     return {"ok": True, "company": full}
 
 
@@ -2504,7 +2962,7 @@ async def health():
 
 
 @app.post("/analyze")
-async def analyze(req: AnalyzeRequest):
+async def analyze(req: AnalyzeRequest, request: Request):
     # 服务端强制核验（2026-09-19）：同任务接口——名称必须经核查登记，锚定取注册全称；
     # 凭证批准即消费（一次性）
     _anchor, _alias, _verr, _vtok = _resolve_verified_brand(req.brand, getattr(req, "brand_alias", None))
@@ -2557,6 +3015,9 @@ async def analyze(req: AnalyzeRequest):
     _rt0 = time.time()
     files = save_output(result, config)
     _rev["dur"] = round(time.time() - _rt0, 1)
+    _u = _cur_username(request)  # 员工隔离：旧接口同样登记归属+记提交人
+    _register_owner(req.brand, _u)
+    _stamp_owner(files, _u)
 
     # Return summary (full data is in the saved files)
     return JSONResponse({
@@ -3012,14 +3473,31 @@ def inject_annotation_support(html: str) -> str:
     return html
 
 
+def _research_report_visible(path, vis: "_Vis") -> bool:
+    """调研/挖掘报告可见性：新报告按 JSON 提交人判；旧报告回退品牌归属判。path 给 HTML 或 JSON 均可。"""
+    if vis.director:
+        return True
+    p = Path(path)
+    jf = p if p.suffix == ".json" else p.with_suffix(".json")
+    try:
+        d = json.loads(jf.read_text(encoding="utf-8")) if jf.exists() else {}
+    except (OSError, ValueError):
+        d = {}
+    if d.get("submitted_by"):
+        return d["submitted_by"] == vis.user
+    return vis.ok_brand(d.get("brand") or _report_brand(p))
+
+
 @app.get("/result/{filename:path}")
-async def get_result(filename: str):
-    """View/download a previously generated result file."""
+async def get_result(filename: str, request: Request):
+    """View/download a previously generated result file.（员工只见自己提交/归属企业的报告）"""
     out_dir = OUTPUT_DIR
     if not filename or (out_dir / filename).is_dir():
         return JSONResponse({"error": "用法: /result/<报告文件名.html>"}, status_code=404)
     file_path = out_dir / filename
     if not file_path.exists():
+        return JSONResponse({"error": "file not found"}, status_code=404)
+    if not _research_report_visible(file_path, _Vis(request)):
         return JSONResponse({"error": "file not found"}, status_code=404)
     if filename.endswith(".html"):
         content = file_path.read_text(encoding="utf-8")
@@ -3142,11 +3620,13 @@ async def op_log_list(limit: int = 300, page: str = ""):
 
 
 @app.delete("/api/reports/{filename}")
-async def delete_report(filename: str):
+async def delete_report(filename: str, request: Request):
     """删除指定的分析报告（HTML + 同名 JSON），供分析页历史列表使用。"""
     if not _safe_filename(filename):
         return JSONResponse({"ok": False, "error": "invalid filename"}, status_code=400)
     out_dir = OUTPUT_DIR
+    if not _research_report_visible(out_dir / filename, _Vis(request)):
+        return JSONResponse({"ok": False, "error": "文件不存在"}, status_code=404)
     deleted = []
     html_path = out_dir / filename
     _del_brand = _report_brand(html_path) if html_path.suffix == ".html" else ""
@@ -3538,7 +4018,7 @@ def _task_log_index():
 # （删历史报告不影响统计范围与结果），因当时不确定缓存是否存有可用字段而暂缓，
 # 保持现状（按当前页面未删除报告去重统计）。经查缓存库已有上市状态/员工规模字段可支撑该切换。
 @app.get("/api/nature/stats")
-async def nature_stats(source: str = "research"):
+async def nature_stats(request: Request, source: str = "research"):
     """企业性质占比，按页面取数互不混源：
     - research（默认）：当前未删除的市场调研报告，每客户取最新一份去重；字段=企业信息缓存库优先、报告画像兜底。
     - mining：现存问句挖掘报告页面文件，按客户去重；字段=企业信息缓存库（与列表同口径，删报告即出统计）。
@@ -3550,6 +4030,7 @@ async def nature_stats(source: str = "research"):
     source = {"geo_query_mining": "mining", "customer_market_research": "research"}.get(source, source)
     from urllib.parse import urlparse
     from company_cache import get_info as _cache_get, derive_nature
+    vis = _Vis(request)  # 员工隔离：统计口径与报告列表同源，只算可见报告
     out_dir = OUTPUT_DIR
 
     def _bucket(info: dict) -> str:
@@ -3561,6 +4042,8 @@ async def nature_stats(source: str = "research"):
         latest = {}  # 域名 -> [ts, 绑定企业]；绑定是站点级身份，任一报告绑定即算数（最新优先）
         for f in out_dir.glob("audit/*.json"):
             if not re.search(r"_\d{8}_\d{6}\.json$", f.name):
+                continue
+            if not _audit_report_visible(f, vis):
                 continue
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
@@ -3590,6 +4073,8 @@ async def nature_stats(source: str = "research"):
         for f in out_dir.glob("问句挖掘_*.html"):
             if not re.search(r"_\d{8}_\d{6}\.html$", f.name):
                 continue
+            if not _research_report_visible(f, vis):
+                continue
             brands.add(_report_brand(f))
         for b in brands:
             info, _ = _cache_get(b)
@@ -3601,6 +4086,8 @@ async def nature_stats(source: str = "research"):
             if not re.search(r"_\d{8}_\d{6}\.html$", f.name):
                 continue
             if _report_method(f) != "customer_market_research":
+                continue
+            if not _research_report_visible(f, vis):
                 continue
             brand = _report_brand(f)
             ts = f.name[-19:-5]
@@ -3628,15 +4115,18 @@ async def nature_stats(source: str = "research"):
 
 
 @app.get("/reports")
-async def list_reports():
-    """List all generated reports."""
+async def list_reports(request: Request):
+    """List all generated reports.（员工只见自己提交/归属企业的）"""
     out_dir = OUTPUT_DIR
     if not out_dir.exists():
         return JSONResponse({"reports": []})
+    vis = _Vis(request)
     _tlogs = _task_log_index()  # 旧报告无 _process_log 时回退任务进度日志
     reports = []
     for f in out_dir.iterdir():
         if f.suffix == ".html":
+            if not _research_report_visible(f, vis):
+                continue
             stat = f.stat()
             item = {
                 "filename": f.name,
@@ -4109,6 +4599,7 @@ async def _run_mining_task(task: Task):
     result["_process_log"] = _plog
     result["total_elapsed"] = round(time.time() - _t_run0, 1)
     files = save_output(result, config)
+    _stamp_owner(files, (task.extra or {}).get("submitted_by", ""))  # 员工隔离：报告记提交人
     task.set_result({
         "brand": brand,
         "product": task.product,
@@ -4180,6 +4671,7 @@ async def _run_research_task(task: Task):
     result["total_elapsed"] = round(time.time() - _t_run0, 1)  # 真实全流程耗时（含管线与收尾）
     _rt0 = time.time()
     files = save_output(result, config)
+    _stamp_owner(files, (task.extra or {}).get("submitted_by", ""))  # 员工隔离：报告记提交人
     _rev["dur"] = round(time.time() - _rt0, 1)
     # Extract just filenames for URLs
     file_urls = {}
@@ -4282,6 +4774,8 @@ async def _run_refresh_task(task):
         on_progress("组织图", f"组织图刷新失败，保留原图：{e}")
 
     # 4) 回写 JSON + 重渲染 HTML 覆盖原文件
+    # submitted_by 一律不动：刷新人（哪怕总监）不得夺走原报告的可见归属；
+    # 刷新者"查询过该企业"已并集登记进归属表，旧无提交人报告靠归属回退照常可见
     jf.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
     html_path.write_text(generate_markdown_report(d), encoding="utf-8")
     on_progress("完成", f"已更新 {html_path.name}，刷新页面即可查看")
@@ -4296,7 +4790,7 @@ class RefreshCompanyRequest(PydanticModel):
 
 
 @app.post("/api/refresh-company")
-async def refresh_company(req: RefreshCompanyRequest):
+async def refresh_company(req: RefreshCompanyRequest, request: Request):
     """轻量刷新：只重跑企业档案+组织图+基本信息合并，重渲染回写原报告文件。"""
     # 身份闸（2026-09-19 审计补）：只允许刷新企业档案里已有主体的报告，
     # 防止绕过页面直打接口时借刷新通道为编造名称建档
@@ -4309,6 +4803,10 @@ async def refresh_company(req: RefreshCompanyRequest):
                                  brand_alias=req.brand_alias)
     task.extra["source_file"] = req.source_file
     task.extra["refresh_only"] = True
+    _user = _cur_username(request)
+    task.extra["submitted_by"] = _user
+    _register_owner(req.brand, _user)
+    mgr._persist_task(task)
     await mgr.start_task(task.task_id, _run_refresh_task)
     _log_op("客户市场调研", "刷新企业信息", req.brand,
             f"来源报告 {req.source_file}" if req.source_file else "")
@@ -4323,7 +4821,7 @@ async def api_brand_lookup(name: str):
 
 
 @app.post("/api/tasks")
-async def create_task(req: CreateTaskRequest):
+async def create_task(req: CreateTaskRequest, request: Request):
     """创建分析任务并立即在后台启动，返回 task_id。
 
     客户端关闭网页不影响任务执行，可通过 task_id 查询进度和结果。
@@ -4361,6 +4859,11 @@ async def create_task(req: CreateTaskRequest):
     # 保存额外参数
     task.extra["force_refresh"] = req.force_refresh
     task.extra["brand_name"] = confirmed_brand
+    # 员工权限隔离（2026-11-15）：谁查询算谁的——登记企业归属 + 任务记提交人
+    _user = _cur_username(request)
+    task.extra["submitted_by"] = _user
+    _register_owner(anchor, request)
+    mgr._persist_task(task)  # extra 在 create_task 落盘之后补写，需重新持久化
     # 启动后台执行
     await mgr.start_task(task.task_id, _run_analysis_task)
     _log_op(_METHOD_NAMES.get(task_method, task_method), "创建任务", anchor,
@@ -4368,11 +4871,22 @@ async def create_task(req: CreateTaskRequest):
     return {"task_id": task.task_id, "status": task.status, "brand": anchor}
 
 
+def _task_visible(t, vis: "_Vis") -> bool:
+    """任务可见性：新任务按提交人判；存量旧任务（无提交人）按企业归属判。"""
+    if vis.director:
+        return True
+    sub = (t.extra or {}).get("submitted_by") or ""
+    if sub:
+        return sub == vis.user
+    return vis.ok_brand(t.brand or "")
+
+
 @app.get("/api/tasks")
-async def list_tasks(limit: int = 50):
-    """列出所有任务，按创建时间倒序。"""
+async def list_tasks(request: Request, limit: int = 50):
+    """列出所有任务，按创建时间倒序（员工只见自己查询过的企业的任务）。"""
     mgr = _get_task_mgr()
-    tasks = mgr.list_tasks(limit=limit)
+    vis = _Vis(request)
+    tasks = [t for t in mgr.list_tasks(limit=9999) if _task_visible(t, vis)][:limit]
     now = time.time()
     return {
         "tasks": [
@@ -4394,13 +4908,19 @@ async def list_tasks(limit: int = 50):
     }
 
 
-@app.get("/api/tasks/{task_id}")
-async def get_task(task_id: str):
-    """查询单个任务的完整状态、进度和结果。"""
+def _get_visible_task(request: Request, task_id: str):
+    """按 id 取任务并做可见性检查，不可见/不存在统一 404（不泄露存在性）。"""
     mgr = _get_task_mgr()
     task = mgr.get_task(task_id)
-    if not task:
+    if not task or not _task_visible(task, _Vis(request)):
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    return task
+
+
+@app.get("/api/tasks/{task_id}")
+async def get_task(task_id: str, request: Request):
+    """查询单个任务的完整状态、进度和结果。"""
+    task = _get_visible_task(request, task_id)
     result = task.to_dict()
     # 实时计算运行时间
     if task.status == "running" and task.started_at:
@@ -4409,12 +4929,10 @@ async def get_task(task_id: str):
 
 
 @app.post("/api/tasks/{task_id}/cancel")
-async def cancel_task_api(task_id: str):
+async def cancel_task_api(task_id: str, request: Request):
     """取消运行中/排队中的任务（掐 asyncio 执行、标记失败并让位下一个）。"""
+    task = _get_visible_task(request, task_id)
     mgr = _get_task_mgr()
-    task = mgr.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
     status_before = task.status
     ok = await mgr.cancel_task(task_id)
     if not ok:
@@ -4425,14 +4943,12 @@ async def cancel_task_api(task_id: str):
 
 
 @app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str):
+async def delete_task(task_id: str, request: Request):
     """删除任务（只能删除已完成或失败的任务，运行中的任务需要先取消）。"""
-    mgr = _get_task_mgr()
-    task = mgr.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    task = _get_visible_task(request, task_id)
     if task.status == "running" or task.status == "pending":
         raise HTTPException(status_code=400, detail="任务正在运行中，请先取消任务")
+    mgr = _get_task_mgr()
     ok = mgr.delete_task(task_id)
     if not ok:
         raise HTTPException(status_code=500, detail="删除任务失败")
@@ -4442,15 +4958,13 @@ async def delete_task(task_id: str):
 
 
 @app.get("/api/tasks/{task_id}/stream")
-async def task_stream(task_id: str):
+async def task_stream(task_id: str, request: Request):
     """SSE 实时推送任务进度。
 
     客户端可以随时断开重连，继续接收后续进度。
     """
+    task = _get_visible_task(request, task_id)
     mgr = _get_task_mgr()
-    task = mgr.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
 
     async def event_stream():
         queue = mgr.get_progress_queue(task_id)
@@ -4493,7 +5007,7 @@ async def task_stream(task_id: str):
 
 
 @app.get("/analyze-stream")
-async def analyze_stream(brand: str, product: Optional[str] = None,
+async def analyze_stream(request: Request, brand: str, product: Optional[str] = None,
                           method: Optional[str] = None, thinking: Optional[str] = None,
                           brand_alias: Optional[str] = None, force_refresh: bool = False):
     """SSE endpoint: stream agent progress + final result.
@@ -4509,6 +5023,8 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
     if _verr:
         raise HTTPException(status_code=422, detail=_verr)
     _consume_verified_token(_vtok)
+    _stream_user = _cur_username(request)  # 员工隔离：旧接口同样登记归属+记提交人
+    _register_owner(brand, _stream_user)
     config = load_config()
     agent = build_agent(config, thinking=None if thinking is None else thinking == "1")
 
@@ -4560,6 +5076,7 @@ async def analyze_stream(brand: str, product: Optional[str] = None,
                 result["total_elapsed"] = round(time.time() - _t_run0, 1)  # 真实全流程耗时（含管线与收尾）
                 _rt0 = time.time()
                 files = save_output(result, config)
+                _stamp_owner(files, _stream_user)
                 _rev["dur"] = round(time.time() - _rt0, 1)
                 # Extract just filenames for URLs
                 file_urls = {}
@@ -4654,6 +5171,8 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -4848,6 +5367,7 @@ header p{color:#6e7991;font-size:14px}
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
@@ -5835,6 +6355,8 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -5951,10 +6473,10 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills" class="active">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
-      <a href="/company">企业资料</a>
       <a href="/backfill">JSON补录</a>
       <a href="/changelog">__ver__</a>
     </div>
@@ -6396,6 +6918,8 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -6473,6 +6997,7 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
@@ -6713,6 +7238,8 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -6775,6 +7302,7 @@ header p{color:#6e7991;font-size:14px}
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
@@ -7123,6 +7651,8 @@ body{font-family:Figtree,-apple-system,"PingFang SC","Microsoft YaHei",sans-seri
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown.open .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown.open .nav-dropdown-menu{display:block}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
@@ -7300,6 +7830,7 @@ header p{color:#6e7991;font-size:14px;margin-bottom:20px}
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
@@ -7938,6 +8469,7 @@ body{{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backg
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
@@ -7969,6 +8501,8 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown:hover .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap}
 .nav-dropdown-menu a:hover{background:#f4f5ff;color:#091026}
@@ -8005,6 +8539,7 @@ td.detail{color:#6e7991;word-break:break-all;min-width:200px}
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>
@@ -8120,6 +8655,8 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown:hover .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap}
 .nav-dropdown-menu a:hover{background:#f4f5ff;color:#091026}
@@ -8156,6 +8693,7 @@ b{color:#c0392b} b.ok{color:#155724}
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company">企业资料</a>
       <a href="/oplog">操作日志</a>

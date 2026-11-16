@@ -207,6 +207,11 @@ def _conn():
     for oc in ("origin_first", "origin_last"):
         if oc not in cols:
             c.execute(f"ALTER TABLE company ADD COLUMN {oc} TEXT")
+    # 查询归属人（员工权限隔离，2026-11-15）：独立表而非 company 列——
+    # company 行各处走 INSERT OR REPLACE 整行重写，列存在那里会被写档案动作抹掉。
+    # 谁查询过算谁的（多行多值）；无归属行=公共（总监可见、员工不可见，由总监指派）
+    c.execute("CREATE TABLE IF NOT EXISTS company_owner("
+              "company_id TEXT, username TEXT, first_ts TEXT, PRIMARY KEY(company_id, username))")
     return c
 
 
@@ -635,17 +640,22 @@ if __name__ == "__main__":
     print("company_cache OK", ts)
 
 
-def list_companies() -> list[dict]:
-    """企业资料列表：名称、首次创建、最后更新、首次信息来源、最后更新触点（按更新时间倒序）。"""
+def list_companies(owner_filter=None) -> list[dict]:
+    """企业资料列表：名称、首次创建、最后更新、首次信息来源、最后更新触点、查询归属人
+    （按更新时间倒序）。owner_filter 非 None 时只返回 id 在该集合内的档案。"""
     with _conn() as c:
         rows = c.execute("SELECT id, data, updated, created, origin_first, origin_last FROM company ORDER BY updated DESC").fetchall()
+    omap = owners_map()
     out = []
     for rid, data, updated, created, ofirst, olast in rows:
+        if owner_filter is not None and rid not in owner_filter:
+            continue
         d = json.loads(data)
         out.append({"id": rid,
                     "name": d.get("full_name") or (rid[2:] if rid.startswith("n:") else rid),
                     "created": created or updated, "updated": updated,
-                    "origin_first": ofirst or "", "origin_last": olast or ""})
+                    "origin_first": ofirst or "", "origin_last": olast or "",
+                    "owners": omap.get(rid, [])})
     return out
 
 
@@ -657,11 +667,121 @@ def get_company_by_id(rid: str) -> tuple[dict, str, str] | tuple[None, str, str]
 
 
 def delete_company(rid: str) -> bool:
-    """删除企业档案行（连带其 mining 板块）。"""
+    """删除企业档案行（连带其 mining 板块与查询归属记录）。"""
     with _conn() as c:
         n = c.execute("DELETE FROM company WHERE id=?", (rid,)).rowcount
         c.execute("DELETE FROM mining WHERE id=?", (rid,))
+        c.execute("DELETE FROM company_owner WHERE company_id=?", (rid,))
     return bool(n)
+
+
+# ── 查询归属（员工权限隔离，2026-11-15）──────────────────
+# 口径：谁查询过算谁的（多值，员工B再查A查过的企业，B也进归属）；
+# 无任何归属行=公共档案：总监全可见，员工不可见，由总监在账号/企业资料页指派。
+
+def add_owner(name_or_id: str, username: str):
+    """按档案名/品牌/别名归一身份后登记查询归属（幂等）。返回落定的企业 id；
+    归一不到身份行（尚未建档）返回 None，由调用方决定是否先建档。"""
+    if not username:
+        return None
+    try:
+        with _conn() as c:
+            cur = c.cursor()
+            rid = str(name_or_id or "")
+            if not (rid.startswith("c:") or rid.startswith("n:")):
+                rid = _match_id(rid, cur)
+            if not rid:
+                return None
+            cur.execute("INSERT OR IGNORE INTO company_owner(company_id, username, first_ts) "
+                        "VALUES(?,?,?)", (rid, username, time.strftime("%Y-%m-%d %H:%M")))
+            c.commit()
+            return rid
+    except Exception:
+        return None
+
+
+def owners_of(company_id: str) -> list[str]:
+    try:
+        with _conn() as c:
+            return [r[0] for r in c.execute(
+                "SELECT username FROM company_owner WHERE company_id=? ORDER BY first_ts", (company_id,))]
+    except Exception:
+        return []
+
+
+def owners_map() -> dict[str, list[str]]:
+    """全量归属映射（企业 id -> 归属人列表），列表接口一次取齐防 N+1。"""
+    try:
+        with _conn() as c:
+            out: dict[str, list[str]] = {}
+            for cid, un in c.execute("SELECT company_id, username FROM company_owner ORDER BY first_ts"):
+                out.setdefault(cid, []).append(un)
+            return out
+    except Exception:
+        return {}
+
+
+def set_owners(company_id: str, usernames: list[str]):
+    """总监改派：整组替换归属。"""
+    try:
+        with _conn() as c:
+            c.execute("DELETE FROM company_owner WHERE company_id=?", (company_id,))
+            for un in dict.fromkeys(u for u in usernames if u):
+                c.execute("INSERT INTO company_owner(company_id, username, first_ts) VALUES(?,?,?)",
+                          (company_id, un, time.strftime("%Y-%m-%d %H:%M")))
+            c.commit()
+    except Exception:
+        pass
+
+
+def owner_ids_of(username: str) -> set[str]:
+    """某员工可见的企业 id 集合（= 其归属名下的企业）。"""
+    try:
+        with _conn() as c:
+            return {r[0] for r in c.execute(
+                "SELECT company_id FROM company_owner WHERE username=?", (username,))}
+    except Exception:
+        return set()
+
+
+def get_id_by_name(name: str):
+    """企业名/品牌/别名归一解析档案 id（不建档，纯查询）。"""
+    try:
+        with _conn() as c:
+            return _match_id(str(name or ""), c.cursor())
+    except Exception:
+        return None
+
+
+def clear_owner(username: str):
+    """删除账号时清空其全部查询归属（企业转公共，待总监改派）。"""
+    try:
+        with _conn() as c:
+            c.execute("DELETE FROM company_owner WHERE username=?", (username,))
+            c.commit()
+    except Exception:
+        pass
+
+
+def owned_archive_names(cids: set[str]) -> set[str]:
+    """一批企业 id 的全部身份写法归一集（全称/品牌/别名）——报告按品牌名判可见性用。"""
+    out: set[str] = set()
+    if not cids:
+        return out
+    try:
+        with _conn() as c:
+            for rid, data in c.execute("SELECT id, data FROM company"):
+                if rid not in cids:
+                    continue
+                d = json.loads(data)
+                for nm in [d.get("full_name") or "",
+                           *(_brand_name(x) for x in (d.get("brands") or [])),
+                           *(str(x) for x in (d.get("aliases") or []))]:
+                    if norm_name(nm):
+                        out.add(norm_name(nm))
+    except Exception:
+        pass
+    return out
 
 
 def delete_audit_snapshot(sid: str) -> bool:

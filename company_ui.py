@@ -247,6 +247,8 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;backgr
 .nav-arrow{width:1rem;height:1rem;transition:transform .2s}
 .nav-dropdown:hover .nav-arrow{transform:rotate(180deg)}
 .nav-dropdown-menu{position:absolute;top:100%;right:0;margin-top:12px;padding:8px;background:#fff;border:1px solid #eff1f6;border-radius:1rem;box-shadow:0 .0625rem .0625rem #0b14371a,0 .25rem .25rem #99beff1a;display:none;z-index:50}
+/* 悬停桥：菜单与标题间 12px 间隙属于 margin，鼠标直落经过会丢失 hover 导致菜单闪没 */
+.nav-dropdown-menu::before{content:"";position:absolute;top:-12px;left:0;right:0;height:12px}
 .nav-dropdown:hover .nav-dropdown-menu{display:block}
 .nav-dropdown-menu a{display:block;padding:8px 12px;border-radius:.5rem;font-size:16px;color:#6e7991;text-decoration:none;white-space:nowrap;transition:all .15s}
 .nav-dropdown-menu a:hover{background:#f4f5ff;color:#091026}
@@ -314,6 +316,7 @@ td.nm{font-weight:600;color:#091026}
       <svg class="nav-arrow" viewBox="0 0 20 20" fill="none"><path d="M15.5 7.03835L10 12.9614L4.5 7.03835" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="nav-dropdown-menu">
+      <a href="/users">账号管理</a>
       <a href="/skills">Skill管理</a>
       <a href="/company" class="active" id="crumbHome">企业资料</a>
       <a href="/oplog">操作日志</a>
