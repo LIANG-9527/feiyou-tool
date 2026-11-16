@@ -216,13 +216,41 @@ function renderList(){
   document.getElementById('coCount').innerHTML=q?('<span style="color:#6e7991;font-size:13px">'+list.length+' / '+_allCompanies.length+' 家</span>'):'';
   const t=document.getElementById('coTable');
   if(!list.length){t.innerHTML='<div class="empty">'+(q?'没有匹配的客户':'企业资料库为空')+'</div>';return;}
-  t.innerHTML='<table><thead><tr><th>客户名称</th><th>首次创建时间</th><th>最后更新时间</th><th>首次信息来源</th><th>最后更新触点</th><th></th></tr></thead><tbody>'+
+  t.innerHTML='<table><thead><tr><th>客户名称</th><th>首次创建时间</th><th>最后更新时间</th><th>首次信息来源</th><th>最后更新触点</th><th>查询归属</th><th></th></tr></thead><tbody>'+
     list.map(c=>'<tr onclick="location=\\'/company?id='+encodeURIComponent(c.id)+'\\'">'+
       '<td class="nm">'+esc(c.name)+'</td><td>'+esc(c.created)+'</td><td>'+esc(c.updated)+'</td>'+
       '<td>'+esc(c.origin_first||'-')+'</td><td>'+esc(c.origin_last||'-')+'</td>'+
+      '<td>'+(c.owners&&c.owners.length?esc(c.owners.join('、')):'<span style="color:#8a93a6">公共</span>')+
+      ' <button class="btn-own" data-id="'+esc(c.id)+'" data-owners="'+esc((c.owners||[]).join(','))+'" title="指派查询归属">指派</button></td>'+
       '<td class="td-op"><button class="btn-del" data-id="'+esc(c.id)+'" title="删除">&times;</button></td></tr>').join('')+
     '</tbody></table>';
   document.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',function(e){e.stopPropagation();handleDel(this);}));
+  document.querySelectorAll('.btn-own').forEach(b=>b.addEventListener('click',function(e){e.stopPropagation();openOwn(this);}));
+}
+// 查询归属指派弹窗（仅总监可见本页）：勾选员工=该企业及其报告任务对员工可见
+let _allUsers=[];
+async function openOwn(btn){
+  if(!_allUsers.length){
+    const d=await (await fetch('/api/users')).json();
+    _allUsers=d.users||[];
+  }
+  const cur=(btn.dataset.owners||'').split(',').filter(Boolean);
+  document.getElementById('ownMask').innerHTML=
+    '<div class="own-box"><b>指派查询归属</b><div style="font-size:12px;color:#6e7991;margin:6px 0 10px">被勾选员工可见该企业及其调研/挖掘/诊断报告与任务；全部取消=转公共（仅总监可见）</div>'+
+    _allUsers.map(u=>'<label style="display:block;padding:5px 0;font-size:14px">'+
+      '<input type="checkbox" class="own-ck" value="'+esc(u.username)+'" '+(cur.includes(u.username)?'checked':'')+' style="width:auto;margin-right:8px">'+
+      esc(u.name)+'（'+esc(u.username)+'·'+esc(u.role)+'）</label>').join('')+
+    '<div style="display:flex;gap:8px;margin-top:14px"><button id="ownSave">保存</button><button id="ownCancel">取消</button></div></div>';
+  document.getElementById('ownMask').style.display='flex';
+  document.getElementById('ownCancel').onclick=()=>{ownMask.style.display='none';};
+  document.getElementById('ownSave').onclick=async()=>{
+    const ids=[...document.querySelectorAll('.own-ck:checked')].map(x=>x.value);
+    const r=await fetch('/api/company/owners',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:btn.dataset.id,usernames:ids})});
+    const d=await r.json().catch(()=>({}));
+    if(d.error){alert(d.error);return;}
+    ownMask.style.display='none';loadList();
+  };
 }
 const q=new URLSearchParams(location.search).get('id');
 if(q){loadDetail(q);}else{loadList();}
@@ -286,6 +314,13 @@ td.nm{font-weight:600;color:#091026}
 .btn-del{width:28px;height:28px;border:none;border-radius:8px;background:transparent;color:#a0a9bd;font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all .15s}
 .btn-del:hover{background:#fef2f2;color:#dc2626}
 .btn-del.confirming{background:#dc2626;color:#fff;font-size:11px;font-weight:600}
+/* 查询归属指派弹窗 */
+.btn-own{border:none;border-radius:6px;background:#eef3ff;color:#2563eb;font-size:11px;padding:3px 8px;cursor:pointer}
+.btn-own:hover{background:#dbe7ff}
+.own-mask{position:fixed;inset:0;background:rgba(9,16,38,.45);z-index:10001;display:none;align-items:center;justify-content:center}
+.own-box{background:#fff;border-radius:12px;padding:20px 22px;width:360px;max-height:70vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.25)}
+.own-box button{padding:6px 16px;border-radius:8px;border:none;font-size:13px;cursor:pointer;background:#2563eb;color:#fff}
+.own-box #ownCancel{background:#eef1f7;color:#556}
 /* 密码弹窗：样式复制自报告页「更新企业信息」密码框 */
 .pwd-mask{position:fixed;inset:0;background:rgba(9,16,38,.45);z-index:10001;display:flex;align-items:center;justify-content:center}
 .pwd-box{background:#fff;border-radius:12px;padding:20px 22px;width:300px;box-shadow:0 10px 40px rgba(0,0,0,.25)}
@@ -326,6 +361,7 @@ td.nm{font-weight:600;color:#091026}
   </div>
 </nav>
 <div class="page"><div id="main"><div class="empty">加载中…</div></div></div>
+<div id="ownMask" class="own-mask" onclick="if(event.target===this)this.style.display='none'"></div>
 <script>__DETAIL_JS__</script>
 </body>
 </html>"""

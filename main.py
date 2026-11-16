@@ -30,7 +30,7 @@ from site_audit.core.ai_engine import estimate_cost_cny
 
 # 平台全局版本号（唯一来源），格式 Version：YY.MDDDi.N——年后两位、月日与当日序号连写、
 # 末尾 N=系统累计发布次数（与 versions/ 文档数一致）。发版：versions/ 新增 <版本号>.md + 改这里。
-MR_ENGINE_VERSION = "26.11161.15"
+MR_ENGINE_VERSION = "26.11162.16"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1263,9 +1263,13 @@ async def login_gate(request: Request, call_next):
         nxt = urllib.parse.quote(path + ("?" + request.url.query if request.url.query else ""), safe="")
         return RedirectResponse(f"/login?next={nxt}", status_code=303)
     # 员工旁路闸：手敲配置管理地址/直打总监接口/改配置写操作同样拦下
+    # 例外：企业档案只读接口（列表/明细）放行 GET——指派后员工要能看被派企业，
+    #       接口内部按归属过滤；写操作（删除/别名/指派）仍总监专属。
     if sess.get("role") != "总监":
-        if _in_paths(path, _ADMIN_PAGES + _ADMIN_APIS) or \
-           (_in_paths(path, _MUT_APIS) and request.method not in ("GET", "HEAD")):
+        staff_read_ok = request.method in ("GET", "HEAD") and path in ("/api/company/list", "/api/company/detail")
+        if not staff_read_ok and (
+                _in_paths(path, _ADMIN_PAGES + _ADMIN_APIS) or
+                (_in_paths(path, _MUT_APIS) and request.method not in ("GET", "HEAD"))):
             if path.startswith("/api/"):
                 return JSONResponse({"ok": False, "error": "仅总监可访问"}, status_code=403)
             return RedirectResponse("/", status_code=303)
@@ -1323,14 +1327,12 @@ class _Vis:
         return self.user in owners_map().get(cid, [])
 
     def ok_report(self, d: dict, brand_fallback: str = "") -> bool:
-        """报告可见性：新报告按落盘的提交人判；旧报告/无提交人回退品牌归属判。"""
+        """报告可见性：企业归属（含总监指派）命中即可见；无企业身份时按提交人兜底。"""
         if self.director:
             return True
-        if d.get("submitted_by") == self.user:
+        if self.ok_brand(d.get("brand") or brand_fallback):
             return True
-        if not d.get("submitted_by"):
-            return self.ok_brand(d.get("brand") or brand_fallback)
-        return False
+        return d.get("submitted_by") == self.user
 
 
 def _stamp_json(path, user: str):
@@ -1817,17 +1819,17 @@ def _start_audit_job(url: str, user: str = "") -> str:
 
 
 def _audit_report_visible(json_path, vis: "_Vis") -> bool:
-    """诊断报告可见性：新报告按提交人判；旧报告回退绑定企业归属判；未绑定未提交=员工不可见。"""
+    """诊断报告可见性：绑定企业归属（含指派）命中即可见；无企业身份按提交人兜底；两者皆无=员工不可见。"""
     if vis.director:
         return True
     try:
         d = json.loads(Path(json_path).read_text(encoding="utf-8")) if Path(json_path).exists() else {}
     except (OSError, ValueError):
         d = {}
-    if d.get("submitted_by"):
-        return d["submitted_by"] == vis.user
     comp = str(d.get("company_full_name") or "")
-    return bool(comp) and vis.ok_brand(comp)
+    if comp and vis.ok_brand(comp):
+        return True
+    return d.get("submitted_by") == vis.user
 
 
 async def _audit_bind_company(result: dict):
@@ -3474,7 +3476,8 @@ def inject_annotation_support(html: str) -> str:
 
 
 def _research_report_visible(path, vis: "_Vis") -> bool:
-    """调研/挖掘报告可见性：新报告按 JSON 提交人判；旧报告回退品牌归属判。path 给 HTML 或 JSON 均可。"""
+    """调研/挖掘报告可见性：企业归属（含总监指派）命中即可见；无企业身份按提交人兜底。
+    path 给 HTML 或 JSON 均可。"""
     if vis.director:
         return True
     p = Path(path)
@@ -3483,9 +3486,9 @@ def _research_report_visible(path, vis: "_Vis") -> bool:
         d = json.loads(jf.read_text(encoding="utf-8")) if jf.exists() else {}
     except (OSError, ValueError):
         d = {}
-    if d.get("submitted_by"):
-        return d["submitted_by"] == vis.user
-    return vis.ok_brand(d.get("brand") or _report_brand(p))
+    if vis.ok_brand(d.get("brand") or _report_brand(p)):
+        return True
+    return d.get("submitted_by") == vis.user
 
 
 @app.get("/result/{filename:path}")
@@ -4872,13 +4875,12 @@ async def create_task(req: CreateTaskRequest, request: Request):
 
 
 def _task_visible(t, vis: "_Vis") -> bool:
-    """任务可见性：新任务按提交人判；存量旧任务（无提交人）按企业归属判。"""
+    """任务可见性：企业归属（含指派）命中即可见；无企业身份按提交人兜底。"""
     if vis.director:
         return True
-    sub = (t.extra or {}).get("submitted_by") or ""
-    if sub:
-        return sub == vis.user
-    return vis.ok_brand(t.brand or "")
+    if vis.ok_brand(t.brand or ""):
+        return True
+    return (t.extra or {}).get("submitted_by") == vis.user
 
 
 @app.get("/api/tasks")
@@ -8349,16 +8351,20 @@ async def audit_ui():
 # ── 企业资料（公司档案库浏览）──────────────────────
 
 @app.get("/api/company/list")
-async def company_list():
-    from company_cache import list_companies
-    return {"companies": list_companies()}
+async def company_list(request: Request):
+    from company_cache import list_companies, owners_map
+    vis = _Vis(request)
+    flt = None if vis.director else {cid for cid, us in owners_map().items() if vis.user in us}
+    return {"companies": list_companies(owner_filter=flt)}
 
 
 @app.get("/api/company/detail")
-async def company_detail(id: str):
+async def company_detail(request: Request, id: str):
     from company_cache import get_company_by_id
     info, created, updated = get_company_by_id(id)
     if info is None:
+        return JSONResponse({"error": "客户不存在或已被删除"}, status_code=404)
+    if not _Vis(request).ok_id(id):
         return JSONResponse({"error": "客户不存在或已被删除"}, status_code=404)
     # 三源聚合：工商档案 + 问句挖掘板块 + 官网检测快照（按档案 domains 关联）
     from company_cache import get_mining_by_id, list_audit_snapshots
@@ -8370,7 +8376,7 @@ async def company_detail(id: str):
 
 
 @app.get("/api/company/data")
-async def company_data(id: str = "", name: str = ""):
+async def company_data(request: Request, id: str = "", name: str = ""):
     """对外数据 API：按企业 id 或名称（归一匹配）一次返回 档案+挖掘+检测 三源数据。"""
     if not id and name:
         from company_cache import get_info, _conn, _match_id
@@ -8378,7 +8384,7 @@ async def company_data(id: str = "", name: str = ""):
             id = _match_id(name, c.cursor()) or ""
     if not id:
         return JSONResponse({"error": "缺少 id 或 name 参数，或客户不存在"}, status_code=404)
-    return await company_detail(id)
+    return await company_detail(request, id)
 
 
 COMPANY_DELETE_PWD = "888888"
@@ -8402,6 +8408,28 @@ async def company_delete(company_id: str, req: CompanyDeleteReq):
         return JSONResponse({"error": "客户不存在或已被删除"}, status_code=404)
     _log_op("企业资料", "删除企业档案", _cname, company_id)
     return {"ok": True}
+
+
+class CompanyOwnersReq(PydanticModel):
+    id: str = Field(..., description="企业档案 id")
+    usernames: list[str] = Field(default_factory=list, description="查询归属人登录名列表（整组替换）")
+
+
+@app.post("/api/company/owners")
+async def company_owners_set(req: CompanyOwnersReq):
+    """总监指派企业查询归属（整组替换）：归属名单内员工可见该企业及其调研/挖掘/诊断报告与任务。
+    接口在企业区（_ADMIN_APIS），员工直打已被门禁 403。"""
+    import user_store
+    from company_cache import set_owners, get_company_by_id, owners_of
+    if not req.id or get_company_by_id(req.id)[0] is None:
+        return JSONResponse({"error": "客户不存在或已被删除"}, status_code=404)
+    valid = {u["username"] for u in user_store.list_users()}
+    unknown = [x for x in req.usernames if x not in valid]
+    if unknown:
+        return JSONResponse({"error": f"账号不存在：{'、'.join(unknown)}"}, status_code=400)
+    set_owners(req.id, req.usernames)
+    _log_op("企业资料", "指派查询归属", req.id, "、".join(req.usernames) or "（清空=转公共）")
+    return {"ok": True, "owners": owners_of(req.id)}
 
 
 @app.get("/company", response_class=HTMLResponse)
