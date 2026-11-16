@@ -210,33 +210,55 @@ async function loadList(){
   _allCompanies=d.companies||[];
   renderList();
 }
+// 批量指派勾选集（企业 id）；无表头全选，避免误点把已指派/未指派搞混
+const _sel=new Set();
 function renderList(){
   const q=(document.getElementById('coSearch').value||'').trim().toLowerCase();
   const list=_allCompanies.filter(c=>!q||(c.name+' '+c.id).toLowerCase().indexOf(q)>=0);
-  document.getElementById('coCount').innerHTML=q?('<span style="color:#6e7991;font-size:13px">'+list.length+' / '+_allCompanies.length+' 家</span>'):'';
+  document.getElementById('coCount').style.cssText='display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-bottom:10px';
+  document.getElementById('coCount').innerHTML=
+    (q?'<span style="color:#6e7991;font-size:13px">'+list.length+' / '+_allCompanies.length+' 家</span>':'')+
+    '<button id="batchBtn" class="btn-batch" style="margin:0" '+(_sel.size?'':'disabled')+'>批量指派'+(_sel.size?'（'+_sel.size+' 家）':'')+'</button>';
+  const bb=document.getElementById('batchBtn');
+  if(bb)bb.onclick=openBatch;
   const t=document.getElementById('coTable');
   if(!list.length){t.innerHTML='<div class="empty">'+(q?'没有匹配的客户':'企业资料库为空')+'</div>';return;}
-  t.innerHTML='<table><thead><tr><th>客户名称</th><th>首次创建时间</th><th>最后更新时间</th><th>首次信息来源</th><th>最后更新触点</th><th>查询归属</th><th></th></tr></thead><tbody>'+
+  t.innerHTML='<table><thead><tr><th style="width:36px"></th><th>客户名称</th><th>首次创建时间</th><th>最后更新时间</th><th>首次信息来源</th><th>最后更新触点</th><th>查询归属</th><th></th></tr></thead><tbody>'+
     list.map(c=>'<tr onclick="location=\\'/company?id='+encodeURIComponent(c.id)+'\\'">'+
+      '<td><input type="checkbox" class="row-ck" data-id="'+esc(c.id)+'" '+(_sel.has(c.id)?'checked':'')+'></td>'+
       '<td class="nm">'+esc(c.name)+'</td><td>'+esc(c.created)+'</td><td>'+esc(c.updated)+'</td>'+
       '<td>'+esc(c.origin_first||'-')+'</td><td>'+esc(c.origin_last||'-')+'</td>'+
-      '<td>'+(c.owners&&c.owners.length?esc(c.owners.join('、')):'<span style="color:#8a93a6">公共</span>')+
+      '<td style="white-space:nowrap">'+(c.owners&&c.owners.length?esc(c.owners.join('、')):'<span style="color:#8a93a6">公共</span>')+
       ' <button class="btn-own" data-id="'+esc(c.id)+'" data-owners="'+esc((c.owners||[]).join(','))+'" title="指派查询归属">指派</button></td>'+
       '<td class="td-op"><button class="btn-del" data-id="'+esc(c.id)+'" title="删除">&times;</button></td></tr>').join('')+
     '</tbody></table>';
   document.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click',function(e){e.stopPropagation();handleDel(this);}));
   document.querySelectorAll('.btn-own').forEach(b=>b.addEventListener('click',function(e){e.stopPropagation();openOwn(this);}));
+  document.querySelectorAll('.row-ck').forEach(b=>b.addEventListener('click',function(e){
+    e.stopPropagation();
+    if(this.checked)_sel.add(this.dataset.id);else _sel.delete(this.dataset.id);
+    renderList();
+  }));
 }
-// 查询归属指派弹窗（仅总监可见本页）：勾选员工=该企业及其报告任务对员工可见
+// 查询归属指派弹窗（仅总监可见本页）：勾选员工=企业及其报告任务对员工可见
 let _allUsers=[];
-async function openOwn(btn){
+function openOwn(btn){openOwnModal([btn.dataset.id],(btn.dataset.owners||'').split(',').filter(Boolean),'指派查询归属');}
+function openBatch(){
+  const ids=[..._sel];
+  if(!ids.length)return;
+  // 默认勾选=所选企业已有归属的并集（已指派的不丢，可手动增删）
+  const cur=[...new Set(ids.flatMap(id=>{
+    const c=_allCompanies.find(x=>x.id===id);
+    return (c&&c.owners)||[];}))];
+  openOwnModal(ids,cur,'批量指派（'+ids.length+' 家）');
+}
+async function openOwnModal(ids, cur, title){
   if(!_allUsers.length){
     const d=await (await fetch('/api/users')).json();
     _allUsers=d.users||[];
   }
-  const cur=(btn.dataset.owners||'').split(',').filter(Boolean);
   document.getElementById('ownMask').innerHTML=
-    '<div class="own-box"><b>指派查询归属</b><div style="font-size:12px;color:#6e7991;margin:6px 0 10px">被勾选员工可见该企业及其调研/挖掘/诊断报告与任务；全部取消=转公共（仅总监可见）</div>'+
+    '<div class="own-box"><b>'+esc(title)+'</b><div style="font-size:12px;color:#6e7991;margin:6px 0 10px">被勾选员工可见这些企业及其调研/挖掘/诊断报告与任务；全部取消=转公共（仅总监可见）</div>'+
     _allUsers.map(u=>'<label style="display:block;padding:5px 0;font-size:14px">'+
       '<input type="checkbox" class="own-ck" value="'+esc(u.username)+'" '+(cur.includes(u.username)?'checked':'')+' style="width:auto;margin-right:8px">'+
       esc(u.name)+'（'+esc(u.username)+'·'+esc(u.role)+'）</label>').join('')+
@@ -244,12 +266,14 @@ async function openOwn(btn){
   document.getElementById('ownMask').style.display='flex';
   document.getElementById('ownCancel').onclick=()=>{ownMask.style.display='none';};
   document.getElementById('ownSave').onclick=async()=>{
-    const ids=[...document.querySelectorAll('.own-ck:checked')].map(x=>x.value);
-    const r=await fetch('/api/company/owners',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id:btn.dataset.id,usernames:ids})});
-    const d=await r.json().catch(()=>({}));
-    if(d.error){alert(d.error);return;}
-    ownMask.style.display='none';loadList();
+    const sel=[...document.querySelectorAll('.own-ck:checked')].map(x=>x.value);
+    for(const id of ids){
+      const r=await fetch('/api/company/owners',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:id,usernames:sel})});
+      const d=await r.json().catch(()=>({}));
+      if(d.error){alert(d.error);return;}
+    }
+    ownMask.style.display='none';_sel.clear();loadList();
   };
 }
 const q=new URLSearchParams(location.search).get('id');
@@ -317,6 +341,8 @@ td.nm{font-weight:600;color:#091026}
 /* 查询归属指派弹窗 */
 .btn-own{border:none;border-radius:6px;background:#eef3ff;color:#2563eb;font-size:11px;padding:3px 8px;cursor:pointer}
 .btn-own:hover{background:#dbe7ff}
+.btn-batch{border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;padding:6px 14px;cursor:pointer;margin-bottom:10px}
+.btn-batch:disabled{background:#dfe4ee;color:#9aa3b5;cursor:default}
 .own-mask{position:fixed;inset:0;background:rgba(9,16,38,.45);z-index:10001;display:none;align-items:center;justify-content:center}
 .own-box{background:#fff;border-radius:12px;padding:20px 22px;width:360px;max-height:70vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.25)}
 .own-box button{padding:6px 16px;border-radius:8px;border:none;font-size:13px;cursor:pointer;background:#2563eb;color:#fff}
